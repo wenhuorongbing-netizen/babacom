@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Babacom — planning documents</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#EFF1F4; --surface:#FFFFFF; --surface-2:#F6F7F9;
+  --line:#DBE0E6; --line-soft:#E7EAEF;
+  --ink:#141A21; --ink-2:#3D4854; --ink-3:#6C7885;
+  --accent:#0E6E60; --accent-soft:#DDEEEA;
+  --shadow:0 1px 2px rgba(20,26,33,.05), 0 10px 28px -20px rgba(20,26,33,.35);
+  --sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --display:"Archivo",var(--sans);
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0E1217; --surface:#161C23; --surface-2:#1C232B;
+    --line:#2B343E; --line-soft:#222A33;
+    --ink:#E6EAEF; --ink-2:#B3BDC8; --ink-3:#828E9C;
+    --accent:#4FC2AE; --accent-soft:#13332E;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 30px -20px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0E1217; --surface:#161C23; --surface-2:#1C232B;
+  --line:#2B343E; --line-soft:#222A33;
+  --ink:#E6EAEF; --ink-2:#B3BDC8; --ink-3:#828E9C;
+  --accent:#4FC2AE; --accent-soft:#13332E;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 30px -20px rgba(0,0,0,.8);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+  font-size:.95rem;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px 96px}
+header{padding:88px 0 40px}
+.eyebrow{font-family:var(--mono);font-size:.7rem;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-3);margin:0 0 18px}
+h1{font-family:var(--display);font-weight:800;font-size:clamp(2.4rem,7vw,3.6rem);line-height:1.02;
+  letter-spacing:-.03em;margin:0 0 18px;text-wrap:balance}
+.lede{font-size:1.1rem;color:var(--ink-2);margin:0;max-width:60ch}
+.docs{display:grid;gap:14px;margin:20px 0 0}
+a.doc{display:block;text-decoration:none;color:inherit;background:var(--surface);
+  border:1px solid var(--line);border-radius:11px;padding:24px 26px;box-shadow:var(--shadow);
+  transition:border-color .15s ease, transform .15s ease}
+a.doc:hover,a.doc:focus-visible{border-color:var(--accent);transform:translateY(-2px)}
+a.doc:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+a.doc h2{font-family:var(--display);font-weight:700;font-size:1.25rem;letter-spacing:-.02em;margin:0 0 8px}
+a.doc p{margin:0;color:var(--ink-2);font-size:.92rem}
+a.doc .meta{display:block;margin-top:12px;font-family:var(--mono);font-size:.68rem;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+section{margin-top:56px}
+h3{font-family:var(--display);font-weight:700;font-size:1.1rem;letter-spacing:-.015em;
+  margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+ol{margin:0;padding-left:22px;color:var(--ink-2)}
+ol li{margin-bottom:12px}
+ol li:last-child{margin-bottom:0}
+ol strong{color:var(--ink)}
+footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:.72rem;color:var(--ink-3);letter-spacing:.04em}
+@media (prefers-reduced-motion:reduce){a.doc{transition:none}a.doc:hover{transform:none}}
+@media (max-width:560px){header{padding:56px 0 28px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Planning documents</p>
+  <h1>Babacom</h1>
+  <p class="lede">A self-hosted, Discord-style voice, video and screen-sharing app for a private group split between mainland China and Europe — invite-only, no ID collection, no per-seat fees.</p>
+</header>
+
+<div class="docs">
+  <a class="doc" href="scope.html">
+    <h2>Build Scope</h2>
+    <p>Every feature selected, everything deliberately ruled out, and a three-release order that reaches something playable in about four weeks.</p>
+    <span class="meta">84 in · 3 optional · 34 out</span>
+  </a>
+  <a class="doc" href="teams.html">
+    <h2>Team Map</h2>
+    <p>The scope cut into independently-ownable modules, with the shared contracts that have to be frozen before any parallel work begins.</p>
+    <span class="meta">24 modules · 8 domains</span>
+  </a>
+</div>
+
+<section>
+  <h3>Why it is shaped this way</h3>
+  <ol>
+    <li><strong>The Great Firewall is not the main obstacle.</strong> It does not blanket-throttle UDP. Nearly all China-to-overseas packet loss is ordinary carrier congestion on the international backbone, worst between 20:00 and 23:00 China time.</li>
+    <li><strong>No WebRTC media server implements working video error correction.</strong> Above roughly 6% sustained loss, video degrades regardless of software. Path quality is the load-bearing decision, not a tuning detail.</li>
+    <li><strong>Audio is recoverable where video is not.</strong> Opus with redundancy and inband FEC holds to roughly 15–22% loss, so the design is audio-first with video as an explicit opt-in.</li>
+  </ol>
+  <p style="margin-top:16px;color:var(--ink-2)">The result is two servers — one in East Asia on a China-optimised route, one in Europe — with each room pinned to a region, and the region shown in the interface so people can see why something is slow and move.</p>
+</section>
+
+<footer>Planning only — no application code in this repository yet.</footer>
+
+</div>
+</body>
+</html>

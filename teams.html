@@ -1,0 +1,584 @@
+<title>Babacom Team Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  --ground:#EFF1F4;
+  --surface:#FFFFFF;
+  --surface-2:#F6F7F9;
+  --line:#DBE0E6;
+  --line-soft:#E7EAEF;
+  --ink:#141A21;
+  --ink-2:#3D4854;
+  --ink-3:#6C7885;
+  --accent:#0E6E60;
+  --accent-soft:#DDEEEA;
+  --warn:#8F5407;
+  --warn-soft:#F5E8D4;
+  --off:#7F8A98;
+  --off-soft:#E6E9ED;
+  --shadow:0 1px 2px rgba(20,26,33,.05), 0 10px 28px -20px rgba(20,26,33,.35);
+  --sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --display:"Archivo",var(--sans);
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0E1217; --surface:#161C23; --surface-2:#1C232B;
+    --line:#2B343E; --line-soft:#222A33;
+    --ink:#E6EAEF; --ink-2:#B3BDC8; --ink-3:#828E9C;
+    --accent:#4FC2AE; --accent-soft:#13332E;
+    --warn:#D9A055; --warn-soft:#33281A;
+    --off:#6E7A88; --off-soft:#20272F;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 30px -20px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0E1217; --surface:#161C23; --surface-2:#1C232B;
+  --line:#2B343E; --line-soft:#222A33;
+  --ink:#E6EAEF; --ink-2:#B3BDC8; --ink-3:#828E9C;
+  --accent:#4FC2AE; --accent-soft:#13332E;
+  --warn:#D9A055; --warn-soft:#33281A;
+  --off:#6E7A88; --off-soft:#20272F;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 30px -20px rgba(0,0,0,.8);
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+  font-size:.95rem;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px 96px}
+
+.mast{padding:64px 0 34px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:var(--mono);font-size:.7rem;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-3);margin:0 0 18px}
+h1{font-family:var(--display);font-weight:800;font-size:clamp(2.3rem,6vw,3.4rem);line-height:1.03;
+  letter-spacing:-.03em;margin:0 0 16px;text-wrap:balance}
+.standfirst{font-size:1.08rem;color:var(--ink-2);margin:0;max-width:64ch}
+
+.tally{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;
+  background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:34px 0 0}
+.tally div{background:var(--surface);padding:18px 20px}
+.tally b{display:block;font-family:var(--mono);font-size:2rem;font-weight:600;letter-spacing:-.03em;
+  line-height:1;font-variant-numeric:tabular-nums;color:var(--accent)}
+.tally span{display:block;margin-top:8px;font-family:var(--mono);font-size:.68rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-3)}
+
+.note{margin:44px 0 0;background:var(--surface);border:1px solid var(--line);
+  border-left:3px solid var(--warn);border-radius:8px;padding:22px 24px;box-shadow:var(--shadow)}
+.note h3{font-family:var(--display);font-weight:700;font-size:1.05rem;letter-spacing:-.01em;margin:0 0 10px}
+.note p{margin:0 0 10px;color:var(--ink-2);max-width:70ch}
+.note p:last-child{margin-bottom:0}
+
+section{margin-top:56px}
+.shead{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding-bottom:12px;
+  border-bottom:1px solid var(--line);margin-bottom:22px}
+.shead h2{font-family:var(--display);font-weight:700;font-size:1.4rem;letter-spacing:-.02em;margin:0}
+.shead .count{font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;color:var(--ink-3)}
+.shead p{margin:0;flex:1 1 320px;color:var(--ink-3);font-size:.86rem;min-width:0}
+
+/* domain band */
+.domain{margin-bottom:34px}
+.dhead{display:flex;align-items:center;gap:14px;margin-bottom:12px}
+.dnum{font-family:var(--mono);font-size:.7rem;letter-spacing:.14em;color:var(--accent);
+  background:var(--accent-soft);border-radius:20px;padding:4px 12px;white-space:nowrap}
+.dhead h3{font-family:var(--display);font-weight:700;font-size:1.14rem;letter-spacing:-.015em;margin:0}
+.dhead .brief{color:var(--ink-3);font-size:.84rem;margin:0}
+
+.mods{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.mod{background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:18px 20px;
+  box-shadow:var(--shadow);display:flex;flex-direction:column;gap:10px}
+.mid{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.mid code{font-family:var(--mono);font-size:.74rem;color:var(--accent);font-weight:600}
+.mid h4{font-family:var(--display);font-weight:700;font-size:1rem;margin:0;letter-spacing:-.01em}
+.rel{margin-left:auto;font-family:var(--mono);font-size:.64rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-3);background:var(--surface-2);
+  border:1px solid var(--line-soft);border-radius:20px;padding:2px 9px;white-space:nowrap}
+.owns{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:5px}
+.owns li{font-size:.78rem;line-height:1.35;background:var(--surface-2);border:1px solid var(--line-soft);
+  border-radius:5px;padding:4px 8px;color:var(--ink-2)}
+.owns li.o{background:var(--warn-soft);border-color:transparent;color:var(--warn)}
+.dep{font-family:var(--mono);font-size:.68rem;color:var(--ink-3);letter-spacing:.03em;
+  border-top:1px dashed var(--line);padding-top:9px;margin:0}
+.dep b{color:var(--ink-2);font-weight:500}
+
+/* contracts */
+.contracts{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.ct{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:8px;padding:16px 18px}
+.ct.open{border-left-color:var(--warn)}
+.ct.open span{color:var(--warn)}
+.ct h4{font-family:var(--display);font-weight:700;font-size:.95rem;margin:0 0 6px;letter-spacing:-.01em}
+.ct p{margin:0;font-size:.83rem;color:var(--ink-2)}
+.ct span{display:block;margin-top:8px;font-family:var(--mono);font-size:.66rem;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-3)}
+
+/* path */
+.path{display:grid;gap:10px;margin-top:20px}
+.wave{display:grid;grid-template-columns:auto 1fr;gap:18px;align-items:start;background:var(--surface);
+  border:1px solid var(--line);border-radius:9px;padding:17px 20px;box-shadow:var(--shadow)}
+.wave .w{font-family:var(--mono);font-size:.7rem;letter-spacing:.12em;color:var(--accent);
+  padding-top:3px;white-space:nowrap}
+.wave h4{font-family:var(--display);font-weight:700;font-size:.98rem;margin:0 0 5px;letter-spacing:-.01em}
+.wave p{margin:0;color:var(--ink-2);font-size:.85rem;max-width:74ch}
+.wave .ids{font-family:var(--mono);font-size:.72rem;color:var(--ink-3);margin-top:7px;display:block}
+
+footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:.72rem;color:var(--ink-3);letter-spacing:.04em}
+
+@media (max-width:560px){
+  .mast{padding:44px 0 28px}
+  .wave{grid-template-columns:1fr;gap:8px}
+  .rel{margin-left:0}
+}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Work breakdown · 24 modules</p>
+  <h1>Babacom Team Map</h1>
+  <p class="standfirst">The 87 features, plus the backend services and operational work they quietly depend on, cut into eight domains of three modules each — sized so one team can own a module end to end without waiting on another team's files. Plus the seven contracts that have to be frozen before any of them start.</p>
+
+  <div class="tally">
+    <div><b>8</b><span>Domains</span></div>
+    <div><b>24</b><span>Modules</span></div>
+    <div><b>105</b><span>Agents total</span></div>
+    <div><b>7</b><span>Frozen contracts</span></div>
+  </div>
+</header>
+
+<div class="note">
+  <h3>The thing that decides whether this works</h3>
+  <p>Eighteen teams editing one React app and one database will produce merge chaos, not parallelism. The modules below are cut along <strong>ownership seams</strong> — each owns its own routes, its own tables, and its own folder — but that only holds if the shared surfaces are settled first.</p>
+  <p>So the coordinator's real job is not assigning work. It is owning the seven contracts in the next section, and refusing to let any team change them unilaterally. Everything else is genuinely parallel.</p>
+</div>
+
+<section>
+  <div class="shead">
+    <h2>Freeze before fan-out</h2>
+    <span class="count">7 contracts</span>
+    <p>Coordinator owns all seven. A team proposing a change raises it; it does not edit it.</p>
+  </div>
+  <div class="contracts">
+    <div class="ct">
+      <h4>Database schema</h4>
+      <p>One migration sequence, one owner. Teams propose migrations; the coordinator merges and numbers them.</p>
+      <span>Blocks everything</span>
+    </div>
+    <div class="ct">
+      <h4>HTTP API shape</h4>
+      <p>Typed contract with a route namespace per module, so no two teams claim the same path.</p>
+      <span>Blocks all backend</span>
+    </div>
+    <div class="ct">
+      <h4>WebSocket events</h4>
+      <p>Event names and payloads for presence, typing, unread, messages. The one surface every realtime feature touches.</p>
+      <span>Blocks 5.x, 6.3</span>
+    </div>
+    <div class="ct">
+      <h4>Design tokens &amp; components</h4>
+      <p>Colour, type, spacing, and the shared primitives — button, modal, list, avatar. Owned by 6.2, frozen early.</p>
+      <span>Blocks all UI</span>
+    </div>
+    <div class="ct">
+      <h4>Permission primitive</h4>
+      <p>One <code>can(user, action, channel)</code> function. Every team calls it; only 2.3 implements it.</p>
+      <span>Blocks 3.1, 5.1, 6.1</span>
+    </div>
+    <div class="ct">
+      <h4>LiveKit token claims</h4>
+      <p>What a room token grants: publish, subscribe, screen share, moderator. Set once, read everywhere.</p>
+      <span>Blocks 3.x, 4.x</span>
+    </div>
+    <div class="ct">
+      <h4>Repo layout &amp; ownership</h4>
+      <p>A folder per module and a codeowners map, so review routes automatically and collisions surface as conflicts, not surprises.</p>
+      <span>Blocks everything</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>The eight domains</h2>
+    <span class="count">3 modules each</span>
+    <p>Each module is one team: product manager, engineer, QA, reviewer.</p>
+  </div>
+
+  <div class="domain">
+    <div class="dhead">
+      <span class="dnum">Domain 1</span>
+      <h3>Platform</h3>
+      <p class="brief">Servers, media plumbing, release machinery</p>
+    </div>
+    <div class="mods">
+      <div class="mod">
+        <div class="mid"><code>1.1</code><h4>Infrastructure</h4><span class="rel">R0</span></div>
+        <ul class="owns">
+          <li>Two boxes provisioned</li><li>Docker Compose per node</li><li>Caddy + TLS</li>
+          <li>DNS: app / asia / eu</li><li>Postgres + backups</li><li>Firewall &amp; SSH policy</li>
+          <li>Storage volumes</li><li>Secrets handling</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> nothing. Starts first.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>1.2</code><h4>Media operations</h4><span class="rel">R0</span></div>
+        <ul class="owns">
+          <li>LiveKit config, both nodes</li><li>Built-in TURN on 443</li><li>Single UDP port mux</li>
+          <li>Region routing table</li><li>Simulcast &amp; bitrate policy</li><li>Opus RED + FEC</li>
+          <li>Per-track jitter buffer</li><li>China network measurement</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 1.1. <b>Blocks:</b> all of 3.x and 4.x.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>1.3</code><h4>Observability &amp; release</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>Health checks</li><li>Logs &amp; metrics</li><li>LiveKit stats collection</li>
+          <li>Staging environment</li><li>CI and deploys</li><li>Migration runner</li><li>Error tracking</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 1.1.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="domain">
+    <div class="dhead">
+      <span class="dnum">Domain 2</span>
+      <h3>Identity &amp; access</h3>
+      <p class="brief">Who gets in, who they are, what they may do</p>
+    </div>
+    <div class="mods">
+      <div class="mod">
+        <div class="mid"><code>2.1</code><h4>Invites</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>Admin-generated codes</li><li>Expiry</li><li>Use limits</li>
+          <li>Setting: may members invite</li><li>Redeem → account</li><li>First-run onboarding</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> schema, API contract.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>2.2</code><h4>Accounts &amp; sessions</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>Login / logout</li><li>Session cookies</li><li>Password reset</li>
+          <li>Username &amp; display name</li><li>Avatar upload</li><li>Account settings page</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 2.1. <b>Blocks:</b> every authenticated route.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>2.3</code><h4>Roles &amp; permissions</h4><span class="rel">R2</span></div>
+        <ul class="owns">
+          <li>Roles</li><li>Role colours</li><li>Per-channel permissions</li>
+          <li>The <code>can()</code> primitive</li><li>Admin authority for mute, deafen, disconnect</li>
+          <li>Delete anyone's message</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 2.2. <b>Blocks:</b> 3.1, 5.1, 6.1 gating.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="domain">
+    <div class="dhead">
+      <span class="dnum">Domain 3</span>
+      <h3>Voice</h3>
+      <p class="brief">Channels, audio pipeline, camera</p>
+    </div>
+    <div class="mods">
+      <div class="mod">
+        <div class="mid"><code>3.1</code><h4>Voice channels</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>Click to join, no ringing</li><li>Persists when empty</li><li>See who's inside first</li>
+          <li>Per-channel user limit</li><li>Drag a user in</li><li>Disconnect from voice</li>
+          <li>Server-mute / deafen</li><li>Token exchange &amp; join flow</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 1.2, 2.3, token claims.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>3.2</code><h4>Audio &amp; devices</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>Mute self</li><li>Deafen self</li><li>Mute / deafen hotkeys</li>
+          <li>Voice activation threshold</li><li>Mic test with meter</li><li>Device pickers</li>
+          <li>Input / output volume</li><li>Per-user volume</li><li>Mute someone locally</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 3.1. <b>Open question:</b> how global hotkeys work in a browser.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>3.3</code><h4>Camera &amp; layout</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>Camera on / off</li><li>Camera device picker</li><li>Pin someone's video</li>
+          <li>Grid vs speaker view</li><li>Participant tile rendering</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 3.1, design tokens.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="domain">
+    <div class="dhead">
+      <span class="dnum">Domain 4</span>
+      <h3>Streaming</h3>
+      <p class="brief">The reason the product exists</p>
+    </div>
+    <div class="mods">
+      <div class="mod">
+        <div class="mid"><code>4.1</code><h4>Publishing</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>Share entire screen</li><li>Share a window</li><li>Share a browser tab</li>
+          <li>Include system audio</li><li>Pick resolution</li><li>Pick framerate</li>
+          <li>Screen-share simulcast</li><li>Start / stop flow</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 1.2, 3.1.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>4.2</code><h4>Watching</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>Watch a stream</li><li>Several streams at once</li><li>Fullscreen</li>
+          <li>Pop out to a window</li><li>Per-stream volume</li><li>Viewer count</li><li>See who is watching</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 4.1.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>4.3</code><h4>Quality &amp; connection UX</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>Speaking indicator</li><li>Per-user quality dot</li><li>Your ping</li>
+          <li>Region label on channels</li><li>Low-bandwidth mode</li><li>Adaptive subscription</li>
+          <li>Reconnection handling</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 1.2 for routing data, 3.1, 4.2.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="domain">
+    <div class="dhead">
+      <span class="dnum">Domain 5</span>
+      <h3>Messaging</h3>
+      <p class="brief">Text, files, and the two expensive features</p>
+    </div>
+    <div class="mods">
+      <div class="mod">
+        <div class="mid"><code>5.1</code><h4>Message core</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>Send, receive, scrollback</li><li>Reply to a message</li><li>Edit own</li><li>Delete own</li>
+          <li>Delete anyone's (admin)</li><li>Markdown</li><li>Code highlighting</li><li>Emoji picker</li>
+          <li>Reactions</li><li>Typing indicator</li><li>Group by author</li><li>@user @role @everyone</li>
+          <li class="o">Custom emoji</li><li class="o">Slash commands</li><li class="o">Polls</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> WS contract, 2.3. <b>Blocks:</b> 5.3, 6.3.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>5.2</code><h4>Files &amp; media</h4><span class="rel">R2</span></div>
+        <ul class="owns">
+          <li>Upload files and images</li><li>Drag and drop</li><li>Paste from clipboard</li>
+          <li>Image lightbox</li><li>Inline video / audio</li><li>Link previews</li>
+          <li>Per-upload size limit</li><li>Auto-delete old files</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 5.1, storage from 1.1.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>5.3</code><h4>Threads &amp; search</h4><span class="rel">R3</span></div>
+        <ul class="owns">
+          <li>Threads</li><li>Message search</li><li>Author &amp; date filters</li><li>Search indexing</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 5.1, 6.3 unread model. The heaviest module here.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="domain">
+    <div class="dhead">
+      <span class="dnum">Domain 6</span>
+      <h3>Experience</h3>
+      <p class="brief">The frame everything else renders inside</p>
+    </div>
+    <div class="mods">
+      <div class="mod">
+        <div class="mid"><code>6.1</code><h4>Shell &amp; structure</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>App layout &amp; sidebar</li><li>Multiple text channels</li><li>Channel categories</li>
+          <li>Channel topic line</li><li>Pinned messages</li><li>Member list by role</li>
+          <li>Keyboard shortcuts</li><li>Mobile-responsive layout</li><li>Routing</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 6.2 tokens, 2.3. <b>Blocks:</b> every UI module.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>6.2</code><h4>Appearance &amp; language</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>Design tokens</li><li>Shared component library</li><li>Light and dark theme</li>
+          <li>Font size control</li><li>Per-user accent colour</li><li>Chinese and English UI</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> nothing. <b>Starts alongside 1.1 — it blocks all UI.</b></p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>6.3</code><h4>Direct messages &amp; alerts</h4><span class="rel">R2</span></div>
+        <ul class="owns">
+          <li>Direct messages</li><li>Group DMs</li><li>Per-channel: all / mentions / none</li>
+          <li>Mute a channel</li><li>Desktop notifications</li><li>Mention highlight &amp; badges</li>
+          <li>Unread marker &amp; jump</li><li>Online / idle / DND / invisible</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 5.1, 6.1, WS contract.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="domain">
+    <div class="dhead">
+      <span class="dnum">Domain 7</span>
+      <h3>Backend services</h3>
+      <p class="brief">The plumbing every feature assumes exists</p>
+    </div>
+    <div class="mods">
+      <div class="mod">
+        <div class="mid"><code>7.1</code><h4>Realtime gateway</h4><span class="rel">R0</span></div>
+        <ul class="owns">
+          <li>Websocket server</li><li>Connection lifecycle</li><li>Heartbeats &amp; timeouts</li>
+          <li>Reconnection with backfill</li><li>Event fan-out</li><li>Presence across both nodes</li>
+          <li>Voice presence reconciled with text presence</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 1.1, WS contract. <b>Blocks:</b> 5.1, 6.3, 4.3. Starts in wave 0 despite the number.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>7.2</code><h4>Tokens &amp; rate limiting</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>LiveKit JWT minting</li><li>Short-lived scoped claims</li><li>Limits on room join</li>
+          <li>Limits on invite redemption</li><li>Limits on token requests</li><li>Per-IP and per-account</li>
+          <li>Abuse detection</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 2.2, token-claims contract. Security-critical — an ungated token endpoint relocates the open-relay problem rather than solving it.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>7.3</code><h4>Jobs, mail &amp; storage</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>Background job runner</li><li>Link preview fetching</li><li>Attachment pruning</li>
+          <li>Session &amp; invite expiry</li><li>Email delivery</li><li>Deliverability to QQ / 163</li>
+          <li>File storage service</li><li>Attachment access control</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 1.1. <b>Open question:</b> which mail provider actually lands in Chinese inboxes.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="domain">
+    <div class="dhead">
+      <span class="dnum">Domain 8</span>
+      <h3>Operations &amp; risk</h3>
+      <p class="brief">Keeping it alive, affordable, and reachable from China</p>
+    </div>
+    <div class="mods">
+      <div class="mod">
+        <div class="mid"><code>8.1</code><h4>Hosting &amp; cost</h4><span class="rel">R0</span></div>
+        <ul class="owns">
+          <li>Benchmark candidate hosts</li><li>Verify claimed routes by traceroute</li>
+          <li>Re-check routes quarterly</li><li>Bandwidth quota monitoring</li><li>Alert at 80% of cap</li>
+          <li>Capacity planning</li><li>Renewal &amp; billing</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 1.2 measurement. On a throttled plan you hit the cap silently, mid-game-night.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>8.2</code><h4>Resilience</h4><span class="rel">R1</span></div>
+        <ul class="owns">
+          <li>Postgres backups</li><li>Tested restore drills</li><li>Spare IP on standby</li>
+          <li>Spare domain on standby</li><li>Client endpoint failover</li><li>Incident runbook</li>
+          <li>Status page</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 1.1, 1.3. A blocked IP takes weeks to clear — the contingency has to exist before it happens.</p>
+      </div>
+      <div class="mod">
+        <div class="mid"><code>8.3</code><h4>Security &amp; data policy</h4><span class="rel">R2</span></div>
+        <ul class="owns">
+          <li>Unattended upgrades</li><li>Container digest pinning</li><li>Dependency scanning</li>
+          <li>Secrets rotation</li><li>Retention &amp; minimisation policy</li><li>Log retention limits</li>
+          <li>Plain-language risk notice for users in China</li>
+        </ul>
+        <p class="dep"><b>Depends on:</b> 1.1, 2.2. What you never store cannot leak or be demanded.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>Decisions still open</h2>
+    <span class="count">6 unresolved</span>
+    <p>Each blocks its module. None block starting.</p>
+  </div>
+  <div class="contracts">
+    <div class="ct open">
+      <h4>Which box to rent</h4>
+      <p>Cheap Tokyo at $11, or premium routing at $35. The 21:00 Beijing measurement decides it — not a preference.</p>
+      <span>Owner: 8.1</span>
+    </div>
+    <div class="ct open">
+      <h4>How hotkeys work</h4>
+      <p>A browser tab can't see the keyboard during a fullscreen game. Chrome extension, tray app, or accept tab-focus only.</p>
+      <span>Owner: 3.2</span>
+    </div>
+    <div class="ct open">
+      <h4>Mail that reaches China</h4>
+      <p>Password reset needs delivery into QQ Mail and 163. Foreign senders are routinely filed as spam.</p>
+      <span>Owner: 7.3</span>
+    </div>
+    <div class="ct open">
+      <h4>Who may create invites</h4>
+      <p>Admin-only and any-member were both selected. Built as a setting, defaulting to admin-only.</p>
+      <span>Owner: 2.1</span>
+    </div>
+    <div class="ct open">
+      <h4>Search infrastructure</h4>
+      <p>Postgres full-text is free and adequate at this size; a separate index is faster and another thing to run.</p>
+      <span>Owner: 5.3</span>
+    </div>
+    <div class="ct open">
+      <h4>One room or two</h4>
+      <p>Whether a China-only channel is real, or everyone always shares one mixed room. Changes where the mixed room is hosted.</p>
+      <span>Owner: 1.2</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>Start order</h2>
+    <span class="count">4 waves</span>
+    <p>Not all 24 can start at once — six modules gate the rest. Domain numbers are labels, not order: 7.1 and 8.1 start in wave 0.</p>
+  </div>
+  <div class="path">
+    <div class="wave">
+      <span class="w">Wave 0</span>
+      <div>
+        <h4>The five that block everyone</h4>
+        <p>Infrastructure, the design system and the realtime gateway have no dependencies and block nearly everything else. Media operations runs the China measurement in parallel, since its result changes bitrate defaults everyone builds against — and hosting picks the box that measurement runs on.</p>
+        <span class="ids">1.1 · 1.2 · 6.2 · 7.1 · 8.1</span>
+      </div>
+    </div>
+    <div class="wave">
+      <span class="w">Wave 1</span>
+      <div>
+        <h4>The spine</h4>
+        <p>Nothing authenticated can be built until sessions exist, and no screen can be built until the shell exists. Token minting lands here too, because every media module needs it the moment it starts.</p>
+        <span class="ids">2.1 · 2.2 · 6.1 · 1.3 · 7.2 · 7.3</span>
+      </div>
+    </div>
+    <div class="wave">
+      <span class="w">Wave 2</span>
+      <div>
+        <h4>Wide fan-out</h4>
+        <p>Nine modules run genuinely in parallel here. This is where the org shape earns its cost — voice, streaming and messaging teams barely touch each other's files.</p>
+        <span class="ids">3.1 · 3.2 · 3.3 · 4.1 · 4.2 · 4.3 · 5.1 · 2.3 · 8.2</span>
+      </div>
+    </div>
+    <div class="wave">
+      <span class="w">Wave 3</span>
+      <div>
+        <h4>Depth on top</h4>
+        <p>Everything remaining builds on finished surfaces. Threads and search go last deliberately — they are the most expensive and the least necessary for the product to be usable.</p>
+        <span class="ids">5.2 · 6.3 · 5.3 · 8.3</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>24 modules · 8 domains · 105 agents · derived from the 87-feature scope, 27 August 2026</footer>
+
+</div>

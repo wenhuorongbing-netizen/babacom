@@ -1,0 +1,527 @@
+<title>Babacom Build Scope</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  --ground:#EFF1F4;
+  --surface:#FFFFFF;
+  --surface-2:#F6F7F9;
+  --line:#DBE0E6;
+  --line-soft:#E7EAEF;
+  --ink:#141A21;
+  --ink-2:#3D4854;
+  --ink-3:#6C7885;
+  --accent:#0E6E60;
+  --accent-soft:#DDEEEA;
+  --warn:#8F5407;
+  --warn-soft:#F5E8D4;
+  --off:#7F8A98;
+  --off-soft:#E6E9ED;
+  --shadow:0 1px 2px rgba(20,26,33,.05), 0 10px 28px -20px rgba(20,26,33,.35);
+
+  --sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --display:"Archivo",var(--sans);
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0E1217;
+    --surface:#161C23;
+    --surface-2:#1C232B;
+    --line:#2B343E;
+    --line-soft:#222A33;
+    --ink:#E6EAEF;
+    --ink-2:#B3BDC8;
+    --ink-3:#828E9C;
+    --accent:#4FC2AE;
+    --accent-soft:#13332E;
+    --warn:#D9A055;
+    --warn-soft:#33281A;
+    --off:#6E7A88;
+    --off-soft:#20272F;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 30px -20px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0E1217;
+  --surface:#161C23;
+  --surface-2:#1C232B;
+  --line:#2B343E;
+  --line-soft:#222A33;
+  --ink:#E6EAEF;
+  --ink-2:#B3BDC8;
+  --ink-3:#828E9C;
+  --accent:#4FC2AE;
+  --accent-soft:#13332E;
+  --warn:#D9A055;
+  --warn-soft:#33281A;
+  --off:#6E7A88;
+  --off-soft:#20272F;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 30px -20px rgba(0,0,0,.8);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--ground);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:.95rem;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px 96px}
+
+/* ---------- masthead ---------- */
+.mast{padding:64px 0 36px;border-bottom:1px solid var(--line)}
+.eyebrow{
+  font-family:var(--mono);font-size:.7rem;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-3);margin:0 0 18px
+}
+h1{
+  font-family:var(--display);font-weight:800;font-size:clamp(2.3rem,6vw,3.4rem);
+  line-height:1.03;letter-spacing:-.03em;margin:0 0 16px;text-wrap:balance
+}
+.standfirst{
+  font-size:1.08rem;color:var(--ink-2);margin:0;max-width:62ch
+}
+
+/* ---------- tally ---------- */
+.tally{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+  background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;
+  margin:36px 0 0
+}
+.tally div{background:var(--surface);padding:18px 20px}
+.tally b{
+  display:block;font-family:var(--mono);font-size:2rem;font-weight:600;
+  letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums
+}
+.tally span{
+  display:block;margin-top:8px;font-family:var(--mono);font-size:.68rem;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)
+}
+.t-in b{color:var(--accent)}
+.t-opt b{color:var(--warn)}
+.t-out b{color:var(--off)}
+
+/* ---------- callouts ---------- */
+.note{
+  margin:44px 0 0;background:var(--surface);border:1px solid var(--line);
+  border-left:3px solid var(--warn);border-radius:8px;padding:22px 24px;box-shadow:var(--shadow)
+}
+.note.q{border-left-color:var(--accent)}
+.note h3{
+  font-family:var(--display);font-weight:700;font-size:1.05rem;letter-spacing:-.01em;
+  margin:0 0 10px
+}
+.note p{margin:0 0 10px;color:var(--ink-2);max-width:68ch}
+.note p:last-child{margin-bottom:0}
+.note ul{margin:10px 0 0;padding-left:20px;color:var(--ink-2)}
+.note li{margin-bottom:7px}
+.note li:last-child{margin-bottom:0}
+
+/* ---------- sections ---------- */
+section{margin-top:56px}
+.shead{
+  display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+  padding-bottom:12px;border-bottom:1px solid var(--line);margin-bottom:20px
+}
+.shead h2{
+  font-family:var(--display);font-weight:700;font-size:1.4rem;letter-spacing:-.02em;margin:0
+}
+.count{
+  font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;color:var(--ink-3);
+  font-variant-numeric:tabular-nums
+}
+.shead p{margin:0;flex:1 1 320px;color:var(--ink-3);font-size:.86rem;min-width:0}
+
+.grid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:8px
+}
+.f{
+  display:flex;align-items:flex-start;gap:11px;background:var(--surface);
+  border:1px solid var(--line-soft);border-radius:7px;padding:11px 13px;
+  font-size:.875rem;line-height:1.45
+}
+.f::before{
+  content:"";flex:none;width:3px;align-self:stretch;min-height:17px;
+  border-radius:2px;background:var(--accent)
+}
+.f.opt::before{background:var(--warn)}
+.f.opt{background:var(--warn-soft);border-color:transparent}
+.f em{
+  font-style:normal;display:block;font-family:var(--mono);font-size:.66rem;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--warn);margin-top:4px
+}
+
+/* ---------- excluded ---------- */
+.out .grid{grid-template-columns:repeat(auto-fill,minmax(196px,1fr));gap:6px}
+.out .f{
+  background:var(--off-soft);border-color:transparent;color:var(--ink-3);
+  font-size:.82rem;padding:8px 11px
+}
+.out .f::before{background:var(--off)}
+
+/* ---------- phases ---------- */
+.phases{display:grid;gap:12px;margin-top:20px}
+.ph{
+  display:grid;grid-template-columns:auto 1fr;gap:20px;align-items:start;
+  background:var(--surface);border:1px solid var(--line);border-radius:9px;
+  padding:20px 22px;box-shadow:var(--shadow)
+}
+.ph .n{
+  font-family:var(--mono);font-size:.72rem;letter-spacing:.12em;color:var(--accent);
+  padding-top:3px;white-space:nowrap
+}
+.ph h4{
+  font-family:var(--display);font-weight:700;font-size:1.02rem;margin:0 0 6px;
+  letter-spacing:-.01em
+}
+.ph p{margin:0;color:var(--ink-2);font-size:.88rem;max-width:70ch}
+.ph .wk{
+  display:inline-block;margin-top:9px;font-family:var(--mono);font-size:.68rem;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);
+  background:var(--surface-2);border:1px solid var(--line-soft);
+  border-radius:20px;padding:3px 11px
+}
+
+footer{
+  margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:.72rem;color:var(--ink-3);letter-spacing:.04em
+}
+
+@media (max-width:560px){
+  .mast{padding:44px 0 28px}
+  .ph{grid-template-columns:1fr;gap:8px}
+}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Feature scope · decided 27 Aug 2026</p>
+  <h1>Babacom Build Scope</h1>
+  <p class="standfirst">A self-hosted Discord replacement for a 25-person group split between mainland China and Europe. Two servers, invite-only, no ID uploads, no per-seat fees. This is everything you ticked, everything you skipped, and what the total actually costs to build.</p>
+
+  <div class="tally">
+    <div class="t-in"><b>84</b><span>Features in</span></div>
+    <div class="t-opt"><b>3</b><span>Optional</span></div>
+    <div class="t-out"><b>34</b><span>Ruled out</span></div>
+    <div><b>13–16</b><span>Weeks, solo</span></div>
+  </div>
+</header>
+
+<div class="note">
+  <h3>The number worth arguing with: 13–16 weeks</h3>
+  <p>I earlier estimated 2–4 weeks for a custom client. That was for a minimal one — voice channels and a screen share. This scope is roughly four times that, and the estimate has to move with it.</p>
+  <p>The four features carrying most of the extra weight are <strong>threads</strong>, <strong>message search</strong>, <strong>roles with per-channel permissions</strong>, and <strong>direct messages plus group DMs</strong>. Each is a week or more on its own, and threads touch the data model, the unread system and the notification system all at once. None of them are needed to start playing games together.</p>
+  <p>The build order at the bottom cuts this into three releases, the first of which is usable in about four weeks.</p>
+</div>
+
+<div class="note q">
+  <h3>Two things still open</h3>
+  <ul>
+    <li><strong>Mute/deafen hotkeys.</strong> You want them, but a browser tab can't see your keyboard while you're in a fullscreen game — which is exactly when you need them. A Chrome extension can register genuinely global shortcuts; a small tray app also works and covers Firefox; or hotkeys only fire when the tab is focused. Undecided.</li>
+    <li><strong>Who can create invites.</strong> You picked both "admin-generated only" and "any member can invite." Recorded as a setting, defaulting to admin-only.</li>
+  </ul>
+</div>
+
+<section>
+  <div class="shead">
+    <h2>Voice channels</h2>
+    <span class="count">16 / 16</span>
+    <p>Drop-in channels that stay open when empty, the way Discord's do.</p>
+  </div>
+  <div class="grid">
+    <div class="f">Click a channel to join, no ringing</div>
+    <div class="f">Channel persists when empty</div>
+    <div class="f">See who's inside before joining</div>
+    <div class="f">Per-channel user limit</div>
+    <div class="f">Drag another user into a channel</div>
+    <div class="f">Disconnect someone from voice</div>
+    <div class="f">Server-mute and server-deafen</div>
+    <div class="f">Mute self</div>
+    <div class="f">Deafen self</div>
+    <div class="f">Hotkeys for mute and deafen</div>
+    <div class="f">Voice activation with threshold</div>
+    <div class="f">Mic test with live level meter</div>
+    <div class="f">Input and output device pickers</div>
+    <div class="f">Separate input / output volume</div>
+    <div class="f">Per-user volume slider</div>
+    <div class="f">Mute someone just for yourself</div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>Camera and layout</h2>
+    <span class="count">4 / 4</span>
+    <p>Webcam is secondary to screen sharing here, but fully supported.</p>
+  </div>
+  <div class="grid">
+    <div class="f">Camera on / off</div>
+    <div class="f">Camera device picker</div>
+    <div class="f">Pin someone's video</div>
+    <div class="f">Grid vs speaker view</div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>Screen sharing and streams</h2>
+    <span class="count">12 / 12</span>
+    <p>The core of the product. Game streaming at up to 1440p60, quality chosen per stream.</p>
+  </div>
+  <div class="grid">
+    <div class="f">Share entire screen</div>
+    <div class="f">Share a single window</div>
+    <div class="f">Share a browser tab</div>
+    <div class="f">Include system audio</div>
+    <div class="f">Streamer picks resolution</div>
+    <div class="f">Streamer picks framerate</div>
+    <div class="f">Several people streaming at once</div>
+    <div class="f">Viewer count on a stream</div>
+    <div class="f">Fullscreen a stream</div>
+    <div class="f">Pop out into a separate window</div>
+    <div class="f">Per-stream volume</div>
+    <div class="f">See who is watching</div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>Connection visibility</h2>
+    <span class="count">4 / 4</span>
+    <p>Built for a cross-border group: when it's slow, people can see why and move.</p>
+  </div>
+  <div class="grid">
+    <div class="f">Speaking indicator on avatars</div>
+    <div class="f">Per-user connection quality dot</div>
+    <div class="f">Your own ping, visible</div>
+    <div class="f">Region label on each channel<em>Asia / Europe routing</em></div>
+    <div class="f">Low-bandwidth mode toggle</div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>Text messaging</h2>
+    <span class="count">15 in · 1 optional</span>
+    <p>Everything expected of a modern chat, minus the moderation layer.</p>
+  </div>
+  <div class="grid">
+    <div class="f">Send, receive, full scrollback</div>
+    <div class="f">Reply to a specific message</div>
+    <div class="f">Edit your own message</div>
+    <div class="f">Delete your own message</div>
+    <div class="f">Delete anyone's message (admin)</div>
+    <div class="f">Markdown: bold, italic, spoiler</div>
+    <div class="f">Code blocks with highlighting</div>
+    <div class="f">Emoji picker</div>
+    <div class="f">Reactions</div>
+    <div class="f">Typing indicator</div>
+    <div class="f">Unread marker and jump to it</div>
+    <div class="f">Group messages by author</div>
+    <div class="f">@user</div>
+    <div class="f">@role</div>
+    <div class="f">@everyone</div>
+    <div class="f opt">Custom emoji<em>Optional</em></div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>Files, media and structure</h2>
+    <span class="count">12 in · 2 optional</span>
+    <p>Attachment storage is capped and self-pruning — the box has 34 GB free.</p>
+  </div>
+  <div class="grid">
+    <div class="f">Upload files and images</div>
+    <div class="f">Drag and drop to upload</div>
+    <div class="f">Paste image from clipboard</div>
+    <div class="f">Image lightbox</div>
+    <div class="f">Inline video and audio player</div>
+    <div class="f">Link previews</div>
+    <div class="f">Per-upload size limit</div>
+    <div class="f">Auto-delete old attachments</div>
+    <div class="f">Multiple text channels</div>
+    <div class="f">Channel categories</div>
+    <div class="f">Channel topic line</div>
+    <div class="f">Pin messages and pinned list</div>
+    <div class="f opt">Slash commands<em>Optional</em></div>
+    <div class="f opt">Polls<em>Optional</em></div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>The two expensive ones</h2>
+    <span class="count">2 / 2</span>
+    <p>Both wanted, both real work. Candidates for release three.</p>
+  </div>
+  <div class="grid">
+    <div class="f">Message search with author and date filters</div>
+    <div class="f">Threads</div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>Notifications and roles</h2>
+    <span class="count">7 / 7</span>
+    <p>Roles govern access only — there is no punishment layer, by choice.</p>
+  </div>
+  <div class="grid">
+    <div class="f">Per-channel: all / mentions / none</div>
+    <div class="f">Mute a channel</div>
+    <div class="f">Desktop notifications</div>
+    <div class="f">Mention highlight and badge count</div>
+    <div class="f">Roles</div>
+    <div class="f">Role colours</div>
+    <div class="f">Per-channel permissions</div>
+    <div class="f">Member list grouped by role</div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>Identity and private chat</h2>
+    <span class="count">4 / 4</span>
+    <p>Deliberately minimal profiles — no bios, no custom status.</p>
+  </div>
+  <div class="grid">
+    <div class="f">Avatar upload</div>
+    <div class="f">Online / idle / do-not-disturb / invisible</div>
+    <div class="f">Direct messages</div>
+    <div class="f">Group DMs</div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>Platform, appearance, account</h2>
+    <span class="count">7 / 7</span>
+    <p>Web only. Bilingual from day one — retrofitting translations is far worse than building with them.</p>
+  </div>
+  <div class="grid">
+    <div class="f">Mobile-responsive layout</div>
+    <div class="f">Keyboard shortcuts</div>
+    <div class="f">Chinese and English UI<em>Decide at the start</em></div>
+    <div class="f">Light and dark theme</div>
+    <div class="f">Font size control</div>
+    <div class="f">Per-user accent colour</div>
+    <div class="f">Password reset</div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>Invites</h2>
+    <span class="count">4 / 4</span>
+    <p>The whole security model. No open registration means no spam, no abuse, and almost no attack surface.</p>
+  </div>
+  <div class="grid">
+    <div class="f">Admin-generated codes</div>
+    <div class="f">Codes expire after a set time</div>
+    <div class="f">Limited uses per code</div>
+    <div class="f">Setting: may members invite?<em>Contradiction — defaults to no</em></div>
+  </div>
+</section>
+
+<section class="out">
+  <div class="shead">
+    <h2>Ruled out</h2>
+    <span class="count">34</span>
+    <p>Recorded so nobody re-litigates them later. All reversible.</p>
+  </div>
+  <div class="grid">
+    <div class="f">Push-to-talk</div>
+    <div class="f">Auto-join on open</div>
+    <div class="f">Noise suppression</div>
+    <div class="f">Echo cancellation</div>
+    <div class="f">Automatic gain control</div>
+    <div class="f">Duck other apps</div>
+    <div class="f">Priority speaker</div>
+    <div class="f">Background blur</div>
+    <div class="f">Voice-channel text chat</div>
+    <div class="f">Soundboard</div>
+    <div class="f">Raise hand / stage mode</div>
+    <div class="f">Call recording</div>
+    <div class="f">Live captions</div>
+    <div class="f">Synced watch-together</div>
+    <div class="f">Screen annotation</div>
+    <div class="f">Remote control of a screen</div>
+    <div class="f">Kick</div>
+    <div class="f">Ban and unban list</div>
+    <div class="f">Timeout</div>
+    <div class="f">Approval lobby</div>
+    <div class="f">Audit log</div>
+    <div class="f">Report a message</div>
+    <div class="f">Word filter</div>
+    <div class="f">Slowmode</div>
+    <div class="f">Sound on mention</div>
+    <div class="f">Custom status text</div>
+    <div class="f">Profile bio</div>
+    <div class="f">Block a user</div>
+    <div class="f">Friend list and requests</div>
+    <div class="f">Installable PWA</div>
+    <div class="f">Two-factor auth</div>
+    <div class="f">Active session list</div>
+    <div class="f">Export / delete account</div>
+    <div class="f">Compact vs roomy density</div>
+  </div>
+</section>
+
+<section>
+  <div class="shead">
+    <h2>Build order</h2>
+    <span class="count">3 releases</span>
+    <p>Sequenced so the network risk is settled before any UI work, and so you're playing together by week five.</p>
+  </div>
+  <div class="phases">
+
+    <div class="ph">
+      <span class="n">00</span>
+      <div>
+        <h4>Prove the network first</h4>
+        <p>Stock LiveKit on a rented box, a real person in China and one in Europe, measured at 21:00 Beijing during an actual game stream. This decides the host, the region topology and every bitrate default. Writing UI before this number exists is building on a guess.</p>
+        <span class="wk">1 week · no app code</span>
+      </div>
+    </div>
+
+    <div class="ph">
+      <span class="n">01</span>
+      <div>
+        <h4>Playable</h4>
+        <p>Invites and login, voice channels with the full control set, screen sharing with resolution and framerate choice, basic text chat, region labels and connection indicators. At this point it replaces Discord for game nights, which is the actual goal.</p>
+        <span class="wk">≈ 4 weeks</span>
+      </div>
+    </div>
+
+    <div class="ph">
+      <span class="n">02</span>
+      <div>
+        <h4>Liveable</h4>
+        <p>Attachments and media, channel categories and pins, reactions and replies, roles with per-channel permissions, notification settings, direct and group messages, both themes, bilingual interface.</p>
+        <span class="wk">≈ 6 weeks</span>
+      </div>
+    </div>
+
+    <div class="ph">
+      <span class="n">03</span>
+      <div>
+        <h4>Complete</h4>
+        <p>Threads, message search, mobile layout polish, custom emoji, and the optional extras — slash commands and polls — if they still seem worth it by then. Several may not.</p>
+        <span class="wk">≈ 5 weeks</span>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<footer>84 in · 3 optional · 34 out — compiled from six rounds of selection, 27 August 2026</footer>
+
+</div>

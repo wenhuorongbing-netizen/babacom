@@ -1,0 +1,19 @@
+# Credentials — never commit
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+.env
+.env.*
+secrets/
+
+# Local junk
+.ipynb_checkpoints/
+ns_rev.*
+.DS_Store
+Thumbs.db
+*.swp
+*~
+node_modules/
