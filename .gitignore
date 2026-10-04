@@ -7,6 +7,8 @@ id_rsa*
 id_ed25519*
 .env
 .env.*
+# 下一行：模板必须提交，值留空（1.1 模块要求）。注意 .gitignore 不支持行内注释
+!.env.example
 secrets/
 
 # Local junk
@@ -17,3 +19,41 @@ Thumbs.db
 *.swp
 *~
 node_modules/
+
+# ── Agent harness —— 三层划分 ────────────────────────────────
+# 判据：这个文件如果换个人跑，会导致 PR 结果不同吗？
+#       会 → 提交。不会 → 忽略。详见 docs/06-agent-harness.md
+#
+# 必须提交（不在下面）：
+#   AGENTS.md · REPO_MAP.md · .agents/ · .claude/settings.json
+#   .claude/skills/ · .github/
+
+# 个人偏好 —— 不影响产出正确性
+.claude/settings.local.json
+.claude/projects/
+.claude/history.jsonl
+.claude/shell-snapshots/
+*.local.md
+*.local.json
+
+# 机器产物
+.agent-cache/
+transcripts/
+*.worktree/
+
+# ── 构建产物 ────────────────────────────────────────────────
+dist/
+build/
+out/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.vite/
+*.tsbuildinfo
+
+# ── 媒体测量原始数据（可能很大）—— 结论写进 docs/ ────
+infra/measurement/raw/
+*.pcap

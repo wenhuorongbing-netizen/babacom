@@ -1,0 +1,34 @@
+# CODEOWNERS —— 碰到这些路径自动请求对应的人 review
+#
+# TODO: @leolou0512 是当前唯一已知的 handle。
+#       Tech Lead 人选定下来之后（见 docs/04-open-decisions.md D9），
+#       把下面的 @tech-lead 换成真实用户名。
+#
+# 语法：后匹配的规则覆盖先匹配的。
+
+# 默认：任何没有更具体规则的文件
+*                                   @leolou0512
+
+# ── 七个冻结契约：只有 Tech Lead 能批 ─────────────────────────
+/packages/contracts/                @leolou0512
+/apps/api/migrations/               @leolou0512
+/AGENTS.md                          @leolou0512
+/.agents/                           @leolou0512
+/.github/                           @leolou0512
+/.claude/settings.json              @leolou0512
+
+# 提议中的迁移不需要 Tech Lead 批（它还没进正式序列）
+/apps/api/migrations/_proposed/
+
+# ── 基础设施：改错一行全员离线 ────────────────────────────────
+/infra/                             @leolou0512
+
+# ── 规划文档：PO 拍板 ─────────────────────────────────────────
+/docs/                              @leolou0512
+/scope.html                         @leolou0512
+/teams.html                         @leolou0512
+
+# ── 模块目录：等 owner 指派后逐条填 ───────────────────────────
+# /apps/desktop/src/features/voice/  @voice-owner
+# /apps/api/app/messages/            @messages-owner
+# /packages/ui/                      @design-owner

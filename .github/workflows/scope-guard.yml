@@ -1,0 +1,52 @@
+name: scope-guard
+
+# 边界检查：PR 声明自己属于哪个模块，CI 比对 diff 与该模块的 allowed-files。
+# 这条让 AGENTS.md 里「越界直接拒绝」从靠自觉变成技术上进不了 main。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Read module id from PR body
+        id: module
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          id=$(printf '%s' "$PR_BODY" | grep -m1 -oP '^\s*Module:\s*\K[\w.\-]+' || true)
+          if [ -z "$id" ]; then
+            echo "::error::PR 正文缺少 'Module: <模块id>' 一行。"
+            echo "::error::取值必须是 .agents/modules/ 里的模块 id，例如 3.1 或 docs。"
+            exit 1
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "模块: $id"
+
+      - name: Check changed files against module boundary
+        run: |
+          git diff --name-only \
+            "origin/${{ github.base_ref }}...HEAD" \
+            | node .agents/scope_guard.mjs "${{ steps.module.outputs.id }}"
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
