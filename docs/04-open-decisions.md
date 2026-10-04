@@ -111,7 +111,7 @@ Owner: 8.1
 | D6 | 一个房间还是两个 | **SPIKE (R00)** | 1.2 | 3.1 / 4.x |
 | D7 | 回声消除 | 待 PO 确认 | 3.2 | — |
 | D8 | 域名 | 待 PO 确认 | 1.1 | TLS 部署 |
-| D9 | **Tech Lead 人选** | 全局未指派；本 fork T1 签认者固定 | 全局：PO；T1：Jack | 全局并行；T1 产品实现先等独立 docs 边界 PR |
+| D9 | **Tech Lead 人选** | 全局未指派；本 fork T1 签认者固定 | 全局：PO；T1：Jack | 全局并行；T1 产品实现等 #3 具体 docs PR 经 Jack 审查合并 |
 | D10 | 并行度上限 | 待 Tech Lead 确认 | TL | wave 规划 |
 | D11 | 韩国服务器定位 | 待 PO 确认 | 8.1 | — |
 
@@ -126,14 +126,17 @@ Owner: 8.1
 
 | 项目 | T1 决策 | 状态/责任 |
 |---|---|---|
-| 契约 Owner | Jack 是 T1 唯一最终签认者与集成裁决者；Codex A 起草与验证 | 角色固定；具体代码/边界 PR 审查未发生 |
+| 契约 Owner | Jack 是 T1 唯一最终签认者与集成裁决者；Codex A 起草、验证及执行已授权的串行 Issue | 角色固定；具体代码/边界 PR 以 Jack 的逐次审查与合并为准 |
 | 测试边界 | 实际 Windows 应用旅程 + 完整 HTTP 准入接口 | 固定；产品检查 NOT_RUN |
 | 昵称 | NFC；首尾 U+0020 去除；1–32 个 Unicode 码点；原始最多 256；禁止控制/代理项与列明的不可见或双向控制符 | 固定；完整字符规则见规格 |
 | 媒体凭据 | 初始 TTL 120 秒；限定房间、订阅、microphone；无 data/admin/共享能力 | 固定；签发/兼容测试 NOT_RUN |
 | 准入限流 | 滚动 60 秒：IP 120 次、主体 20 次、获准主体/房间 6 次；单 worker | 固定；并发/边界测试 NOT_RUN |
 | 最小 UI | 一页准入、Button、TextInput、状态反馈、设计令牌和中文 t() 入口 | T1 范围固定，不代表完整 6.1/6.2 已完成 |
 | fixture 与普通入口 | 独立回环测试启动器；普通入口缺 provider 即拒绝启动，不能回退 fixture | 固定；实际启动安全检查 NOT_RUN |
-| 源文件边界 | 规格列明 44 个产品文件；实施 Issue 只能选择其子集 | 独立 docs PR 的 T1 模块边界合并前，产品实现受阻塞 |
-| 数据库检查 | 没有 ORM/数据库/迁移变化，alembic check 为 NOT_APPLICABLE | 必须在前置 docs PR 落实适用条款，不能写 PASS |
+| 源文件边界 | [t1 模块清单](../.agents/modules/t1.md) 精确列明规格的 44 个产品文件；实施 Issue/PR 逐个声明实际子集 | #3 具体 docs PR 经 Jack 审查合并前，产品实现受阻塞；表外文件先走独立 docs 范围 PR |
+| T1 所有权 | CODEOWNERS 为 44 个产品文件及 T1 治理文件逐个补充 @wenhuorongbing-netizen（Jack） | 仅本 fork T1；原规划全局规则、D9 和并行安排保持独立 |
+| 数据库检查 | 没有 ORM/数据库/迁移变化，alembic check 为 NOT_APPLICABLE | t1 清单已落实适用条款，说明无数据库变化而非 PASS；其他模块验证规则不变 |
 
-本次只固定规格与责任安排，不改既有模块 allowed-files 或 CODEOWNERS，不实施或发布产品代码。前置 docs PR、后续任务和实际验收分别保留其证据边界。
+[#3](https://github.com/wenhuorongbing-netizen/babacom/issues/3) 的独立 `Module: docs` PR 仅落实 `.agents/modules/t1.md`、`.github/CODEOWNERS` 与本文件：新增 T1 精确边界和所有权，25 份既有模块清单保持原样，不夹带产品实现。
+
+该具体 PR 由 Jack 审查合并后才解除 T1 产品任务阻塞；清单存在、角色指定、Agent 复审和 CI 通过不代替签认。后续实施使用 `Module: t1`，保持单 worker、最小 UI、共享 schema、真实 provider 与隔离 fixture 的规格边界。产品检查仍为 NOT_RUN；前置边界验证、具体 PR 签认与实际产品验收分别以真实证据判断。
