@@ -32,3 +32,59 @@
 # /apps/desktop/src/features/voice/  @voice-owner
 # /apps/api/app/messages/            @messages-owner
 # /packages/ui/                      @design-owner
+
+
+# ── 本 fork 的 T1：Jack 最终签认 ───────────────────────────────
+# 仅适用于 wenhuorongbing-netizen/babacom 的 T1，后匹配规则覆盖前面的占位。
+# 保留原规划的全局规则与 D9；本节不任命全局 Tech Lead、不授权其他切片或并行开发。
+# 下面四份治理文件由 Jack 审查 T1 相关改动；全局事项仍按原规划另行裁决。
+# GitHub 所有权用于指派审查，不等于已经签认；产品任务须先等 #3 的具体 docs PR
+# 经 Jack 审查并合并。其余实施 Issue 只使用 44 个产品路径中逐个声明的子集。
+/.agents/modules/t1.md                                            @wenhuorongbing-netizen
+/.github/CODEOWNERS                                               @wenhuorongbing-netizen
+/docs/04-open-decisions.md                                        @wenhuorongbing-netizen
+/docs/T1-spec.md                                                  @wenhuorongbing-netizen
+/package.json                                                     @wenhuorongbing-netizen
+/package-lock.json                                                @wenhuorongbing-netizen
+/apps/desktop/package.json                                        @wenhuorongbing-netizen
+/apps/desktop/tsconfig.json                                       @wenhuorongbing-netizen
+/apps/desktop/eslint.config.mjs                                   @wenhuorongbing-netizen
+/apps/desktop/vite.config.ts                                      @wenhuorongbing-netizen
+/apps/desktop/electron-builder.yml                                @wenhuorongbing-netizen
+/apps/desktop/playwright.config.ts                                @wenhuorongbing-netizen
+/apps/desktop/index.html                                          @wenhuorongbing-netizen
+/apps/desktop/scripts/build.mjs                                   @wenhuorongbing-netizen
+/apps/desktop/scripts/dev.mjs                                     @wenhuorongbing-netizen
+/apps/desktop/src/main/main.ts                                    @wenhuorongbing-netizen
+/apps/desktop/src/main/preload.ts                                 @wenhuorongbing-netizen
+/apps/desktop/src/renderer.tsx                                    @wenhuorongbing-netizen
+/apps/desktop/src/shell/AdmissionPage.tsx                         @wenhuorongbing-netizen
+/apps/desktop/src/i18n/index.ts                                   @wenhuorongbing-netizen
+/apps/desktop/src/i18n/zh-CN.json                                 @wenhuorongbing-netizen
+/apps/desktop/src/styles/tokens.css                               @wenhuorongbing-netizen
+/packages/ui/package.json                                         @wenhuorongbing-netizen
+/packages/ui/tsconfig.json                                        @wenhuorongbing-netizen
+/packages/ui/src/index.tsx                                        @wenhuorongbing-netizen
+/packages/contracts/package.json                                  @wenhuorongbing-netizen
+/packages/contracts/admission.schema.json                         @wenhuorongbing-netizen
+/packages/contracts/token-claims.schema.json                      @wenhuorongbing-netizen
+/packages/contracts/permissions.schema.json                       @wenhuorongbing-netizen
+/apps/api/pyproject.toml                                          @wenhuorongbing-netizen
+/apps/api/uv.lock                                                 @wenhuorongbing-netizen
+/apps/api/app/__init__.py                                         @wenhuorongbing-netizen
+/apps/api/app/main.py                                             @wenhuorongbing-netizen
+/apps/api/app/factory.py                                          @wenhuorongbing-netizen
+/apps/api/app/auth/__init__.py                                    @wenhuorongbing-netizen
+/apps/api/app/auth/provider.py                                    @wenhuorongbing-netizen
+/apps/api/app/permissions/__init__.py                             @wenhuorongbing-netizen
+/apps/api/app/permissions/policy.py                               @wenhuorongbing-netizen
+/apps/api/app/tokens/__init__.py                                  @wenhuorongbing-netizen
+/apps/api/app/tokens/routes.py                                    @wenhuorongbing-netizen
+/apps/api/app/tokens/service.py                                   @wenhuorongbing-netizen
+/apps/api/app/ratelimit/__init__.py                               @wenhuorongbing-netizen
+/apps/api/app/ratelimit/limiter.py                                @wenhuorongbing-netizen
+/tests/conftest.py                                                @wenhuorongbing-netizen
+/tests/tokens/local_service.py                                    @wenhuorongbing-netizen
+/tests/tokens/test_admission_http.py                              @wenhuorongbing-netizen
+/tests/ratelimit/test_admission_limits.py                         @wenhuorongbing-netizen
+/tests/shell/admission.e2e.ts                                     @wenhuorongbing-netizen
