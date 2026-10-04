@@ -23,7 +23,7 @@
       "Read(./.env)",
       "Read(./.env.*)",
       "Read(./infra/secrets/**)",
-      "Edit(./apps/api/migrations/**)",
+      "Edit(/apps/api/migrations/versions/**)",
       "Edit(./packages/contracts/**)"
     ]
   }

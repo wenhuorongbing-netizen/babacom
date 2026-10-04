@@ -110,7 +110,7 @@ Issue → 写清楚要做什么 → 【跟人确认】 → 动手 → 自测 →
 git worktree add ../babacom-3.1 -b feat/voice-room-join
 
 # 这条是必须的：提 PR 前自查边界（CI 也会跑，本地跑只是省得被打回）
-git diff --name-only -z origin/main...HEAD | node .agents/scope_guard.mjs 3.1
+git diff --name-only --no-renames -z origin/main...HEAD | node .agents/scope_guard.mjs 3.1
 ```
 
 唯一一条真正的建议：**先跟人确认要做什么，再动手写。**

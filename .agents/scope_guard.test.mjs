@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const guard = fileURLToPath(new URL("./scope_guard.mjs", import.meta.url));
+const workflow = readFileSync(new URL("../.github/workflows/scope-guard.yml", import.meta.url), "utf8");
+const diffLine = workflow.match(/^\s*git diff ([^\r\n]*?)\s*\\\r?$/m);
+if (!diffLine) throw new Error("Cannot find the CI Git diff producer");
+const diffOptions = diffLine[1].trim().split(/\s+/);
 
-function gitChangedFiles(paths) {
+function gitChangedFiles(paths, renameTo) {
   const tempRoot = resolve(tmpdir());
   const repo = mkdtempSync(join(tempRoot, "babacom-scope-guard-"));
   try {
@@ -24,7 +28,24 @@ function gitChangedFiles(paths) {
       writeFileSync(file, "fixture\n");
     }
     git(["add", "--", ...paths]);
-    return git(["-c", "core.quotePath=true", "diff", "--cached", "--name-only", "-z"]);
+    if (renameTo) {
+      assert.equal(paths.length, 1);
+      const commit = (message) => git([
+        "-c", "user.name=scope-guard-test",
+        "-c", "user.email=scope-guard-test@example.invalid",
+        "-c", `core.hooksPath=${join(repo, "no-hooks")}`,
+        "commit", "--quiet", "--no-gpg-sign", "-m", message,
+      ]);
+      commit("fixture base");
+      const target = resolve(repo, renameTo);
+      assert.ok(resolve(repo, paths[0]).startsWith(repo + sep));
+      assert.ok(target.startsWith(repo + sep));
+      mkdirSync(dirname(target), { recursive: true });
+      git(["mv", "--", paths[0], renameTo]);
+      commit("fixture rename");
+      return git(["-c", "diff.renames=true", "diff", ...diffOptions, "HEAD~1...HEAD"]);
+    }
+    return git(["-c", "core.quotePath=true", "diff", "--cached", ...diffOptions]);
   } finally {
     assert.equal(dirname(repo), tempRoot);
     assert.ok(basename(repo).startsWith("babacom-scope-guard-"));
@@ -81,6 +102,20 @@ test("rejects a source path through --files", () => {
 
 test("keeps accepting manually supplied plain newline-separated paths", () => {
   const result = check("docs/one.md\ndocs/two.md\n");
+  assert.equal(result.status, 0, result.stderr || String(result.error));
+  assert.match(result.stdout, /改动 2 个文件/);
+});
+
+test("rejects an out-of-scope rename source using the actual CI diff options", () => {
+  const input = gitChangedFiles(["AGENTS.md"], "apps/desktop/src/features/voice/AGENTS.md");
+  const result = check(input, ["3.1"]);
+  assert.equal(result.status, 1, result.stdout || String(result.error));
+  assert.match(result.stderr, /^\s+AGENTS\.md\r?$/m);
+});
+
+test("accepts both paths of an in-scope rename using the actual CI diff options", () => {
+  const input = gitChangedFiles(["apps/desktop/src/features/voice/old.ts"], "apps/desktop/src/features/voice/new.ts");
+  const result = check(input, ["3.1"]);
   assert.equal(result.status, 0, result.stderr || String(result.error));
   assert.match(result.stdout, /改动 2 个文件/);
 });

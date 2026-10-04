@@ -57,12 +57,12 @@ infra/            两节点部署、LiveKit、TURN、监控、备份
 | 域 | 模块 | 阶段 |
 |---|---|---|
 | 1 Platform | 1.1 基础设施 · 1.2 媒体运维 · 1.3 可观测性与发布 | R00 · R00 · R01 |
-| 2 Identity | 2.1 邀请 · 2.2 账号会话 · 2.3 角色权限 | R01 · R01 · R01/R03 |
+| 2 Identity | 2.1 邀请 · 2.2 账号会话 · 2.3 角色权限 | R01 · R01 · R01/R03/R04 |
 | 3 Voice | 3.1 语音频道 · 3.2 音频设备 · 3.3 摄像头布局 | R01 · R01 · R03 |
 | 4 Streaming | 4.1 共享发布 · 4.2 共享观看 · 4.3 质量与连接 | R01 · R01 · R01/R02 |
-| 5 Messaging | 5.1 消息核心 · 5.2 文件媒体 · 5.3 线程搜索 | R01 · R03 · **R04** |
-| 6 Experience | 6.1 外壳结构 · 6.2 外观语言 · 6.3 私信提醒 | R01 · **R00/R01** · R03 |
-| 7 Backend | 7.1 实时网关 · 7.2 令牌限流 · 7.3 任务邮件存储 | **R00** · R01 · R01 |
+| 5 Messaging | 5.1 消息核心 · 5.2 文件媒体 · 5.3 线程搜索 | R01/R03/R04 · R03/R04 · **R04** |
+| 6 Experience | 6.1 外壳结构 · 6.2 外观语言 · 6.3 私信提醒 | R01 · **R00/R01**（后续 R03/R04） · R03 |
+| 7 Backend | 7.1 实时网关 · 7.2 令牌限流 · 7.3 任务邮件存储 | **R00** · R01 · R01/R03/R04 |
 | 8 Ops | 8.1 主机成本 · 8.2 韧性 · 8.3 安全数据政策 | R00 · **R02** · R03 |
 
 **wave 0 只开这几个：1.1 · 1.2 · 6.2 · 7.1 · 8.1** —— 并行度上限见 D10。
@@ -75,7 +75,7 @@ infra/            两节点部署、LiveKit、TURN、监控、备份
 2. **`features/` 之间不得互相 import** —— 需要共享就提到 `packages/`，走 Tech Lead。
 3. **提 PR 前自查边界：**
    ```bash
-    git diff --name-only -z origin/main...HEAD | node .agents/scope_guard.mjs <模块id>
+    git diff --name-only --no-renames -z origin/main...HEAD | node .agents/scope_guard.mjs <模块id>
    ```
 
 ---

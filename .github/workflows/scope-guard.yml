@@ -38,7 +38,7 @@ jobs:
 
       - name: Check changed files against module boundary
         run: |
-          git diff --name-only -z \
+          git diff --name-only --no-renames -z \
             "origin/${{ github.base_ref }}...HEAD" \
             | node .agents/scope_guard.mjs "${{ steps.module.outputs.id }}"
 
