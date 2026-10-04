@@ -75,7 +75,7 @@ infra/            两节点部署、LiveKit、TURN、监控、备份
 2. **`features/` 之间不得互相 import** —— 需要共享就提到 `packages/`，走 Tech Lead。
 3. **提 PR 前自查边界：**
    ```bash
-   git diff --name-only origin/main...HEAD | node .agents/scope_guard.mjs <模块id>
+    git diff --name-only -z origin/main...HEAD | node .agents/scope_guard.mjs <模块id>
    ```
 
 ---

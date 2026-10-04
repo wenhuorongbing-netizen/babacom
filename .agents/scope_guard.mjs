@@ -2,7 +2,7 @@
 // 边界检查器 —— 拒绝越出模块 Allowed Files 的改动。零依赖。
 //
 // 用法：
-//     git diff --name-only origin/main...HEAD | node .agents/scope_guard.mjs 3.1
+//     git diff --name-only -z origin/main...HEAD | node .agents/scope_guard.mjs 3.1
 //     node .agents/scope_guard.mjs 3.1 --files a.ts b.py
 //
 // 模块清单在 .agents/modules/<id>-*.md，其中 allowed-files 块形如：
@@ -88,8 +88,11 @@ function loadModule(moduleId) {
 
 async function readStdin() {
   if (process.stdin.isTTY) return [];
+  process.stdin.setEncoding("utf8");
   let buf = "";
   for await (const chunk of process.stdin) buf += chunk;
+  if (buf.includes("\0")) return buf.split("\0").filter(Boolean);
+  // 兼容手工输入的逐行列表；Git 输出必须使用 -z，避免路径转义。
   return buf
     .split("\n")
     .map((l) => l.trim())
@@ -99,7 +102,7 @@ async function readStdin() {
 const args = process.argv.slice(2);
 if (args.length === 0) {
   die(
-    "用法: git diff --name-only origin/main...HEAD | node .agents/scope_guard.mjs <模块id>",
+    "用法: git diff --name-only -z origin/main...HEAD | node .agents/scope_guard.mjs <模块id>",
   );
 }
 

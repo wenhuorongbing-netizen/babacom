@@ -7,6 +7,7 @@
 .agents/
 ├─ README.md            本文件
 ├─ scope_guard.mjs       边界检查器，CI 和本地自查都用它
+├─ scope_guard.test.mjs  检查器的 CLI 回归测试，使用真实 Git 文件列表
 └─ modules/             24 个模块 + docs 伪模块的边界清单
 ```
 
@@ -28,7 +29,16 @@ apps/api/app/voice/**
 提 PR 前跑一次，省得被 CI 打回：
 
 ```bash
-git diff --name-only origin/main...HEAD | node .agents/scope_guard.mjs 3.1
+git diff --name-only -z origin/main...HEAD | node .agents/scope_guard.mjs 3.1
+```
+
+`-z` 输出未经转义、以 NUL 分隔的路径，检查器逐个解析，保留中文和路径中的空白。
+手工逐行输入普通路径或使用 `--files` 仍受支持；Git 文件列表必须使用 `-z`。
+
+修改检查器后运行回归测试（CI 也会运行）：
+
+```bash
+node --test .agents/scope_guard.test.mjs
 ```
 
 ## 改动边界清单的规则

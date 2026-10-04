@@ -19,6 +19,9 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Test scope guard
+        run: node --test .agents/scope_guard.test.mjs
+
       - name: Read module id from PR body
         id: module
         env:
@@ -35,7 +38,7 @@ jobs:
 
       - name: Check changed files against module boundary
         run: |
-          git diff --name-only \
+          git diff --name-only -z \
             "origin/${{ github.base_ref }}...HEAD" \
             | node .agents/scope_guard.mjs "${{ steps.module.outputs.id }}"
 

@@ -136,12 +136,14 @@ apps/desktop/AGENTS.md                 前端约定（因为它要碰这棵树�
 
 ### 5.1 边界检查（`.agents/scope_guard.mjs`）
 
-每个 PR 声明自己属于哪个模块，CI 把 `git diff --name-only` 和该模块的
+每个 PR 声明自己属于哪个模块，CI 把 `git diff --name-only -z` 和该模块的
 Allowed Files 比对，越界直接失败。
 
 ```bash
-git diff --name-only origin/main...HEAD | node .agents/scope_guard.mjs 3.1
+git diff --name-only -z origin/main...HEAD | node .agents/scope_guard.mjs 3.1
 ```
+
+路径按 NUL 分隔解析，避免中文路径被 Git 转义后误判。
 
 这条让 `AGENTS.md` 里「越界的文件改动直接拒绝」**从靠自觉变成技术上进不了 main**。
 

@@ -30,7 +30,7 @@ Closes #
 
 ## 检查项
 
-- [ ] `scope_guard` 通过（`git diff --name-only origin/main...HEAD | node .agents/scope_guard.mjs <模块id>`）
+- [ ] `scope_guard` 通过（`git diff --name-only -z origin/main...HEAD | node .agents/scope_guard.mjs <模块id>`）
 - [ ] 没有新增依赖，或已在上面说明理由
 - [ ] 没有为了让测试通过而改测试
 - [ ] 没有顺手的重构 / 格式化 / 重命名
