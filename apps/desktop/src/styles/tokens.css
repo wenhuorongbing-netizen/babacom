@@ -1,0 +1,55 @@
+:root {
+  color-scheme: dark;
+  --color-background: #111827;
+  --color-surface: #1c2638;
+  --color-text: #f3f6fb;
+  --color-muted: #becbdd;
+  --color-border: #64748b;
+  --color-primary: #b4cbff;
+  --color-primary-text: #14223b;
+  --color-success: #b1e6bd;
+  --color-failure: #ffc0c0;
+  --font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-size-body: 1rem;
+  --font-size-heading: 1.8rem;
+  --font-size-small: .9rem;
+  --line-height: 1.6;
+  --space-small: .5rem;
+  --space-medium: 1rem;
+  --space-large: 1.5rem;
+  --space-page: 2rem;
+  --border-width: 1px;
+  --focus-width: 3px;
+  --radius: .6rem;
+  --form-width: 34rem;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh; padding: var(--space-page);
+  background: var(--color-background); color: var(--color-text);
+  font: var(--font-size-body)/var(--line-height) var(--font-family);
+}
+main { max-width: var(--form-width); margin: auto; }
+.card { background: var(--color-surface); border-radius: var(--radius); padding: var(--space-page); }
+h1 { font-size: var(--font-size-heading); margin: var(--space-medium) 0; }
+p { margin: var(--space-medium) 0; }
+.badge, .hint { color: var(--color-muted); font-size: var(--font-size-small); }
+.field { display: grid; gap: var(--space-small); margin: var(--space-large) 0 var(--space-small); }
+.text-input {
+  width: 100%; font: inherit; color: var(--color-text); background: var(--color-background);
+  border: var(--border-width) solid var(--color-border); border-radius: var(--radius);
+  padding: var(--space-small) var(--space-medium);
+}
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-medium); margin-top: var(--space-large); }
+.button {
+  font: inherit; border: 0; border-radius: var(--radius);
+  padding: var(--space-small) var(--space-large); cursor: pointer;
+  background: var(--color-primary); color: var(--color-primary-text);
+}
+.button:disabled { opacity: .5; cursor: default; }
+:focus-visible { outline: var(--focus-width) solid var(--color-primary); outline-offset: var(--border-width); }
+.status[data-state="ready"] { color: var(--color-success); }
+.status[data-state="failure"] { color: var(--color-failure); }
+dl { overflow-wrap: anywhere; }
+dt { color: var(--color-muted); }
+dd { margin: 0 0 var(--space-medium); }
