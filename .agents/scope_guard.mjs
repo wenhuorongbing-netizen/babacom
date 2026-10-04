@@ -91,7 +91,10 @@ async function readStdin() {
   process.stdin.setEncoding("utf8");
   let buf = "";
   for await (const chunk of process.stdin) buf += chunk;
-  if (buf.includes("\0")) return buf.split("\0").filter(Boolean);
+  if (buf.includes("\0")) {
+    // PowerShell 5.1 文本管道会在最后的 NUL 后追加换行。
+    return buf.replace(/\0\r?\n$/, "\0").split("\0").filter(Boolean);
+  }
   // 兼容手工输入的逐行列表；Git 输出必须使用 -z，避免路径转义。
   return buf
     .split("\n")

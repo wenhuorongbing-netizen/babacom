@@ -57,6 +57,13 @@ test("checks each Chinese document in a Git change list separately", () => {
   assert.match(result.stdout, /改动 2 个文件/);
 });
 
+test("accepts the line ending PowerShell appends after Git's final NUL", () => {
+  const input = Buffer.concat([gitChangedFiles(["docs/one.md", "docs/two.md"]), Buffer.from("\r\n")]);
+  const result = check(input);
+  assert.equal(result.status, 0, result.stderr || String(result.error));
+  assert.match(result.stdout, /改动 2 个文件/);
+});
+
 test("does not trim a NUL-delimited filename into an allowed exact path", () => {
   const result = check(".gitignore \0");
   assert.equal(result.status, 1, result.stdout || String(result.error));
