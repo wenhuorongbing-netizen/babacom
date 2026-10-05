@@ -94,9 +94,9 @@ export async function startTestService(scenario = 'ready') {
   // This private handshake contains a fresh test session. Never print it.
   let output = '';
   child.stderr.on('data', (chunk) => { output += String(chunk); });
-  const responses = [];
+  const traffic = [];
   const reader = createInterface({ input: child.stdout });
-  let recovered;
+  const acknowledgements = new Map();
   const configuration = await new Promise((resolvePromise, reject) => {
     const timeout = setTimeout(() => { child.kill(); reject(new Error('Test service startup timed out')); }, 15_000);
     child.once('error', () => { clearTimeout(timeout); reject(new Error('Test service could not start')); });
@@ -116,19 +116,30 @@ export async function startTestService(scenario = 'ready') {
     try {
       if (line.length > 128) return;
       const event = JSON.parse(line);
-      if (event.event === 'response' && Number.isInteger(event.status)) responses.push(event.status);
-      if (event.event === 'recovered') recovered?.();
+      if (['request', 'response', 'finished'].includes(event.event) && Number.isInteger(event.id)) {
+        if (event.event === 'response' && !Number.isInteger(event.status)) return;
+        traffic.push({ event: event.event, id: event.id, ...(event.event === 'response' ? { status: event.status } : {}) });
+      }
+      acknowledgements.get(event.event)?.();
     } catch { /* Test diagnostics contain only recognized, non-sensitive events. */ }
+  });
+  const control = (command, acknowledgement) => new Promise((resolvePromise, reject) => {
+    const timeout = setTimeout(() => {
+      acknowledgements.delete(acknowledgement);
+      reject(new Error('Test environment control timed out'));
+    }, 5_000);
+    acknowledgements.set(acknowledgement, () => {
+      clearTimeout(timeout); acknowledgements.delete(acknowledgement); resolvePromise();
+    });
+    child.stdin.write(command + '\n');
   });
   return {
     configuration,
-    responses: () => [...responses],
+    responses: () => traffic.filter((event) => event.event === 'response').map((event) => event.status),
+    traffic: () => traffic.map((event) => ({ ...event })),
     diagnostics: () => output,
-    recover: () => new Promise((resolvePromise, reject) => {
-      const timeout = setTimeout(() => { recovered = undefined; reject(new Error('Test provider recovery timed out')); }, 5_000);
-      recovered = () => { clearTimeout(timeout); recovered = undefined; resolvePromise(); };
-      child.stdin.write('recover\n');
-    }),
+    recover: () => control('recover', 'recovered'),
+    release: () => control('release', 'released'),
     close: async () => {
       reader.close();
       if (child.exitCode !== null) return;

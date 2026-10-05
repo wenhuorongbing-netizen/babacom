@@ -119,8 +119,7 @@ function validTokenResponse(value: AdmissionSuccess): boolean {
       && claims.video.room === value.roomName
       && claims.exp - claims.nbf === tokenClaimsSchema['x-ttlSeconds']
       && Date.parse(value.expiresAt) === claims.exp * 1000
-      && claims.nbf <= Math.floor(Date.now() / 1000) + 1
-      && claims.exp * 1000 > Date.now();
+      && claims.nbf <= Math.floor(Date.now() / 1000) + 1;
   } catch { return false; }
 }
 
@@ -152,6 +151,7 @@ async function prepare(event: IpcMainInvokeEvent, value: unknown): Promise<Rende
     if (response.status !== 200 || !validSuccess(body) || body.roomName !== configuration.roomName || !validTokenResponse(body)) {
       return { status: 'failure', code: 'REQUEST_FAILED' };
     }
+    if (Date.parse(body.expiresAt) <= Date.now()) return { status: 'failure', code: 'EXPIRED' };
     credentials = body;
     expiry = setTimeout(clearCredentials, Date.parse(body.expiresAt) - Date.now());
     const { roomName, participantIdentity, displayName, expiresAt } = credentials;

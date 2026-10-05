@@ -2,6 +2,18 @@ import { _electron as electron, expect, test } from '@playwright/test';
 import { join } from 'node:path';
 import { startRenderer, startStartupPipe, startTestService } from '../../apps/desktop/scripts/dev.mjs';
 import { desktop } from '../../apps/desktop/scripts/build.mjs';
+import type { StartupConfiguration } from '@babacom/contracts';
+
+async function postStatus(configuration: StartupConfiguration, displayName = '额度验证') {
+  const response = await fetch(configuration.apiBase + '/api/v1/tokens/media', {
+    method: 'POST', headers: {
+      'Content-Type': 'application/json', Authorization: 'Bearer ' + configuration.applicationSession,
+    },
+    body: JSON.stringify({ roomName: configuration.roomName, displayName }),
+  });
+  await response.arrayBuffer();
+  return response.status;
+}
 
 async function controlledApplication(scenario = 'ready', fillQuota = false) {
   const service = await startTestService(scenario);
@@ -11,29 +23,25 @@ async function controlledApplication(scenario = 'ready', fillQuota = false) {
     args: [join(desktop, 'dist/main/main.cjs'), '--babacom-startup-pipe=' + startup.path],
     env: { ...process.env, BABACOM_RENDERER_URL: renderer.url },
   });
+  const applicationProcess = application.process();
   let output = '';
-  application.process().stdout?.on('data', (chunk) => { output += String(chunk); });
-  application.process().stderr?.on('data', (chunk) => { output += String(chunk); });
+  applicationProcess.stdout?.on('data', (chunk) => { output += String(chunk); });
+  applicationProcess.stderr?.on('data', (chunk) => { output += String(chunk); });
   if (fillQuota) {
     for (let count = 0; count < 6; count++) {
-      const response = await fetch(service.configuration.apiBase + '/api/v1/tokens/media', {
-        method: 'POST', headers: {
-          'Content-Type': 'application/json', Authorization: 'Bearer ' + service.configuration.applicationSession,
-        },
-        body: JSON.stringify({ roomName: 't1-room', displayName: '初始' }),
-      });
-      expect(response.status).toBe(200);
-      await response.arrayBuffer();
+      expect(await postStatus(service.configuration, '初始')).toBe(200);
     }
   }
   const page = await application.firstWindow();
   return {
-    application, page, configuration: service.configuration,
+    application, applicationProcess, page, configuration: service.configuration,
     diagnostics: () => output + service.diagnostics(),
     recover: () => service.recover(),
     responses: () => service.responses(),
+    traffic: () => service.traffic(),
+    release: () => service.release(),
     close: async () => {
-      await application.close();
+      if (applicationProcess.exitCode === null) await application.close();
       await renderer.close();
       await startup.close();
       await service.close();
@@ -156,6 +164,155 @@ test('an HTML-shaped nickname remains literal text in the real desktop', async (
     expect(await running.page.locator('img').count()).toBe(0);
     expect(dialogs).toBe(0);
     await expect.poll(running.responses).toEqual([200]);
+  } finally { await running.close(); }
+});
+
+test('duplicate submissions during a delayed real HTTP response prepare only once', async () => {
+  const running = await controlledApplication('delayed');
+  try {
+    await running.page.getByLabel('展示昵称').fill('等待中的玩家');
+    await running.page.getByRole('button', { name: '准备入房', exact: true }).click({ clickCount: 3 });
+    await expect(running.page.getByRole('status')).toContainText('正在准备…');
+    await expect(running.page.getByLabel('展示昵称')).toBeDisabled();
+    await expect(running.page.getByRole('button', { name: '正在准备…', exact: true })).toBeDisabled();
+    await expect.poll(running.responses).toEqual([200]);
+    const duplicates = await running.page.evaluate(() => Promise.all([
+      window.admission.prepare({ roomName: window.admission.roomName, displayName: '重复一' }),
+      window.admission.prepare({ roomName: window.admission.roomName, displayName: '重复二' }),
+    ]));
+    expect(duplicates).toEqual([
+      { status: 'failure', code: 'REQUEST_FAILED' }, { status: 'failure', code: 'REQUEST_FAILED' },
+    ]);
+    expect(running.traffic().filter((event) => event.event === 'request')).toHaveLength(1);
+    await running.release();
+    await expect(running.page.getByRole('status')).toContainText('准备完成');
+    await expect(running.page.getByText('等待中的玩家', { exact: true })).toBeVisible();
+    expect(running.responses()).toEqual([200]);
+  } finally { await running.close(); }
+});
+
+test('cancel discards a delayed operation and preserves the new manual result', async () => {
+  const running = await controlledApplication('delayed');
+  try {
+    await running.page.getByLabel('展示昵称').fill('已取消的旧玩家');
+    await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
+    await expect.poll(running.responses).toEqual([200]);
+    await running.page.getByRole('button', { name: '取消准备', exact: true }).click();
+    await expect(running.page.getByRole('status')).toContainText('等待输入昵称');
+    await expect(running.page.locator('dl')).toHaveCount(0);
+    await running.page.getByLabel('展示昵称').fill('取消后的新玩家');
+    await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
+    await expect(running.page.getByRole('status')).toContainText('准备完成');
+    await expect.poll(running.responses).toEqual([200, 200]);
+    await running.release();
+    await expect.poll(() => running.traffic().filter((event) => event.event === 'finished').length).toBe(2);
+    await expect(running.page.getByText('取消后的新玩家', { exact: true })).toBeVisible();
+    await expect(running.page.getByText('已取消的旧玩家', { exact: true })).toHaveCount(0);
+    const remaining = [];
+    for (let count = 0; count < 5; count++) remaining.push(await postStatus(running.configuration));
+    expect(remaining).toEqual([200, 200, 200, 200, 429]);
+  } finally { await running.close(); }
+});
+
+test('a real ten-second timeout requires a new request and ignores the old response', async () => {
+  const running = await controlledApplication('delayed');
+  try {
+    await running.page.getByLabel('展示昵称').fill('超时的旧玩家');
+    const started = Date.now();
+    await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
+    await expect.poll(running.responses).toEqual([200]);
+    await expect(running.page.getByRole('status')).toContainText('请求超时，请重新准备。', { timeout: 15_000 });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(9_500);
+    await running.page.waitForTimeout(400);
+    expect(running.responses()).toEqual([200]);
+    await running.page.getByLabel('展示昵称').fill('超时后的新玩家');
+    await running.page.getByRole('button', { name: '重新准备', exact: true }).click();
+    await expect(running.page.getByRole('status')).toContainText('准备完成');
+    await expect.poll(running.responses).toEqual([200, 200]);
+    await running.release();
+    await expect.poll(() => running.traffic().filter((event) => event.event === 'finished').length).toBe(2);
+    await expect(running.page.getByText('超时后的新玩家', { exact: true })).toBeVisible();
+    await expect(running.page.getByText('超时的旧玩家', { exact: true })).toHaveCount(0);
+  } finally { await running.close(); }
+});
+
+test('cancelling a ready admission clears its summary and requires a new HTTP request', async () => {
+  const running = await controlledApplication();
+  try {
+    await running.page.getByLabel('展示昵称').fill('已准备的旧玩家');
+    await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
+    await expect(running.page.getByRole('status')).toContainText('准备完成');
+    await running.page.getByRole('button', { name: '取消准备', exact: true }).click();
+    await expect(running.page.getByRole('status')).toContainText('等待输入昵称');
+    await expect(running.page.locator('dl')).toHaveCount(0);
+    await running.page.getByLabel('展示昵称').fill('重新准备的新玩家');
+    await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
+    await expect(running.page.getByRole('status')).toContainText('准备完成');
+    await expect(running.page.getByText('重新准备的新玩家', { exact: true })).toBeVisible();
+    await expect.poll(running.responses).toEqual([200, 200]);
+  } finally { await running.close(); }
+});
+
+test('closing the real window during a response exits and preserves accepted server quota', async () => {
+  const running = await controlledApplication('delayed');
+  try {
+    await running.page.getByLabel('展示昵称').fill('关闭前的玩家');
+    await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
+    await expect.poll(running.responses).toEqual([200]);
+    const exited = new Promise((resolve) => running.applicationProcess.once('exit', resolve));
+    await running.page.close();
+    expect(await exited).toBe(0);
+    await running.release();
+    await expect.poll(() => running.traffic().filter((event) => event.event === 'finished').length).toBe(1);
+    const remaining = [];
+    for (let count = 0; count < 6; count++) remaining.push(await postStatus(running.configuration));
+    expect(remaining).toEqual([200, 200, 200, 200, 200, 429]);
+    expect(running.diagnostics()).not.toContain(running.configuration.applicationSession);
+    expect(running.diagnostics()).not.toMatch(/eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+/);
+  } finally { await running.close(); }
+});
+
+test('the real initial credential expires after 120 seconds and needs a fresh manual request', async () => {
+  test.setTimeout(150_000);
+  const running = await controlledApplication();
+  try {
+    await running.page.getByLabel('展示昵称').fill('即将到期的玩家');
+    const started = Date.now();
+    await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
+    await expect(running.page.getByRole('status')).toContainText('准备完成');
+    await expect(running.page.getByText('准备完成后尚未开始通话。')).toBeVisible();
+    await expect(running.page.getByRole('status')).toContainText('准备凭据已过期，请重新准备。', { timeout: 130_000 });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(115_000);
+    await expect(running.page.locator('dl')).toHaveCount(0);
+    await expect(running.page.getByRole('button', { name: '重新准备', exact: true })).toBeEnabled();
+    await running.page.waitForTimeout(400);
+    expect(running.responses()).toEqual([200]);
+    const publicOutput = await running.page.locator('body').innerText() + running.diagnostics();
+    expect(publicOutput).not.toContain(running.configuration.applicationSession);
+    expect(publicOutput).not.toMatch(/eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+/);
+    await running.page.screenshot({ path: join(desktop, 'build/admission-expired.png') });
+    await running.page.getByLabel('展示昵称').fill('到期后的新玩家');
+    await running.page.getByRole('button', { name: '重新准备', exact: true }).click();
+    await expect(running.page.getByRole('status')).toContainText('准备完成');
+    await expect(running.page.getByText('到期后的新玩家', { exact: true })).toBeVisible();
+    await expect.poll(running.responses).toEqual([200, 200]);
+  } finally { await running.close(); }
+});
+
+test('an already expired HTTP credential has an expiry failure and a fresh manual retry', async () => {
+  const running = await controlledApplication('expired');
+  try {
+    await running.page.getByLabel('展示昵称').fill('过期测试玩家');
+    await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
+    await expect(running.page.getByRole('status')).toContainText('准备凭据已过期，请重新准备。');
+    await expect(running.page.locator('dl')).toHaveCount(0);
+    await expect.poll(running.responses).toEqual([200]);
+    await running.recover();
+    await running.page.getByLabel('展示昵称').fill('有效期已刷新');
+    await running.page.getByRole('button', { name: '重新准备', exact: true }).click();
+    await expect(running.page.getByRole('status')).toContainText('准备完成');
+    await expect(running.page.getByText('有效期已刷新', { exact: true })).toBeVisible();
+    await expect.poll(running.responses).toEqual([200, 200]);
   } finally { await running.close(); }
 });
 
