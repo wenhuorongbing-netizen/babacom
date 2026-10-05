@@ -92,15 +92,17 @@ export async function startTestService(scenario = 'ready') {
     stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
   });
   // This private handshake contains a fresh test session. Never print it.
-  child.stderr.resume();
+  let output = '';
+  child.stderr.on('data', (chunk) => { output += String(chunk); });
+  const responses = [];
+  const reader = createInterface({ input: child.stdout });
+  let recovered;
   const configuration = await new Promise((resolvePromise, reject) => {
-    const reader = createInterface({ input: child.stdout });
     const timeout = setTimeout(() => { child.kill(); reject(new Error('Test service startup timed out')); }, 15_000);
     child.once('error', () => { clearTimeout(timeout); reject(new Error('Test service could not start')); });
     child.once('exit', () => { clearTimeout(timeout); reject(new Error('Test service stopped before startup')); });
     reader.once('line', (line) => {
       clearTimeout(timeout);
-      reader.close();
       try {
         if (line.length > 4096) throw new Error('Invalid handshake');
         resolvePromise(JSON.parse(line));
@@ -110,9 +112,25 @@ export async function startTestService(scenario = 'ready') {
       }
     });
   });
+  reader.on('line', (line) => {
+    try {
+      if (line.length > 128) return;
+      const event = JSON.parse(line);
+      if (event.event === 'response' && Number.isInteger(event.status)) responses.push(event.status);
+      if (event.event === 'recovered') recovered?.();
+    } catch { /* Test diagnostics contain only recognized, non-sensitive events. */ }
+  });
   return {
     configuration,
+    responses: () => [...responses],
+    diagnostics: () => output,
+    recover: () => new Promise((resolvePromise, reject) => {
+      const timeout = setTimeout(() => { recovered = undefined; reject(new Error('Test provider recovery timed out')); }, 5_000);
+      recovered = () => { clearTimeout(timeout); recovered = undefined; resolvePromise(); };
+      child.stdin.write('recover\n');
+    }),
     close: async () => {
+      reader.close();
       if (child.exitCode !== null) return;
       const exited = new Promise((resolvePromise) => child.once('exit', resolvePromise));
       child.stdin.end();

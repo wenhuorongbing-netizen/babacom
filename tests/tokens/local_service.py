@@ -20,33 +20,59 @@ from app.permissions.policy import Channel
 ROOT = Path(__file__).resolve().parents[2]
 
 
+class FixtureInputs:
+    def __init__(self):
+        self.authenticated = True
+        self.subject = None
+        self.actions = None
+        self.fault = None
+        self.fault_message = "Controlled provider failure"
+
+    def recover(self):
+        self.authenticated = True
+        self.subject = None
+        self.actions = None
+        self.fault = None
+
+
 class FixtureAuthentication:
-    def __init__(self, session, subject):
+    def __init__(self, session, subject, inputs):
         self.session = session
         self.subject = subject
+        self.inputs = inputs
 
     def authenticate(self, session):
+        if self.inputs.fault == "authentication":
+            raise RuntimeError(self.inputs.fault_message)
         return (
-            User(self.subject)
-            if secrets.compare_digest(session, self.session)
+            User(self.inputs.subject or self.subject)
+            if self.inputs.authenticated
+            and secrets.compare_digest(session, self.session)
             else None
         )
 
 
 class FixtureAuthorization:
-    def __init__(self, subject, actions=None):
+    def __init__(self, subject, inputs):
         self.subject = subject
+        self.inputs = inputs
         schema = json.loads(
             (ROOT / "packages/contracts/permissions.schema.json").read_text("utf-8")
         )
-        self.actions = frozenset(schema["enum"] if actions is None else actions)
+        self.actions = frozenset(schema["enum"])
 
     def resolve_channel(self, name):
+        if self.inputs.fault == "authorization":
+            raise RuntimeError(self.inputs.fault_message)
         return Channel("t1-room") if name == "t1-room" else None
 
     def granted_actions(self, user, channel):
         if user.subject_id == self.subject and channel.name == "t1-room":
-            return self.actions
+            return (
+                self.actions
+                if self.inputs.actions is None
+                else frozenset(self.inputs.actions)
+            )
         return frozenset()
 
 
@@ -70,29 +96,56 @@ class RunningService:
         )
 
 
-class SigningFaultClock:
+class FixtureClock:
     monotonic = staticmethod(time.monotonic)
 
-    @staticmethod
-    def utc_seconds():
-        raise RuntimeError("Controlled clock failure")
+    def __init__(self, inputs):
+        self.inputs = inputs
+
+    def utc_seconds(self):
+        if self.inputs.fault == "clock":
+            raise RuntimeError(self.inputs.fault_message)
+        return time.time()
 
 
 @contextmanager
-def running_service(*, host="127.0.0.1", workers=1, actions=None, clock=None):
+def running_service(
+    *,
+    host="127.0.0.1",
+    workers=1,
+    actions=None,
+    clock=None,
+    inputs=None,
+    response_status=None,
+):
     if host != "127.0.0.1" or workers != 1:
         raise ValueError("The test launcher requires loopback and one worker")
     session = secrets.token_urlsafe(32)
     secret = secrets.token_urlsafe(48)
     subject = "member-" + secrets.token_hex(16)
     api_key = "t1-" + secrets.token_hex(16)
+    inputs = inputs or FixtureInputs()
+    if actions is not None:
+        inputs.actions = actions
     config = ServiceConfig(api_key, secret, "ws://127.0.0.1:7880", workers=workers)
     app = create_app(
-        FixtureAuthentication(session, subject),
-        FixtureAuthorization(subject, actions),
+        FixtureAuthentication(session, subject, inputs),
+        FixtureAuthorization(subject, inputs),
         config,
-        clock=clock,
+        clock=clock or FixtureClock(inputs),
     )
+    if response_status is not None:
+        admission_app = app
+
+        async def observe_response(scope, receive, send):
+            async def observe_send(message):
+                if message["type"] == "http.response.start":
+                    response_status(message["status"])
+                await send(message)
+
+            await admission_app(scope, receive, observe_send)
+
+        app = observe_response
     sock = socket.socket()
     sock.bind((host, 0))
     server = uvicorn.Server(
@@ -141,28 +194,36 @@ def main():
     args = parser.parse_args()
     if args.host != "127.0.0.1":
         parser.error("The test service may only bind to 127.0.0.1")
+    inputs = FixtureInputs()
+    inputs.authenticated = args.scenario != "no-session"
+    inputs.actions = [] if args.scenario == "forbidden" else None
+    inputs.fault = "clock" if args.scenario == "service-fault" else None
+
+    def observed(status):
+        print(json.dumps({"event": "response", "status": status}), flush=True)
+
     with running_service(
         host=args.host,
-        actions=[] if args.scenario == "forbidden" else None,
-        clock=SigningFaultClock() if args.scenario == "service-fault" else None,
+        inputs=inputs,
+        response_status=observed,
     ) as service:
         # Private parent pipe; the desktop launcher consumes it without logging.
         print(
             json.dumps(
                 {
                     "apiBase": service.base_url,
-                    "applicationSession": (
-                        secrets.token_urlsafe(32)
-                        if args.scenario == "no-session"
-                        else service.session
-                    ),
+                    "applicationSession": service.session,
                     "roomName": "t1-room",
                     "environment": "local-test",
                 }
             ),
             flush=True,
         )
-        sys.stdin.read()
+        # A fixed parent-only test command changes provider inputs, never routes.
+        for command in sys.stdin:
+            if command.strip() == "recover":
+                inputs.recover()
+                print(json.dumps({"event": "recovered"}), flush=True)
 
 
 if __name__ == "__main__":
