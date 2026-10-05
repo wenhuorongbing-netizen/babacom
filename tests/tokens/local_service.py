@@ -1,6 +1,7 @@
 """Independent loopback-only test launcher; never imported by normal entrypoints."""
 
 import argparse
+import asyncio
 import json
 import secrets
 import socket
@@ -27,12 +28,18 @@ class FixtureInputs:
         self.actions = None
         self.fault = None
         self.fault_message = "Controlled provider failure"
+        self.utc_offset = 0
+        self.delay_first_response = False
+        self.response_gate = threading.Event()
+        self.response_gate.set()
 
     def recover(self):
         self.authenticated = True
         self.subject = None
         self.actions = None
         self.fault = None
+        self.utc_offset = 0
+        self.response_gate.set()
 
 
 class FixtureAuthentication:
@@ -105,7 +112,7 @@ class FixtureClock:
     def utc_seconds(self):
         if self.inputs.fault == "clock":
             raise RuntimeError(self.inputs.fault_message)
-        return time.time()
+        return time.time() + self.inputs.utc_offset
 
 
 @contextmanager
@@ -116,7 +123,7 @@ def running_service(
     actions=None,
     clock=None,
     inputs=None,
-    response_status=None,
+    http_event=None,
 ):
     if host != "127.0.0.1" or workers != 1:
         raise ValueError("The test launcher requires loopback and one worker")
@@ -134,16 +141,46 @@ def running_service(
         config,
         clock=clock or FixtureClock(inputs),
     )
-    if response_status is not None:
+    if http_event is not None or inputs.delay_first_response:
         admission_app = app
+        next_request_id = 0
 
         async def observe_response(scope, receive, send):
+            nonlocal next_request_id
+            if scope["type"] != "http":
+                await admission_app(scope, receive, send)
+                return
+            next_request_id += 1
+            request_id = next_request_id
+            held = False
+            if http_event:
+                http_event({"event": "request", "id": request_id})
+
             async def observe_send(message):
-                if message["type"] == "http.response.start":
-                    response_status(message["status"])
+                nonlocal held
+                if message["type"] == "http.response.start" and http_event:
+                    http_event(
+                        {
+                            "event": "response",
+                            "id": request_id,
+                            "status": message["status"],
+                        }
+                    )
+                if (
+                    message["type"] == "http.response.body"
+                    and request_id == 1
+                    and inputs.delay_first_response
+                    and not held
+                ):
+                    held = True
+                    await asyncio.to_thread(inputs.response_gate.wait)
                 await send(message)
 
-            await admission_app(scope, receive, observe_send)
+            try:
+                await admission_app(scope, receive, observe_send)
+            finally:
+                if http_event:
+                    http_event({"event": "finished", "id": request_id})
 
         app = observe_response
     sock = socket.socket()
@@ -177,6 +214,7 @@ def running_service(
     try:
         yield service
     finally:
+        inputs.response_gate.set()
         service.client.close()
         server.should_exit = True
         thread.join(timeout=10)
@@ -188,7 +226,14 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument(
         "--scenario",
-        choices=["ready", "no-session", "forbidden", "service-fault"],
+        choices=[
+            "ready",
+            "no-session",
+            "forbidden",
+            "service-fault",
+            "expired",
+            "delayed",
+        ],
         default="ready",
     )
     args = parser.parse_args()
@@ -198,14 +243,18 @@ def main():
     inputs.authenticated = args.scenario != "no-session"
     inputs.actions = [] if args.scenario == "forbidden" else None
     inputs.fault = "clock" if args.scenario == "service-fault" else None
+    inputs.utc_offset = -120 if args.scenario == "expired" else 0
+    inputs.delay_first_response = args.scenario == "delayed"
+    if inputs.delay_first_response:
+        inputs.response_gate.clear()
 
-    def observed(status):
-        print(json.dumps({"event": "response", "status": status}), flush=True)
+    def observed(event):
+        print(json.dumps(event), flush=True)
 
     with running_service(
         host=args.host,
         inputs=inputs,
-        response_status=observed,
+        http_event=observed,
     ) as service:
         # Private parent pipe; the desktop launcher consumes it without logging.
         print(
@@ -224,6 +273,9 @@ def main():
             if command.strip() == "recover":
                 inputs.recover()
                 print(json.dumps({"event": "recovered"}), flush=True)
+            elif command.strip() == "release":
+                inputs.response_gate.set()
+                print(json.dumps({"event": "released"}), flush=True)
 
 
 if __name__ == "__main__":

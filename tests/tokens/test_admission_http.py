@@ -368,3 +368,29 @@ def test_fixture_rejects_external_binding_and_multiple_workers(settings):
     with pytest.raises(ValueError, match="loopback and one worker"):
         with running_service(**settings):
             pytest.fail("Unsafe fixture started")
+
+
+def test_expired_clock_input_preserves_ttl_and_real_signature():
+    inputs = FixtureInputs()
+    inputs.utc_offset = -120
+    with running_service(inputs=inputs) as service:
+        expired = service.post()
+        assert expired.status_code == 200
+        body = expired.json()
+        claims = jwt.decode(
+            body["accessToken"],
+            service.secret,
+            algorithms=["HS256"],
+            issuer=service.api_key,
+            options={"verify_exp": False},
+        )
+        assert claims["exp"] - claims["nbf"] == 120
+        assert datetime.fromisoformat(body["expiresAt"]).timestamp() == claims["exp"]
+        verifier = TokenVerifier(service.api_key, service.secret, leeway=timedelta(0))
+        with pytest.raises(jwt.ExpiredSignatureError):
+            verifier.verify(body["accessToken"])
+        inputs.recover()
+        fresh = service.post()
+        assert fresh.status_code == 200
+        assert fresh.json()["accessToken"] != body["accessToken"]
+        assert verifier.verify(fresh.json()["accessToken"]).identity == service.subject
