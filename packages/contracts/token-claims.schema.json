@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "T1 media claims",
+  "x-ttlSeconds": 120,
+  "type": "object",
+  "properties": {
+    "iss": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "sub": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])"
+    },
+    "nbf": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "exp": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "video": {
+      "type": "object",
+      "properties": {
+        "room": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]{1,64}$(?![\\s\\S])"
+        },
+        "roomJoin": {
+          "const": true
+        },
+        "canSubscribe": {
+          "const": true
+        },
+        "canPublish": {
+          "const": true
+        },
+        "canPublishSources": {
+          "type": "array",
+          "items": {
+            "const": "microphone"
+          },
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true
+        },
+        "canPublishData": {
+          "const": false
+        }
+      },
+      "required": [
+        "room",
+        "roomJoin",
+        "canSubscribe",
+        "canPublish",
+        "canPublishSources",
+        "canPublishData"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "iss",
+    "sub",
+    "nbf",
+    "exp",
+    "name",
+    "video"
+  ],
+  "additionalProperties": false
+}

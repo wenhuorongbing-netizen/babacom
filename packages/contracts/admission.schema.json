@@ -1,0 +1,260 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "T1 admission boundary",
+  "x-nickname": {
+    "rawMaxCodePoints": 256,
+    "normalizedMinCodePoints": 1,
+    "normalizedMaxCodePoints": 32,
+    "normalization": "NFC",
+    "trimCodePoint": 32,
+    "forbiddenCategories": [
+      "Cc",
+      "Cs"
+    ],
+    "forbiddenCodePoints": [
+      8203,
+      65279,
+      1564,
+      8206,
+      8207,
+      8234,
+      8235,
+      8236,
+      8237,
+      8238,
+      8294,
+      8295,
+      8296,
+      8297
+    ]
+  },
+  "$defs": {
+    "request": {
+      "type": "object",
+      "properties": {
+        "roomName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]{1,64}$(?![\\s\\S])"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "roomName",
+        "displayName"
+      ],
+      "additionalProperties": false
+    },
+    "success": {
+      "type": "object",
+      "properties": {
+        "livekitUrl": {
+          "type": "string",
+          "pattern": "^wss?://",
+          "maxLength": 2048
+        },
+        "roomName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]{1,64}$(?![\\s\\S])"
+        },
+        "participantIdentity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "expiresAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$(?![\\s\\S])"
+        },
+        "accessToken": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        }
+      },
+      "required": [
+        "livekitUrl",
+        "roomName",
+        "participantIdentity",
+        "displayName",
+        "expiresAt",
+        "accessToken"
+      ],
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "roomName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]{1,64}$(?![\\s\\S])"
+        },
+        "participantIdentity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "expiresAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$(?![\\s\\S])"
+        }
+      },
+      "required": [
+        "roomName",
+        "participantIdentity",
+        "displayName",
+        "expiresAt"
+      ],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "enum": [
+            "NO_SESSION",
+            "FORBIDDEN",
+            "INVALID_REQUEST",
+            "MALFORMED_REQUEST",
+            "BODY_TOO_LARGE",
+            "RATE_LIMITED",
+            "SERVICE_UNAVAILABLE"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "retryAfterSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "rendererResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "const": "ready"
+            },
+            "summary": {
+              "$ref": "#/$defs/summary"
+            }
+          },
+          "required": [
+            "status",
+            "summary"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "const": "failure"
+            },
+            "code": {
+              "enum": [
+                "NO_SESSION",
+                "FORBIDDEN",
+                "INVALID_REQUEST",
+                "MALFORMED_REQUEST",
+                "BODY_TOO_LARGE",
+                "RATE_LIMITED",
+                "SERVICE_UNAVAILABLE",
+                "REQUEST_FAILED",
+                "TIMEOUT",
+                "EXPIRED",
+                "INVALID_NAME"
+              ]
+            },
+            "retryAfterSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60
+            }
+          },
+          "required": [
+            "status",
+            "code"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "const": "cancelled"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "startup": {
+      "type": "object",
+      "properties": {
+        "apiBase": {
+          "type": "string",
+          "pattern": "^http://127\\.0\\.0\\.1:[0-9]+$(?![\\s\\S])"
+        },
+        "applicationSession": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 256
+        },
+        "roomName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]{1,64}$(?![\\s\\S])"
+        },
+        "environment": {
+          "enum": [
+            "local-test",
+            "controlled"
+          ]
+        }
+      },
+      "required": [
+        "apiBase",
+        "applicationSession",
+        "roomName",
+        "environment"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
