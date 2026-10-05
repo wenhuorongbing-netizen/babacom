@@ -1,0 +1,18 @@
+appId: org.babacom.t1
+productName: BabaCom
+asar: true
+npmRebuild: false
+electronDist: ../../node_modules/electron/dist
+directories:
+  output: build/windows
+files:
+  - dist/**/*
+  - package.json
+  - "!**/node_modules/**/*"
+win:
+  target:
+    - target: zip
+      arch:
+        - x64
+  signAndEditExecutable: false
+artifactName: BabaCom-T1-${version}-win-${arch}.${ext}

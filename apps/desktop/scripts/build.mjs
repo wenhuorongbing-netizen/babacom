@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { builtinModules } from 'node:module';
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Ajv from 'ajv';
@@ -68,6 +68,32 @@ export async function buildDesktop({ renderer = true } = {}) {
   if (renderer) await build({ root: desktop, configFile: join(desktop, 'vite.config.ts'), logLevel: 'warn' });
 }
 
+export async function packageWindows() {
+  if (process.platform !== 'win32') throw new Error('Windows packaging requires Windows');
+  await mkdir(join(desktop, 'build'), { recursive: true });
+  const staging = await mkdtemp(join(desktop, 'build/package-'));
+  await cp(join(desktop, 'dist'), join(staging, 'dist'), { recursive: true });
+  const manifest = JSON.parse(await readFile(join(desktop, 'package.json'), 'utf8'));
+  await writeFile(join(staging, 'package.json'), JSON.stringify({
+    name: 'babacom', version: manifest.version, main: manifest.main,
+    description: 'BabaCom controlled admission client', author: 'BabaCom contributors',
+  }) + '\n');
+  const { build: packageBuild } = await import('electron-builder');
+  await packageBuild({
+    projectDir: desktop,
+    config: {
+      extends: join(desktop, 'electron-builder.yml'), directories: { app: staging },
+      afterPack: async ({ appOutDir }) => {
+        if (resolve(appOutDir) !== resolve(desktop, 'build/windows/win-unpacked')) throw new Error('Unexpected package output');
+        // The supplied Electron runtime includes its development entry app.
+        await unlink(join(appOutDir, 'resources/default_app.asar')).catch((error) => {
+          if (error.code !== 'ENOENT') throw error;
+        });
+      },
+    },
+  });
+}
+
 async function main() {
   await generateContracts();
   if (process.argv.includes('--typecheck')) {
@@ -77,9 +103,14 @@ async function main() {
       'apps/desktop/src', 'apps/desktop/scripts', 'apps/desktop/vite.config.ts',
       'apps/desktop/playwright.config.ts', 'packages/ui/src', 'tests/shell']);
   } else {
+    if (process.argv.includes('--test-packaged')) {
+      await execute('@playwright/test/cli.js', ['test', '--config', join(desktop, 'playwright.config.ts'), '--project', 'packaged']);
+      return;
+    }
     await buildDesktop();
+    if (process.argv.includes('--package-win')) await packageWindows();
     if (process.argv.includes('--test')) {
-      await execute('@playwright/test/cli.js', ['test', '--config', join(desktop, 'playwright.config.ts')]);
+      await execute('@playwright/test/cli.js', ['test', '--config', join(desktop, 'playwright.config.ts'), '--project', 'development']);
     }
   }
 }
