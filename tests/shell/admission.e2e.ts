@@ -29,7 +29,9 @@ async function controlledApplication(scenario = 'ready', fillQuota = false) {
   const page = await application.firstWindow();
   return {
     application, page, configuration: service.configuration,
-    diagnostics: () => output,
+    diagnostics: () => output + service.diagnostics(),
+    recover: () => service.recover(),
+    responses: () => service.responses(),
     close: async () => {
       await application.close();
       await renderer.close();
@@ -68,34 +70,92 @@ test('real desktop prepares a normalized nickname without exposing credentials',
   } finally { await running.close(); }
 });
 
-for (const [scenario, message] of [
-  ['no-session', '会话无效，请重新打开受控应用。'],
-  ['forbidden', '你暂时没有进入这个房间的权限。'],
-  ['service-fault', '服务暂时不可用，请稍后重试。'],
-]) {
-  test('real HTTP ' + scenario + ' produces a safe desktop failure', async () => {
+for (const [scenario, message, status] of [
+  ['no-session', '会话无效，请重新打开受控应用。', 401],
+  ['forbidden', '你暂时没有进入这个房间的权限。', 403],
+  ['service-fault', '服务暂时不可用，请稍后重试。', 503],
+] as const) {
+  test('real HTTP ' + scenario + ' allows a safe manual recovery', async () => {
     const running = await controlledApplication(scenario);
     try {
       await running.page.getByLabel('展示昵称').fill('玩家');
       await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
       await expect(running.page.getByRole('status')).toContainText(message);
       await expect(running.page.getByRole('button', { name: '重新准备', exact: true })).toBeEnabled();
-      const text = await running.page.locator('body').innerText();
+      const text = await running.page.locator('body').innerText() + running.diagnostics();
       expect(text.includes(running.configuration.applicationSession)).toBe(false);
       expect(text).not.toContain('Traceback');
-      expect(text).not.toContain('Controlled clock failure');
+      expect(text).not.toContain('Controlled provider failure');
+      expect(text).not.toMatch(/eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+/);
+      await expect.poll(running.responses).toEqual([status]);
+      await running.recover();
+      await expect(running.page.getByRole('status')).toContainText(message);
+      await running.page.waitForTimeout(300);
+      expect(running.responses()).toEqual([status]);
+      await running.page.getByLabel('展示昵称').fill('修正后的玩家');
+      await running.page.getByRole('button', { name: '重新准备', exact: true }).click();
+      await expect(running.page.getByRole('status')).toContainText('准备完成');
+      await expect(running.page.getByText('修正后的玩家', { exact: true })).toBeVisible();
+      await expect.poll(running.responses).toEqual([status, 200]);
     } finally { await running.close(); }
   });
 }
 
-test('the seventh approved request displays the real rolling wait', async () => {
+test('the seventh approved request waits for Retry-After before a manual recovery', async () => {
+  test.setTimeout(90_000);
   const running = await controlledApplication('ready', true);
   try {
     await running.page.getByLabel('展示昵称').fill('玩家');
     await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
     await expect(running.page.getByRole('status')).toContainText('请求过快');
     await expect(running.page.getByRole('status')).toContainText('请等待');
-    await expect(running.page.getByRole('button', { name: '重新准备', exact: true })).toBeDisabled();
+    const retry = running.page.getByRole('button', { name: '重新准备', exact: true });
+    await expect(retry).toBeDisabled();
+    await expect.poll(running.responses).toEqual([200, 200, 200, 200, 200, 200, 429]);
+    await expect(retry).toBeEnabled({ timeout: 70_000 });
+    await running.page.waitForTimeout(500);
+    expect(running.responses()).toEqual([200, 200, 200, 200, 200, 200, 429]);
+    await expect(running.page.getByRole('status')).toContainText('请求过快');
+    await running.page.getByLabel('展示昵称').fill('等待后的玩家');
+    await retry.click();
+    await expect(running.page.getByRole('status')).toContainText('准备完成');
+    await expect(running.page.getByText('等待后的玩家', { exact: true })).toBeVisible();
+    await expect.poll(running.responses).toEqual([200, 200, 200, 200, 200, 200, 429, 200]);
+  } finally { await running.close(); }
+});
+
+for (const invalidName of ['', '界'.repeat(33), '\u200b玩家', 'x'.repeat(257)]) {
+  test('invalid nickname ' + JSON.stringify(invalidName.slice(0, 4)) + ' can be corrected in the real desktop', async () => {
+    const running = await controlledApplication();
+    try {
+      await running.page.getByLabel('展示昵称').fill(invalidName);
+      await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
+      await expect(running.page.getByRole('status')).toContainText('昵称须为 1–32 个字');
+      expect(running.responses()).toEqual([]);
+      const retry = running.page.getByRole('button', { name: '重新准备', exact: true });
+      await expect(retry).toBeEnabled();
+      await running.page.getByLabel('展示昵称').fill('有效玩家');
+      await retry.click();
+      await expect(running.page.getByRole('status')).toContainText('准备完成');
+      await expect(running.page.getByText('有效玩家', { exact: true })).toBeVisible();
+      await expect.poll(running.responses).toEqual([200]);
+    } finally { await running.close(); }
+  });
+}
+
+test('an HTML-shaped nickname remains literal text in the real desktop', async () => {
+  const running = await controlledApplication();
+  try {
+    const nickname = '<img src=x onerror=alert(1)>';
+    let dialogs = 0;
+    running.page.on('dialog', async (dialog) => { dialogs++; await dialog.dismiss(); });
+    await running.page.getByLabel('展示昵称').fill(nickname);
+    await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
+    await expect(running.page.getByRole('status')).toContainText('准备完成');
+    await expect(running.page.getByText(nickname, { exact: true })).toBeVisible();
+    expect(await running.page.locator('img').count()).toBe(0);
+    expect(dialogs).toBe(0);
+    await expect.poll(running.responses).toEqual([200]);
   } finally { await running.close(); }
 });
 
