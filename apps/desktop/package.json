@@ -9,7 +9,9 @@
     "build": "node scripts/build.mjs",
     "typecheck": "node scripts/build.mjs --typecheck",
     "lint": "node scripts/build.mjs --lint",
-    "test": "node scripts/build.mjs --test"
+    "test": "node scripts/build.mjs --test",
+    "package:win": "node scripts/build.mjs --package-win",
+    "test:e2e": "node scripts/build.mjs --test-packaged"
   },
   "dependencies": {
     "@babacom/contracts": "0.1.0",
@@ -24,6 +26,7 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "electron": "44.5.1",
+    "electron-builder": "26.15.3",
     "eslint": "10.12.0",
     "json-schema-to-ts": "3.1.1",
     "typescript": "5.9.3",

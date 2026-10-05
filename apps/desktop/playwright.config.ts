@@ -8,4 +8,8 @@ export default defineConfig({
   retries: 0,
   timeout: 30_000,
   reporter: 'list',
+  projects: [
+    { name: 'development', outputDir: 'build/test-results/development' },
+    { name: 'packaged', outputDir: 'build/test-results/packaged' },
+  ],
 });

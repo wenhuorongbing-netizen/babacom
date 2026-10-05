@@ -1,6 +1,8 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { cp, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -152,7 +154,200 @@ export async function startTestService(scenario = 'ready') {
   };
 }
 
+
+const sandboxGuestScript = String.raw`$ErrorActionPreference = 'Stop'
+$stage = 'ENVIRONMENT'
+$api = $null
+$client = $null
+$pipe = $null
+$writer = $null
+$result = [ordered]@{ status = 'FAIL'; stage = $stage }
+try {
+  $tools = @(Get-Command node.exe,npm.cmd,npx.cmd,tsc.cmd,vite.cmd -ErrorAction SilentlyContinue)
+  if ($tools.Count -ne 0) { throw 'Development tools are present' }
+  $stage = 'API'
+  $apiInfo = [Diagnostics.ProcessStartInfo]::new()
+  $apiInfo.FileName = 'C:\T1Input\python\python.exe'
+  $apiInfo.Arguments = '"C:\T1Input\root\tests\tokens\local_service.py" --scenario ready'
+  $apiInfo.UseShellExecute = $false
+  $apiInfo.CreateNoWindow = $true
+  $apiInfo.RedirectStandardInput = $true
+  $apiInfo.RedirectStandardOutput = $true
+  $apiInfo.RedirectStandardError = $true
+  $apiInfo.EnvironmentVariables['PYTHONPATH'] = 'C:\T1Input\root\apps\api;C:\T1Input\site-packages'
+  $apiInfo.EnvironmentVariables['PYTHONDONTWRITEBYTECODE'] = '1'
+  $api = [Diagnostics.Process]::Start($apiInfo)
+  $apiErrors = $api.StandardError.ReadToEndAsync()
+  $handshake = $api.StandardOutput.ReadLineAsync()
+  if (-not $handshake.Wait(20000)) { throw 'API startup timed out' }
+  $configurationText = $handshake.Result
+  $configuration = $configurationText | ConvertFrom-Json
+  if ($configuration.apiBase -notmatch '^http://127[.]0[.]0[.]1:[0-9]+$') { throw 'Invalid API handshake' }
+  $apiOutput = $api.StandardOutput.ReadToEndAsync()
+  $stage = 'BROKER'
+  $name = 'babacom-' + [Guid]::NewGuid().ToString()
+  $logonText = & whoami.exe /logonid
+  $sidMatch = [regex]::Match(($logonText -join ' '), 'S-1-5-5-[0-9]+-[0-9]+')
+  if (-not $sidMatch.Success) { throw 'Missing logon identity' }
+  $logon = [Security.Principal.SecurityIdentifier]::new($sidMatch.Value)
+  $acl = [IO.Pipes.PipeSecurity]::new()
+  $acl.SetAccessRuleProtection($true, $false)
+  $acl.AddAccessRule([IO.Pipes.PipeAccessRule]::new($logon, [IO.Pipes.PipeAccessRights]::FullControl, [Security.AccessControl.AccessControlType]::Allow))
+  $pipe = [IO.Pipes.NamedPipeServerStream]::new($name, [IO.Pipes.PipeDirection]::InOut, 1, [IO.Pipes.PipeTransmissionMode]::Byte, [IO.Pipes.PipeOptions]::Asynchronous, 4096, 4096, $acl)
+  $connected = $pipe.BeginWaitForConnection($null, $null)
+  $stage = 'CLIENT'
+  $clientInfo = [Diagnostics.ProcessStartInfo]::new()
+  $clientInfo.FileName = 'C:\T1Input\client\BabaCom.exe'
+  $clientInfo.Arguments = '--force-renderer-accessibility --babacom-startup-pipe=\\.\pipe\' + $name
+  $clientInfo.UseShellExecute = $false
+  $clientInfo.RedirectStandardOutput = $true
+  $clientInfo.RedirectStandardError = $true
+  $client = [Diagnostics.Process]::Start($clientInfo)
+  $clientOutput = $client.StandardOutput.ReadToEndAsync()
+  $clientErrors = $client.StandardError.ReadToEndAsync()
+  if (-not $connected.AsyncWaitHandle.WaitOne(15000)) { throw 'Client startup timed out' }
+  $pipe.EndWaitForConnection($connected)
+  $writer = [IO.StreamWriter]::new($pipe, [Text.UTF8Encoding]::new($false))
+  $writer.WriteLine($configurationText)
+  $writer.Flush()
+  $writer.Dispose()
+  $writer = $null
+  $pipe.Dispose()
+  $pipe = $null
+  $stage = 'WINDOW'
+  $deadline = [DateTime]::UtcNow.AddSeconds(20)
+  do {
+    $client.Refresh()
+    if ($client.HasExited) { throw 'Client exited before its window' }
+    if ($client.MainWindowHandle -ne [IntPtr]::Zero) { break }
+    Start-Sleep -Milliseconds 200
+  } while ([DateTime]::UtcNow -lt $deadline)
+  if ($client.MainWindowHandle -eq [IntPtr]::Zero) { throw 'No actual client window' }
+  Add-Type -AssemblyName UIAutomationClient
+  Add-Type -AssemblyName UIAutomationTypes
+  $window = [Windows.Automation.AutomationElement]::FromHandle($client.MainWindowHandle)
+  $editCondition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Edit)
+  $prepareName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('5YeG5aSH5YWl5oi/'))
+  $buttonCondition = [Windows.Automation.AndCondition]::new(
+    [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Button),
+    [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $prepareName))
+  $deadline = [DateTime]::UtcNow.AddSeconds(20)
+  do {
+    $edit = $window.FindFirst([Windows.Automation.TreeScope]::Descendants, $editCondition)
+    $button = $window.FindFirst([Windows.Automation.TreeScope]::Descendants, $buttonCondition)
+    if ($null -ne $edit -and $null -ne $button) { break }
+    Start-Sleep -Milliseconds 200
+  } while ([DateTime]::UtcNow -lt $deadline)
+  if ($null -eq $edit -or $null -eq $button) { throw 'Admission controls unavailable' }
+  # Issue 7 checks actual startup here; test:e2e covers full admission journeys.
+  $names = @($window.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name })
+  $visibleText = $names -join ' '
+  if ($visibleText.Contains($configuration.applicationSession) -or $visibleText -match 'eyJ[\w-]+[.]eyJ[\w-]+[.][\w-]+') { throw 'Secret in visible UI' }
+  $stage = 'CLOSE'
+  if (-not $client.CloseMainWindow() -or -not $client.WaitForExit(15000) -or $client.ExitCode -ne 0) { throw 'Client did not close cleanly' }
+  $api.StandardInput.Close()
+  if (-not $api.WaitForExit(15000) -or $api.ExitCode -ne 0) { throw 'API did not close cleanly' }
+  $stage = 'DIAGNOSTICS'
+  if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($clientOutput, $clientErrors, $apiErrors, $apiOutput), 5000)) { throw 'Diagnostics did not close' }
+  $diagnostics = $clientOutput.Result + $clientErrors.Result + $apiErrors.Result
+  if ($diagnostics.Contains($configuration.applicationSession) -or $diagnostics -match 'eyJ[\w-]+[.]eyJ[\w-]+[.][\w-]+') { throw 'Secret in diagnostics' }
+  $events = @($apiOutput.Result -split '\r?\n' | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+  if ($events.Count -ne 0) { throw 'Startup performed an unexpected admission request' }
+  $result = [ordered]@{
+    status = 'PASS'
+    environment = 'Windows Sandbox'
+    os = [Environment]::OSVersion.VersionString
+    nodeAbsent = $true
+    npmAbsent = $true
+    typescriptAbsent = $true
+    viteAbsent = $true
+    actualWindow = $true
+    admissionControlsVisible = $true
+    apiRequestsDuringStartup = 0
+    clientExitCode = $client.ExitCode
+    appSha256 = (Get-FileHash 'C:\T1Input\client\resources\app.asar' -Algorithm SHA256).Hash.ToLowerInvariant()
+  }
+} catch {
+  $result = [ordered]@{ status = 'FAIL'; stage = $stage; category = $_.Exception.GetType().Name }
+} finally {
+  if ($null -ne $writer) { $writer.Dispose() }
+  if ($null -ne $pipe) { $pipe.Dispose() }
+  if ($null -ne $client -and -not $client.HasExited) { $client.Kill() }
+  if ($null -ne $api -and -not $api.HasExited) { $api.Kill() }
+  $configuration = $null
+  $configurationText = $null
+  [IO.File]::WriteAllText('C:\T1Output\result.json', ($result | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+  Stop-Computer -Force
+}
+`;
+
+export async function runSandboxAcceptance() {
+  const execute = promisify(execFile);
+  const occupied = await execute('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+    '@(Get-Process | Where-Object ProcessName -In WindowsSandbox,WindowsSandboxClient).Count'], { windowsHide: true });
+  if (Number(occupied.stdout.trim()) !== 0) throw new Error('Existing Windows Sandbox is not owned by this test');
+  const runtime = JSON.parse((await execute('uv', ['run', '--frozen', '--directory', join(root, 'apps/api'),
+    'python', '-c', 'import json,sys,platform; print(json.dumps({"base":sys.base_prefix,"version":platform.python_version()}))'],
+  { cwd: root, windowsHide: true })).stdout);
+  const runDirectory = await mkdtemp(join(desktop, 'build/sandbox-'));
+  const input = join(runDirectory, 'input');
+  const output = join(runDirectory, 'output');
+  await mkdir(output, { recursive: true });
+  await cp(join(desktop, 'build/windows/win-unpacked'), join(input, 'client'), { recursive: true });
+  await cp(runtime.base, join(input, 'python'), { recursive: true, dereference: true });
+  await cp(join(root, 'apps/api/.venv/Lib/site-packages'), join(input, 'site-packages'), { recursive: true, dereference: true });
+  await cp(join(root, 'apps/api/app'), join(input, 'root/apps/api/app'), { recursive: true });
+  await mkdir(join(input, 'root/packages/contracts'), { recursive: true });
+  for (const filename of ['admission.schema.json', 'token-claims.schema.json', 'permissions.schema.json']) {
+    await cp(join(root, 'packages/contracts', filename), join(input, 'root/packages/contracts', filename));
+  }
+  await mkdir(join(input, 'root/tests/tokens'), { recursive: true });
+  await cp(join(root, 'tests/tokens/local_service.py'), join(input, 'root/tests/tokens/local_service.py'));
+  await writeFile(join(input, 'guest.ps1'), sandboxGuestScript, 'ascii');
+  const xml = (value) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  const configuration = '<Configuration><vGPU>Disable</vGPU><Networking>Disable</Networking>'
+    + '<AudioInput>Disable</AudioInput><VideoInput>Disable</VideoInput><ClipboardRedirection>Disable</ClipboardRedirection>'
+    + '<PrinterRedirection>Disable</PrinterRedirection><MappedFolders>'
+    + '<MappedFolder><HostFolder>' + xml(input) + '</HostFolder><SandboxFolder>C:\\T1Input</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>'
+    + '<MappedFolder><HostFolder>' + xml(output) + '</HostFolder><SandboxFolder>C:\\T1Output</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>'
+    + '</MappedFolders><LogonCommand><Command>powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\\T1Input\\guest.ps1</Command></LogonCommand></Configuration>';
+  const configurationPath = join(runDirectory, 'acceptance.wsb');
+  await writeFile(configurationPath, configuration);
+  const child = spawn(join(process.env.SystemRoot ?? 'C:/Windows', 'System32/WindowsSandbox.exe'),
+    [configurationPath], { stdio: 'ignore', windowsHide: true });
+  let launchFailed = false;
+  child.once('error', () => { launchFailed = true; });
+  const deadline = Date.now() + 120_000;
+  let result = { status: 'NOT_RUN', reason: 'Windows Sandbox did not return an actual guest result' };
+  try {
+    while (!launchFailed && Date.now() < deadline) {
+      try {
+        result = JSON.parse(await readFile(join(output, 'result.json'), 'utf8'));
+        break;
+      } catch (error) {
+        if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
+    }
+    const appSha256 = createHash('sha256').update(await readFile(join(input, 'client/resources/app.asar'))).digest('hex');
+    if (result.status === 'PASS' && result.appSha256 !== appSha256) throw new Error('Sandbox tested a different application artifact');
+    console.log(JSON.stringify({ ...result, pythonFixtureVersion: runtime.version,
+      uvLockSha256: createHash('sha256').update(await readFile(join(root, 'apps/api/uv.lock'))).digest('hex'), runDirectory }));
+    process.exitCode = result.status === 'PASS' ? 0 : 1;
+  } finally {
+    if (child.exitCode === null) child.kill();
+  }
+}
+
 async function main() {
+  if (process.argv.includes('--sandbox-acceptance')) {
+    try { await runSandboxAcceptance(); }
+    catch (error) {
+      console.error('Windows Sandbox setup failed (' + (error.code ?? 'UNKNOWN') + '; ' + (error.syscall ?? 'UNKNOWN') + ').');
+      process.exitCode = 1;
+    }
+    return;
+  }
   if (!process.argv.includes('--local-test')) {
     console.error('Supply a controlled provider configuration, or explicitly use --local-test.');
     process.exitCode = 1;
