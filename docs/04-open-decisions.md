@@ -82,7 +82,7 @@ Owner: 5.3
 **这是当前最大的项目风险，且和技术无关。**
 必须有且只有一个人：拥有架构与接口、决定合并、阻止不兼容实现进入 main、保证 main 随时可构建。
 这个人不必是代码能力最强的，但必须愿意读每一个 PR，并且**敢说「不合」**。
-状态：原规划的全局 D9 **未指派**；本 fork T1 的签认安排见下 · 阻塞：原规划的全局并行开发
+状态：原规划的全局 D9 **未指派**；本 fork T1 已固定 Jack，T2 提议沿用 Jack、待书面规格与范围 PR 明确审阅 · 阻塞：原规划全局并行及未签认的 T2 实现
 
 ### D10 并行度上限
 `teams.html` 假设 24 模块 / 105 agents，但契约与 review 全部收敛到 1 个人。
@@ -111,9 +111,10 @@ Owner: 8.1
 | D6 | 一个房间还是两个 | **SPIKE (R00)** | 1.2 | 3.1 / 4.x |
 | D7 | 回声消除 | 待 PO 确认 | 3.2 | — |
 | D8 | 域名 | 待 PO 确认 | 1.1 | TLS 部署 |
-| D9 | **Tech Lead 人选** | 全局未指派；本 fork T1 签认者固定 | 全局：PO；T1：Jack | 全局并行；T1 产品实现等 #3 具体 docs PR 经 Jack 审查合并 |
+| D9 | **Tech Lead 人选** | 全局未指派；T1固定；T2签认提案待审阅 | 全局：PO；T1：Jack；T2提案：Jack | 全局并行；T2实现等书面规格与范围PR明确签认 |
 | D10 | 并行度上限 | 待 Tech Lead 确认 | TL | wave 规划 |
 | D11 | 韩国服务器定位 | 待 PO 确认 | 8.1 | — |
+| D12 | 本 fork T2 媒体执行与凭据边界 | **SPIKE（方案拟定；执行待书面签认）** | T2提案：Jack | T2-01真实SDK/SFU及后续媒体实现 |
 
 **本 fork 发布阶段校准：DECIDED（2026-10-04，用户授权修正并合并基线 PR）。**
 沿用 [01-scope-v2.md](01-scope-v2.md) 的既有 R04 范围：完整每频道权限、
@@ -140,3 +141,39 @@ Owner: 8.1
 [#3](https://github.com/wenhuorongbing-netizen/babacom/issues/3) 的独立 `Module: docs` PR 仅落实 `.agents/modules/t1.md`、`.github/CODEOWNERS` 与本文件：新增 T1 精确边界和所有权，25 份既有模块清单保持原样，不夹带产品实现。
 
 该具体 PR 由 Jack 审查合并后才解除 T1 产品任务阻塞；清单存在、角色指定、Agent 复审和 CI 通过不代替签认。后续实施使用 `Module: t1`，保持单 worker、最小 UI、共享 schema、真实 provider 与隔离 fixture 的规格边界。产品检查仍为 NOT_RUN；前置边界验证、具体 PR 签认与实际产品验收分别以真实证据判断。
+
+## 本 fork 的 T2 契约提案（2026-10-05）
+
+本节是T2-C书面提案，完整规格见[T2-spec.md](T2-spec.md)，
+拟签认逐文件范围见[t2清单](../.agents/modules/t2.md)。
+本轮“继续”授权形成规格与发布；未替Jack补签尚未存在的书面契约，
+不关闭T1父票，不扩展全局D9，也不启动设备或媒体实验。
+
+### D12 媒体执行与凭据边界 —— SPIKE，签认后才执行
+
+推荐先在同窗口隔离preload域验证官方浏览器SDK；该域仍属于renderer。
+应用会话留main、API secret留服务端，短期媒体JWT仅交当前隔离媒体域，
+UI主世界不获得JWT/Room/通用IPC。此为对T1“JWT只留main”的明确局部修订。
+同frame的上下文隔离不是设备权限隔离；更强要求须另行裁定独立媒体页面。
+
+第二个拟签认例外仅允许官方SDK向获准SFU的信令握手及同地址validate请求携带媒体JWT；
+业务页面URL、日志、持久化和公开桥接仍禁止凭据。
+本地回环地址、具体信令路径、CSP/请求白名单与权限事务均在规格中固定；
+不放宽沙箱、webSecurity，不新增任意网络。坚持任何renderer零JWT时，此SDK路线HOLD。
+
+| 项目 | T2提案 | 当前状态/解除条件 |
+|---|---|---|
+| 签认者与集成 | 本fork T2建议Jack唯一Owner；A起草/验证并串行处理获准Issue | 本书面规格及具体Module: docs范围PR经Jack明确审阅批准才生效 |
+| 测试主边界 | 实际Windows应用→HTTP准入→真实SFU；已有provider与can接口复用 | 文档可校验；全部T2产品/媒体检查NOT_RUN |
+| 凭据与交接 | 两个局部凭据例外；原子消费准入准备；媒体会话独立所有权与代次 | 待书面签认；preload/锁定SDK组合兼容SPIKE，限约一个有效工作日 |
+| 不变值 | T1昵称、120秒初始媒体TTL、grants、IP120/主体20/主体房间6每60秒、单worker | 保留，不另选值；初始TTL不挂断已连接通话 |
+| 非fixture提供者 | 真正的有限会话注册表和房间动作映射；沿用AuthenticationProvider与PermissionPolicy.can | 256位随机会话、摘要/到期/撤销；3600秒寿命为A提案，待Jack随规格审阅 |
+| 普通入口 | 没有显式provider继续拒绝，测试启动器分别构造适配器 | 不导入/回退fixture；不声明完整账号或即时媒体撤销 |
+| 票序 | T2-C→T2-01闭麦真实入房→T2-02受控真实准入→T2-03显式开麦/双设备 | 本轮只T2-C；设备、第二台电脑、外部运行配置与节点逐票明确 |
+| 文件与所有权 | 规格及t2清单精确列31个产品路径；CODEOWNERS逐个指向Jack | 拟签认上界，实施票只用实际子集；表外变更先独立docs范围PR |
+| 数据与验证 | 本片不引入ORM/数据库/迁移；DB NOT_APPLICABLE | 不伪造alembic PASS；自动化/合成/人耳/跨境分层，无中德证据不签收M0 |
+
+T1历史段落中的NOT_RUN是2026-10-04规划检查点，不作为当前工程状态。
+T1已在[PR13](https://github.com/wenhuorongbing-netizen/babacom/pull/13)合并，
+当前T2基线为9f523711634fc21fbf3c3b0459046141c28ad82f；T1最终真人/产品签认仍独立。
+T2不签收完整R01或Alpha，10语音/1共享/9观看/至少2小时目标保持原样。

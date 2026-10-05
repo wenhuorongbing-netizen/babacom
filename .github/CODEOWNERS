@@ -88,3 +88,42 @@
 /tests/tokens/test_admission_http.py                              @wenhuorongbing-netizen
 /tests/ratelimit/test_admission_limits.py                         @wenhuorongbing-netizen
 /tests/shell/admission.e2e.ts                                     @wenhuorongbing-netizen
+
+# ---- This fork T2: proposed Jack contract sign-off ----
+# Pending explicit review of T2-spec.md and the separate Module: docs range PR.
+# Review routing is not sign-off; global D9 and T1 rules remain separate.
+/.agents/modules/t2.md                                             @wenhuorongbing-netizen
+/.github/CODEOWNERS                                                @wenhuorongbing-netizen
+/docs/04-open-decisions.md                                         @wenhuorongbing-netizen
+/docs/T2-spec.md                                                   @wenhuorongbing-netizen
+/package-lock.json                                                 @wenhuorongbing-netizen
+/apps/desktop/package.json                                         @wenhuorongbing-netizen
+/apps/desktop/tsconfig.json                                        @wenhuorongbing-netizen
+/apps/desktop/eslint.config.mjs                                    @wenhuorongbing-netizen
+/apps/desktop/playwright.config.ts                                 @wenhuorongbing-netizen
+/apps/desktop/index.html                                           @wenhuorongbing-netizen
+/apps/desktop/scripts/build.mjs                                    @wenhuorongbing-netizen
+/apps/desktop/scripts/dev.mjs                                      @wenhuorongbing-netizen
+/apps/desktop/src/main/main.ts                                     @wenhuorongbing-netizen
+/apps/desktop/src/main/preload.ts                                  @wenhuorongbing-netizen
+/apps/desktop/src/main/media-session.ts                            @wenhuorongbing-netizen
+/apps/desktop/src/renderer.tsx                                     @wenhuorongbing-netizen
+/apps/desktop/src/shell/AdmissionPage.tsx                          @wenhuorongbing-netizen
+/apps/desktop/src/features/voice/session.ts                        @wenhuorongbing-netizen
+/apps/desktop/src/features/voice/VoicePanel.tsx                    @wenhuorongbing-netizen
+/apps/desktop/src/features/audio/microphone.ts                     @wenhuorongbing-netizen
+/apps/desktop/src/features/audio/playback.ts                       @wenhuorongbing-netizen
+/apps/desktop/src/features/audio/AudioControls.tsx                 @wenhuorongbing-netizen
+/apps/desktop/src/i18n/zh-CN.json                                  @wenhuorongbing-netizen
+/packages/contracts/package.json                                   @wenhuorongbing-netizen
+/packages/contracts/media-session.schema.json                      @wenhuorongbing-netizen
+/apps/api/app/auth/session.py                                      @wenhuorongbing-netizen
+/apps/api/app/permissions/room_access.py                           @wenhuorongbing-netizen
+/tests/voice/local_media_service.py                                @wenhuorongbing-netizen
+/tests/voice/sfu-peer.cjs                                          @wenhuorongbing-netizen
+/tests/voice/sfu-peer.ts                                           @wenhuorongbing-netizen
+/tests/voice/peer.html                                             @wenhuorongbing-netizen
+/tests/voice/session.e2e.ts                                        @wenhuorongbing-netizen
+/tests/audio/microphone.e2e.ts                                     @wenhuorongbing-netizen
+/tests/accounts/test_session.py                                    @wenhuorongbing-netizen
+/tests/permissions/test_room_access.py                             @wenhuorongbing-netizen
