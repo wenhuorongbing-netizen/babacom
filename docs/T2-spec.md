@@ -1,24 +1,27 @@
 # T2 — 从受控准入走向真实桌面语音
 
-> T2-C 书面规格草稿 · 2026-10-05 · 本 fork 唯一契约签认与集成裁决者建议沿用 Jack。
-> 本轮授权形成并发布规格；本文不是已发生的签认、依赖安装、设备同意或媒体验收。
-> 文档 PR 经 Jack 审阅并明确批准下列凭据边界后，才允许启动相应实现票。
+> T2-C2 契约修订草案 · 2026-10-06 · 本 fork T2 唯一契约签认与集成裁决者为 Jack。
+> 原 T2-C 已由 Jack 批准并在 PR15 合并；本次三项修订方向已确认。
+> 本修订的具体 Module: docs PR 待 Jack 审阅合并后生效；#16 保持 BLOCKED。
+> 方向确认和文档合并均不等于产品修复、物理设备同意或媒体验收。
 
 ## Problem Statement
 
 T1 已交付可启动的 Windows 客户端和本地受控准入，但“准备完成”还不能让用户进入真实语音房间、听到成员或安全控制麦克风。私人小组需要先验证真实桌面媒体链路，再验证正式身份和房间授权，逐步走向中德两端可通话。
 
-当前准入凭据只留在 main，普通 renderer 不能联网或申请媒体；准入页到期和卸载仍会取消准备。这些正确的 T1 边界不能直接接上需要媒体 JWT 的浏览器 SDK。添加依赖、把凭据藏进 UI 闭包或放开任意网络都不能解决这个契约冲突。
+T2-01 的真实诊断已发现：锁定 SDK 在设备变化时被动枚举，退出后的 SDK 监听仍可响应；坏签名握手使 Chromium 网络诊断记录带 JWT 的连接 URL。现有共享组件库还缺少成员列表。用户需要保持默认闭麦、安全退出和无凭据日志，不能用隐藏失败或降低脱敏断言交付。
+
+T2-C2 将媒体执行位置与初始票据传输分开修订，并明确被动枚举的有限例外。主界面的准入准备与既有 T1 安全边界继续保留。
 
 ## Solution
 
-按 T2-C → T2-01 → T2-02 → T2-03 串行推进：
-先签认隔离媒体执行域、准入交接与逐文件范围；
+按已合并 T2-C → T2-C2 修订 → T2-01 → T2-02 → T2-03 串行推进：
+先签认专用可销毁媒体执行域、初始认证头、被动枚举边界及共享列表范围；
 再默认闭麦连接真实本地 SFU，显示真实成员并安全离开；
 随后将非 fixture 的受控会话与统一房间权限接入同一条链；
 最后在明确设备同意下开麦、静音、退出并完成真实双设备听音。
 
-T2-C 只交付可审阅的文档。T2-01 的合成媒体只证明真实协议和媒体传输；
+本轮 T2-C2 只交付可审阅的文档与范围 PR。T2-01 的合成媒体只证明真实协议和媒体传输；
 物理采集、双设备听音、中德网络和 M0 分别保留独立条件与证据。沿用现有技术栈、UI 原语和三份 T1 schema，不重建脚手架。
 
 ## User Stories
@@ -51,39 +54,63 @@ T2-C 只交付可审阅的文档。T2-01 的合成媒体只证明真实协议和
 26. As a 受控房间维护者, I want 应用会话和签名密钥不进入媒体域或 UI, so that 媒体接线不泄露更大权限。
 27. As a 受控房间维护者, I want 媒体 JWT 只在签认过的执行域与 SFU 信令中使用, so that UI、日志和分发资源不持有凭据。
 28. As a 审查者, I want 自动化、合成传输、真人听音和跨境结果分别记录, so that 能准确判断每一步证明了什么。
+29. As a Windows 测试用户, I want SDK 在活动媒体上下文内读取设备清单时仍不申请采集权限, so that 默认闭麦不会变成隐蔽录音。
+30. As a Windows 测试用户, I want 离开完成后旧媒体上下文已销毁, so that 旧设备事件不会再次响应或影响重入。
+31. As a 受控房间维护者, I want UI 请求不能借用媒体域的认证头, so that 隐藏票据仍能保持授权隔离。
+32. As a 受控房间维护者, I want 连接失败和信令诊断不出现真实票据, so that 短期凭据不会通过错误信息泄露。
+33. As a Windows 测试用户, I want 成员列表使用统一且可访问的共享组件, so that 控件语义与现有客户端一致。
+34. As a 审查者, I want 修订契约与范围先独立合并再修复产品, so that 可清楚区分批准的设计与尚未验收的实现。
 
 ## Implementation Decisions
 
 ### 1. 基线、签认与非目标边界
 
-- 基线固定为 PR13 合并提交 `9f523711634fc21fbf3c3b0459046141c28ad82f`。
-  T1 工程交付可直接复用；父票 #1 的最终签认保持独立，本文不代 Jack 关闭。
+- 本修订基线为 PR15 合并提交 `cb0fd0c71c4a4b99796fc1e37370b6b91fe4fd25`。
+  T1 工程基线仍是 PR13 的 `9f523711634fc21fbf3c3b0459046141c28ad82f`；
+  父票 #1 最终签认与 T2 父票 #14 保持 OPEN，本文不代 Jack 关闭。
 - 技术栈保持 Electron 44.5.1、React、TypeScript、Vite、FastAPI、npm workspaces 与 uv。
-  首票提议锁定 `livekit-client@2.22.3`；它提供现有依赖没有的浏览器 RTC 能力，
-  不新增 React 封装、原生 RTC SDK 或另一个依赖管理器。当前未安装、组合兼容 NOT_RUN。
-- 建议 Jack 只担任本 fork T2 的唯一契约签认与集成 Owner；A 起草、验证和串行执行获准任务。
-  T1 的指定不自动覆盖 T2；本文与边界 PR 的明确审阅合并才形成 T2 签认，全局 D9 不变。
-- 首个兼容验证约束为一个有效工作日；沙箱或打包失败时记录实际阻碍，停止该方案，
-  不不断叠加 shim、升级服务器或增加例外。独立媒体页面只是后续待裁定的备选。
+  继续锁定已获准的 `livekit-client@2.22.3`，不新增 RTC 依赖或升级现有版本。
+  诊断 worktree 已安装并运行该版本；本轮文档 worktree 不安装依赖。
+- Jack 已作为本 fork T2 唯一契约签认与集成 Owner 批准 PR15；A 起草、验证和串行执行获准任务。
+  2026-10-06 已确认本次修订方向；具体范围以本修订 PR 经 Jack 审阅合并为准，全局 D9 不变。
+- 同窗口媒体方案因诊断失败停止；本次改用专用媒体上下文须先完成独立文档签认。
+  修订方案的首轮兼容验证仍限约一个有效工作日；失败记录阻碍并重新裁定，
+  不叠加 shim、修改 SDK、升级服务器或关闭安全开关。
 - 此前本地 SFU/合成实验仅为资源线索。首票必须核对缓存官方 SFU 二进制及版本/校验值，
   明确本机回环实验条件后复用；不可把历史实验当作当前 Electron 兼容证据。
   未有合适本地资源时只暂停媒体执行，不购买、部署或操作韩国服务器。
 
-### 2. 两项需要书面签认的凭据变更
+### 2. 专用媒体执行域与认证头
 
-**隔离媒体执行域。** 推荐把浏览器 SDK 打包进同一窗口的隔离 preload 执行域。
-API secret 始终留在后端，应用会话凭据始终留在 main。
-main 仅向当前操作的指定隔离媒体域交付短期媒体 JWT；
-React UI 主世界不获得 JWT、Room 对象、任意 IPC 或原始 SDK 错误。
+**专用媒体上下文。** main 在明确 join 后为当前 mediaSessionId 创建隐藏的专用 BrowserWindow，
+使用独立、非持久 session partition 和静态媒体页面，SDK 仅运行在其隔离沙箱 preload。
+业务 UI 窗口和媒体窗口拥有不同 webContents；不复用 UI frame 承载 SDK 或认证头。
+媒体页面没有业务 UI、外部脚本或导航；main 创建窗口是受控生命周期操作，网页子窗仍禁止。
+API secret 留后端，应用会话留 main；业务 UI 只经有限命令和经 schema 校验的快照与 main 沟通。
 
-preload 仍是 renderer 进程的一部分：这是对 T1“JWT 只留 main”的明确、局部修订，
-不是改名后声称原约束未变。主世界与 preload 上下文隔离也不是设备权限隔离；
-同 frame 的 UI 代码可能影响已授权的媒体行为，不宣称对受损 UI 有独立设备防线。
-若 Jack 要求所有 renderer 零 JWT，当前浏览器 SDK 路线 HOLD，另行裁定执行位置。
+**初始票据。** main 原子消费当前准入准备后持有初始 JWT；
+私有启动命令交付会话 ID、获准 SFU 与预期房间/主体，不交付该 JWT。
+SDK 的连接 token 参数使用固定、非秘密且不能独立通过 SFU 验签的占位值。
+main 仅为当前媒体 webContents 的批准主 frame、批准静态页面、当前代次与 GET 信令请求
+添加 Authorization: Bearer 认证头；目标必须精确匹配获准协议、主机、端口与四条信令路径。
+未知 frame、UI 窗口、外来窗口、旧媒体上下文、非 GET、重定向及未知路径均不得获得认证头。
+URL 白名单和认证头授权分别校验；同源并不自动获得票据。
 
-**官方 SDK 信令 URL 的窄例外。** 媒体 JWT 可由官方 SDK 携带到获准 SFU 的
-WS/WSS 握手及同地址的 HTTP/HTTPS validate 请求。业务页面 URL、导航、日志、
-公开桥接返回、持久化和一般诊断仍禁止凭据；应用会话及 API secret 不适用例外。
+保留同地址 HTTP/HTTPS validate 的认证头支持；初始握手授权在结束连接事务后撤销，
+初始 JWT 从 main 清除；取消、失败、离开和上下文销毁立即使旧代次的请求头授权失效。
+连接总超时覆盖 HTTP validate，期间只能有一个初始连接事务。
+SDK 协议路径协商仍使用同一事务，不能因首次 WS 失败就提前撤销随后 validate 的授权。
+本机制使用 Electron 原生请求头入口与 SFU 既有认证方式，不新增信令代理或修改 SDK。
+
+**SFU 刷新票据。** SDK 可能从信令收到刷新 token 并保存在专用媒体域；
+因此不宣称所有 renderer 零 JWT。刷新票据不能进入 UI、业务页面 URL、日志或存储。
+禁自动重连仍保持；刷新后发生信令失败不得开启携带真实 JWT 的新握手。
+若固定 SDK 在此路径仍产生含票据 URL 或诊断，修订方案保持 BLOCKED，不能增加日志例外。
+要求所有 renderer 零 JWT 时，浏览器 SDK 路线仍 HOLD，须另行裁定。
+
+本修订撤销 PR15 的真实 JWT 信令 URL 例外；JWT 只可在获准请求的认证头及专用媒体域接收的
+SFU 信令刷新中出现。业务页面 URL、导航、公开桥接、错误对象、控制台、一般诊断与持久化
+继续禁止凭据。原生网络错误也属于脱敏验收，不能只检查应用 stdout/stderr。
 
 批准SFU地址由运营者通过独立、可选的一次性媒体配置命名管道交给main，
 使用新增媒体schema中的私有mediaStartup定义，保持旧T1启动schema原样。
@@ -95,8 +122,10 @@ WS/WSS 握手及同地址的 HTTP/HTTPS validate 请求。业务页面 URL、导
 显式批准协议协商路径，不允许任意同源请求或重定向到其他地址。
 未来外部连接只能用获准 WSS/HTTPS，需另行明确运行配置与资源条件。
 
-保持 contextIsolation、sandbox、nodeIntegration=false、webSecurity 和禁止导航/子窗策略。
-CSP 与资源请求白名单只作上述最小扩展。该白名单不等同于 ICE/UDP 的网络隔离证明；
+两窗口保持 contextIsolation、sandbox、nodeIntegration=false、webSecurity 和禁止导航/网页子窗策略。
+仅媒体上下文的 CSP 与请求白名单允许上述获准信令目标；业务 UI 不获得 SFU 访问或认证头。
+媒体资源仅来自打包的本地静态入口和本次获准 SFU；重入使用全新媒体 partition。
+该白名单不等同于 ICE/UDP 的网络隔离证明；
 本地 SFU、媒体候选地址和真实网络目的地也须在实验中核对。
 未知地址或 SDK 新增请求失败时记录事实，不临时放开网络。
 整个成功、失败、超时链路测试脱敏；代理日志/HAR 不原样发布。
@@ -108,8 +137,8 @@ CSP 与资源请求白名单只作上述最小扩展。该白名单不等同于 
 - main 负责准入、已批准地址、响应校验、操作代次、会话所有权、设备同意和窗口退出。
   main 不签 token，不把 SDK 未连接状态宣称成功。
 - 隔离媒体域拥有唯一 Room、订阅、采集轨道、播放器和 SDK 内部 token 刷新状态；
-  语音模块负责房间，音频模块负责采集与播放。preload 是组合入口，
-  通过注入端口协调二者，feature 之间不互相 import。
+  语音模块负责房间，音频模块负责采集与播放。专用媒体 preload 是组合入口，
+  通过注入端口协调二者，feature 之间不互相 import；业务 preload 只暴露有限 UI 能力。
 - UI 保留已有 prepare/cancel 准入接口；新增窄媒体能力为 join、cancelJoin、leave、
   setMicrophoneEnabled、enableAudio、getSnapshot、subscribe。
   join 不接收 URL、JWT、主体或 grants；控制命令只引用 main 产生的 mediaSessionId。
@@ -117,6 +146,9 @@ CSP 与资源请求白名单只作上述最小扩展。该白名单不等同于 
 - 公共命令、快照与错误码以新增 JSON schema 为单一真相，沿用既有生成和校验方式。
   未知字段/命令、错误类型、旧会话或非批准主 frame 默认拒绝。
   UI 快照只含连接、麦克风、播放状态、有限成员摘要和稳定错误码，不含 SDK 对象。
+  私有媒体启动命令同步移除初始 JWT 字段，绑定指定媒体上下文与代次；旧命令和未知字段拒绝。
+- 共享 UI 增加一个通用、可访问的列表原语，只接收稳定键和展示内容；
+  VoicePanel 组合真实成员摘要与 t() 文案，不在 feature 自造列表或让共享 UI 依赖媒体 schema。
 - main 私有交接核对窗口、主 frame、批准页面、房间、代次和凭据有效期；
   原子消费准备凭据，创建当前 mediaSessionId。一次消费只是本应用的交接限制，
   不使 bearer token 成为 SFU 一次性票据。
@@ -127,7 +159,8 @@ CSP 与资源请求白名单只作上述最小扩展。该白名单不等同于 
   不能终止已接管的媒体会话；离开由媒体会话入口处理。
 - 保留 T1 昵称全部规则、初始 TTL 120 秒、grants 和滚动60秒
   IP120/主体20/主体房间6的限流值，保持单 API worker。
-  SDK 刷新 token 只留在媒体域；下一次手动入房仍需新的应用准入。
+  SDK 刷新 token 只留在专用媒体域；销毁上下文清除该域持有的票据。
+  下一次手动入房仍需新的应用准入和新的媒体上下文。
 
 ### 4. 非 fixture 的最小会话与房间授权
 
@@ -158,9 +191,14 @@ T2-02 实现运营者预置的有限会话注册表；不能只是给 fixture �
 
 ### 5. 加入、采集、播放与清理
 
-- 启动、填写昵称和准备不自动连接 SFU，不采集、不预热或枚举设备。
-  join 期间禁止第二个准入/Room；SDK 的协议协商不等于第二次应用操作，
-  但任何时刻只能有一个活动入房流程与一个活动 Room。
+- 启动、填写昵称和准备不创建媒体 Room、不连接 SFU、不采集、不预热或枚举设备。
+  明确 join 后只创建一个当前会话拥有的媒体上下文；清理完成前禁止第二个准入/Room。
+  SDK 的协议协商不等于第二次应用操作，任何时刻只有一个活动入房流程与一个活动 Room。
+- 有限例外：当前媒体上下文生存期间，允许锁定 SDK 因 devicechange 被动 enumerateDevices，
+  但必须不请求权限、不预热或采集；应用不主动枚举，不把设备清单暴露给业务 UI。
+  这是对 T2-01 原“默认零枚举”的明确修订，不是把枚举计数假报为零。
+  枚举不等于采集；默认及设备变化时 getUserMedia/getDisplayMedia 必须仍为 0。
+  启动/准备和退出完成后仍要求无媒体上下文、无 SDK 枚举或旧事件响应。
 - 首次连接使用明确的总超时30秒，初始 maxRetries=0；
   ReconnectPolicy.nextRetryDelayInMs 返回 null，不写自己的恢复循环。
   固定版本上实际验证初始失败、信令断开和服务端移除后无后台恢复/重新发布。
@@ -169,8 +207,8 @@ T2-02 实现运营者预置的有限会话注册表；不能只是给 fixture �
 - 麦克风默认关闭。仅已连接且具有 microphone grant 时，明确点击开麦，
   经 main 控制的首次同意后启动本次音频采集事务。同意仅限当前媒体会话；
   重入默认闭麦并重新同意，不做永久授权或自动重弹。
-- 同时实现 permission check/request，只认可批准主 frame、当前会话、
-  当前采集事务及 audio 类型；camera、display-capture、未知类型继续拒绝。
+- 同时实现 permission check/request，只认可专用媒体窗口的批准主 frame、当前会话、
+  当前采集事务及 audio 类型；业务 UI、外来窗口、camera、display-capture、未知类型继续拒绝。
   同一采集事务可以产生多个检查回调，不能假定只调用一次。
 - 创建本地音轨与发布分两步；创建后、发布前和异步发布完成后重新核对
   房间与麦克风操作代次。用户已关麦、取消或离开时，迟到轨道停止且不保留发布。
@@ -178,13 +216,16 @@ T2-02 实现运营者预置的有限会话注册表；不能只是给 fixture �
 - AEC/NS/AGC 默认开启，不做设置页。静音停止有效人声传输；
   暂保留底层轨道，不承诺设备已释放或 RTP 包数归零。
   独立采集超时30秒后使操作失效，之后授权产生的轨道仍要停止。
-- 播放受阻单独提供启用声音，使用 Room.startAudio，并验证跨桥用户激活。
+- 播放受阻单独提供启用声音，使用 Room.startAudio，并实际验证 UI→main→媒体域的用户激活。
   不通过开麦或全局 autoplay 开关绕过。每个远端轨道只绑定一个播放器；
   订阅快照与增量事件按参与者/轨道身份合并，旧代次事件失效。
-- leave、窗口关闭和终止性失败停止全部自有轨道、取消发布、断开 Room，
-  清理播放器、事件监听、订阅与计时器，随后才允许手动重入。
-  清理超时5秒时保持会话不可重入并显示清理失败；不伪称已退出，
-  不创建新 Room 掩盖旧资源。窗口关闭以结束所属媒体执行上下文兜底。
+- leave、业务窗口关闭和终止性失败先使代次与请求头授权失效，再停止自有轨道、
+  取消发布、断开 Room、清理播放器/应用监听/订阅/计时器，并销毁专用媒体 webContents。
+  SDK 内部设备监听以销毁所属上下文清除，不能靠 GC 或 removeAllListeners 宣称已释放。
+  确认媒体上下文已销毁后才报告退出完成并允许手动重入；每次重入新建上下文和 partition。
+  清理总期限5秒，包含断开与销毁；超时保持 cleanup-failed 隔离，即使后来销毁也不自动解锁，
+  关闭业务窗口可终止全部所属上下文。不得新建 Room 掩盖旧资源。
+  媒体窗口意外关闭/进程崩溃属于终止性失败，不复活旧会话或自动重连。
 - 正常离开后的手动重入重新经过认证、can、限流与签发，并创建新的本地会话代次。
 
 ## Testing Decisions
@@ -200,6 +241,25 @@ SDK 适配器只在真实异步顺序难以重现的拒绝/迟到轨道/发布�
 T1 回归保持原样并确实运行。新 voice/audio/account/permission 目录须接入检查发现，
 从输出证明用例被运行；不能以未发现新测试的全绿命令签收。
 单写者、逐票更小文件子集；代码、schema、类型生成与消费者在对应实现票中同步。
+
+### 本修订新增的外部断言
+
+- 启动/准备没有媒体上下文且枚举/采集为0；当前媒体上下文可被动枚举，但权限请求、
+  getUserMedia/getDisplayMedia 为0；业务 UI 不收到设备清单。只观察实际浏览器 API 调用，不改 SDK。
+- leave/cancel/终止失败后，旧 webContents 确实销毁，SDK 设备事件不再响应；
+  下一次 join 产生新的上下文/partition，成员与资源数量有界。不能只验证 SFU 成员已离开。
+- 真实 SFU 有效认证头可入房，坏签名/过期/缺头拒绝；占位 token 单独不能入房。
+  UI/外来窗口、非批准 frame、旧代次、未知路径、非 GET 和重定向均不能借用头认证。
+  在 UI 直接请求获准 validate 地址也必须没有媒体授权，不能把“UI未拿到JWT”当成该检查通过。
+- 成功、坏签名、拒绝、超时、协议协商、信令断开和服务端移除都覆盖 stdout/stderr、
+  浏览器 console/pageerror 与 Chromium 原生网络诊断；URL 与可序列化错误无真实凭据。
+  确认真正发生 SFU token 刷新后再次覆盖信令失败，断言没有含刷新 JWT 的新握手或诊断；
+  缺少刷新路径证据时标 NOT_RUN，T2-01 不签收，不能仅凭首次握手无泄露放行。
+- 两窗口的实际沙箱/隔离偏好、独立权限域、初始化失败/崩溃/销毁及打包路径均在真实 Electron 验证。
+  T2-03 的启用播放还需独立媒体域的用户激活与人耳验证，不能从本轮夹具发布合成音轨推断。
+- 本次明确授权实现票同步修正 T2 专用“默认零枚举”和同窗口交接断言，保留原失败证据；
+  以默认零采集、准备零枚举、退出后零旧响应和授权隔离断言替代。T1正常测试与旧schema仍零改动。
+- 共享成员列表检查真实成员数量/稳定身份、可访问列表语义与中文标签；不以UI元素名断言内部实现。
 
 ### 四层证据与通过条件
 
@@ -232,12 +292,14 @@ Alpha 的10语音/1共享/9观看/至少2小时保持原规划，T2通过不签�
 
 | 顺序 | 用户可见结果 | 完成条件 | 依赖/停止条件 |
 |---|---|---|---|
-| T2-C | 一份可执行规格及范围 | 四份文档一致；具体范围、签认者、接口与证据层明确；文档校验通过；Jack审阅书面规格 | 本轮仅文档；未签认不实施 |
-| T2-01 | 闭麦进入真实本地房间、看见成员、离开并重入 | 开发/打包均使用真实SDK；合成订阅成立；取消/超时/去重/泄密回归通过 | T2-C签认、依赖与本地资源获准；兼容失败不关沙箱、不自动换架构 |
+| T2-C | 原规格及31路径 | Jack已批准，PR15合并 | 原文档票已完成；同窗口方案的T2-01诊断失败，T2-01不能视为完成 |
+| T2-C2 | 修订规格及34路径 | 四份文档一致；方向已确认；文档校验及Jack审阅合并 | 本轮仅文档；未合并前#16保持BLOCKED |
+| T2-01 | 闭麦进入真实本地房间、看见成员、离开并重入 | 开发/打包真实SDK；合成订阅；专用上下文销毁/重入；头认证隔离、刷新后无URL/日志凭据；共享列表与T1回归 | T2-C2合并并同步#16的新契约与26路径；依赖/本地资源核验；兼容失败不关沙箱、不再自行换架构 |
 | T2-02 | 非fixture主体进入获准房间，拒绝分支无媒体票 | 真实有限会话/房间provider；完整HTTP及真实SFU验票与隔离；缺provider拒绝 | 发放/到期/撤销契约明确；不声明生产登录或即时媒体撤销 |
 | T2-03 | 显式开麦、静音、退出及真实双设备通话 | 权限/迟到轨道/清理/播放回归；两台Windows人耳证据；跨境条件成立后另验 | 物理设备明确同意、两主体与资源条件；缺中德证据不签收M0 |
 
-每票使用单独 Issue，声明具体 Allowed Files 子集及依赖。这里的票序不是本轮新建的实现票。
+每票使用单独 Issue，声明具体 Allowed Files 子集及依赖。既有实现票为#16、#17、#18，
+保持串行依赖；本轮单独发布T2-C2文档票与PR，不重新创建三张实现票。
 T2父规格的签收条件是Jack书面签认及T2-01、T2-02、T2-03的双设备标准全部满足。
 中德窗口未通过时，M0与3.1/R01整体仍为HOLD，不因本地或双设备签收解除。
 无 ORM/数据库/迁移变化时 DB NOT_APPLICABLE；不能编造 alembic PASS。
@@ -250,18 +312,18 @@ T2父规格的签收条件是Jack书面签认及T2-01、T2-02、T2-03的双设�
 - 生产账号安全、已签发媒体 token 即时撤销、同主体同时多设备通话。
 - 外部 API 地址/凭据发放、采购/部署、韩国现有服务器、自动联系朋友或启动物理采集。
 - SDK fork、自研信令代理/RTC、关闭沙箱或隔离、任意 IPC/网络放行。
-- 改 T1 昵称/TTL/grants/限流，降低既有测试断言，提前宣称完整R01/M0/Alpha。
+- 改 T1 昵称/TTL/grants/限流，未经明确契约修订降低既有测试断言，提前宣称完整R01/M0/Alpha；本次只授权上述T2专属断言同步，正常T1测试仍零改动。
 
 ## Further Notes
 
 ### 本轮与后续精确范围
 
-T2-C 的源文件仅为：
+本轮 T2-C2 的源文件仅为：
 `docs/T2-spec.md`、`docs/04-open-decisions.md`、
 `.agents/modules/t2.md`、`.github/CODEOWNERS`。所有应用、schema 与依赖文件零 diff。
-临时 PR 正文为 `apps/desktop/build/t2-contract-pr-body-20261005.md`，不提交。
+临时验证脚本及Issue/PR正文仅放已忽略的桌面build目录，不提交。
 
-下列31个路径是后续 T2 实现的拟签认上界，不是本轮改动授权；
+下列34个路径是修订后 T2 实现的拟签认上界，不是本轮产品改动授权；
 已有或拟建状态均以本轮基线核对。每张票只使用实际需要的更小子集：
 
 ```text
@@ -271,10 +333,12 @@ apps/desktop/tsconfig.json
 apps/desktop/eslint.config.mjs
 apps/desktop/playwright.config.ts
 apps/desktop/index.html
+apps/desktop/media.html
 apps/desktop/scripts/build.mjs
 apps/desktop/scripts/dev.mjs
 apps/desktop/src/main/main.ts
 apps/desktop/src/main/preload.ts
+apps/desktop/src/main/media-preload.ts
 apps/desktop/src/main/media-session.ts
 apps/desktop/src/renderer.tsx
 apps/desktop/src/shell/AdmissionPage.tsx
@@ -286,6 +350,7 @@ apps/desktop/src/features/audio/AudioControls.tsx
 apps/desktop/src/i18n/zh-CN.json
 packages/contracts/package.json
 packages/contracts/media-session.schema.json
+packages/ui/src/index.tsx
 apps/api/app/auth/session.py
 apps/api/app/permissions/room_access.py
 tests/voice/local_media_service.py
@@ -297,6 +362,10 @@ tests/audio/microphone.e2e.ts
 tests/accounts/test_session.py
 tests/permissions/test_room_access.py
 ```
+
+相对PR15只新增三个产品路径：静态媒体入口、专用媒体preload与现有共享UI导出。
+桌面打包规则已包含全部dist文件；媒体入口/预载的构建接线在既有build脚本完成，不改打包器配置。
+#16的23路径子集修订为26路径（只增加上述三条）；#17/#18按实际需要逐个声明子集。
 
 `tests/accounts/test_session.py`属于账号测试；不新建`tests/auth`。
 已有认证/权限原语不需修改；不另建同用途permissions/service。
@@ -312,10 +381,12 @@ git diff --check
 node .agents/scope_guard.mjs docs --files docs/T2-spec.md docs/04-open-decisions.md .agents/modules/t2.md .github/CODEOWNERS
 node --test .agents/scope_guard.test.mjs
 ```
-另以可执行断言检查：实际diff仅四文件；T2边界与本文路径完全一致；31个产品路径及T2治理所有权为Jack；
-T1-spec与t1清单、既有产品文件零diff；相对链接可解析。所有断言必须成功。
+另运行不提交的可执行验证脚本，断言实际diff仅四文件、T2清单与本文34路径完全一致、
+相对PR15仅增加上述三条路径、34个产品路径与治理所有权为Jack、相对链接可解析；
+T1-spec/t1清单、全部应用/schema/依赖/infra文件零diff，原诊断worktree暂存树保持不变。
+同时断言新凭据/枚举/销毁/刷新后失败边界及文档签认状态互相一致。所有断言必须成功。
 
-以下仅是未来实现票的 Validation，当前 NOT_RUN：
+以下为修订后实现票的 Validation；本轮文档任务 NOT_RUN，不沿用诊断结果冒充修复通过：
 ```powershell
 npm run typecheck --workspace apps/desktop
 npm run lint --workspace apps/desktop
@@ -335,18 +406,29 @@ uv run python -m pytest ../../tests/tokens ../../tests/ratelimit ../../tests/acc
 
 ### 来源与事实状态
 
-- VERIFIED：PR13已合并；以上T1基线与provider/权限原语、preload、准入页和测试发现入口按当前源码核对。
-  T1历史验收见[PR13](https://github.com/wenhuorongbing-netizen/babacom/pull/13)，本轮未重跑。
+- VERIFIED：原规格已在[PR15](https://github.com/wenhuorongbing-netizen/babacom/pull/15)合并；
+  本修订从cb0fd0c开始。T1历史交付见[PR13](https://github.com/wenhuorongbing-netizen/babacom/pull/13)，本轮未重跑。
+- RECORDED（2026-10-05诊断）：9个定向用例4通过、5失败；未连接Room设备事件枚举1次，
+  实际连接/离开后计数1→2，物理采集0；坏签名触发Chromium network诊断JWT。
+  头认证夹具证明有效签名/合成发布、坏签名、缺头和不同窗口拒绝；同frame UI validate却返回200，
+  因而只能作为机制线索，不能直接把该夹具方案放进同窗口产品。
+  当时typecheck/lint/docs外产品scope通过，Windows打包、物理设备与跨境未运行；#16未提交或发布。
 - RECORDED：原[战略PO对话](https://chatgpt.com/g/g-p-6a4aab478af48191b7e4c5e4e3dfcb4d-ezde-you-xi/c/6ac2188a-8b8c-83ee-ab67-968c584fe99f)，
-  2026-10-05 19:27回报后完整答复；其建议不增加权限。对应用会话3600秒、超时、具体接口和独立媒体启动配置管道的选择为A的书面提案，须由Jack随规格审阅。
+  2026-10-05完整答复；其建议不增加权限。原3600秒应用会话、超时与独立媒体配置管道已随PR15签认。
+  Jack于2026-10-06确认本次修订方向；本修订PR待审阅合并，产品检查继续独立。
 - 官方依据：[LiveKit token寿命/撤销](https://docs.livekit.io/frontends/reference/tokens-grants/)，
   [固定JS v2.22.3信令](https://github.com/livekit/client-sdk-js/blob/v2.22.3/src/api/SignalClient.ts)，
   [固定信令URL构造](https://github.com/livekit/client-sdk-js/blob/v2.22.3/src/api/utils.ts)，
+  [固定SFU认证头优先级](https://github.com/livekit/livekit/blob/v1.13.7/pkg/service/auth.go)，
+  [固定Room设备监听](https://github.com/livekit/client-sdk-js/blob/v2.22.3/src/room/Room.ts)，
+  [固定SDK刷新token状态](https://github.com/livekit/client-sdk-js/blob/v2.22.3/src/room/RTCEngine.ts)，
+  [Electron原生请求头](https://www.electronjs.org/docs/latest/api/web-request#webrequestonbeforesendheadersfilter-listener)，
   [初次连接选项](https://docs.livekit.io/reference/client-sdk-js/interfaces/RoomConnectOptions.html)，
   [重连策略](https://docs.livekit.io/reference/client-sdk-js/interfaces/ReconnectPolicy.html)，
   [Electron上下文隔离](https://www.electronjs.org/docs/latest/tutorial/context-isolation)、
   [沙箱](https://www.electronjs.org/docs/latest/tutorial/sandbox)、
   [权限入口](https://www.electronjs.org/docs/latest/api/session)。
   资料支持接口存在，不保证本组合运行；动态API文档显示的版本不能替代锁定版本测试。
-- NOT_RUN：T2依赖、沙箱preload兼容、真实本地媒体、物理设备、双设备及跨境。
-  T1工程交付、Jack的规格签认与真人产品验收分别保留事实。
+- NOT_RUN（本修订）：独立媒体上下文的实际开发/packaged修复、刷新票据后失败链、
+  播放用户激活、物理设备、双设备及跨境。本轮不安装依赖、不采购部署、不运行设备采集。
+  T1工程交付、T2方向确认、具体PR合并及真人产品验收分别保留事实。
