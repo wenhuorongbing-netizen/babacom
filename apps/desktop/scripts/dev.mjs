@@ -89,14 +89,19 @@ export async function startStartupPipe(configuration) {
 }
 
 
-export async function startMediaService(scenario = 'ready') {
+export async function startRealMediaService(scenario = 'ready') {
+  return startMediaService(scenario, 'registry');
+}
+
+export async function startMediaService(scenario = 'ready', provider = 'fixture') {
   const child = spawn('uv', ['run', '--frozen', '--directory', join(root, 'apps/api'),
-    'python', '../../tests/voice/local_media_service.py', '--scenario', scenario], {
+    'python', '../../tests/voice/local_media_service.py', '--scenario', scenario, '--provider', provider], {
     cwd: root, env: { ...process.env, PYTHONPATH: join(root, 'apps/api') },
     stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
   });
   let errors = '';
   let requests = 0;
+  const responses = [];
   child.stderr.on('data', (chunk) => { errors += String(chunk); });
   const reader = createInterface({ input: child.stdout });
   const waiting = new Map();
@@ -116,6 +121,7 @@ export async function startMediaService(scenario = 'ready') {
     try {
       const event = JSON.parse(line);
       if (event.event === 'request') requests = event.count;
+      if (event.event === 'response' && Number.isInteger(event.status)) responses.push(event.status);
       waiting.get(event.requestId)?.(event);
     } catch { /* private fixture events only */ }
   });
@@ -126,7 +132,7 @@ export async function startMediaService(scenario = 'ready') {
     child.stdin.write(JSON.stringify({ command: name, requestId }) + '\n');
   });
   return {
-    ...handshake, requests: () => requests, command,
+    ...handshake, requests: () => requests, responses: () => [...responses], command,
     diagnostics: () => errors,
     close: async () => {
       if (child.exitCode !== null) { reader.close(); return; }
@@ -401,21 +407,25 @@ async function main() {
     }
     return;
   }
-  if (!process.argv.includes('--local-test')) {
-    console.error('Supply a controlled provider configuration, or explicitly use --local-test.');
+  const realProviders = process.argv.includes('--local-real');
+  if (!process.argv.includes('--local-test') && !realProviders) {
+    console.error('Supply a controlled provider configuration, or explicitly use --local-test / --local-real.');
     process.exitCode = 1;
     return;
   }
   let service;
   let renderer;
   let startup;
+  let mediaStartup;
   try {
     await buildDesktop({ renderer: false });
-    service = await startTestService();
+    service = realProviders ? await startRealMediaService() : await startTestService();
     renderer = await startRenderer();
     startup = await startStartupPipe(service.configuration);
+    if (realProviders) mediaStartup = await startStartupPipe(service.media);
     const electron = createRequire(import.meta.url)('electron');
-    const child = spawn(electron, [join(desktop, 'dist/main/main.cjs'), '--babacom-startup-pipe=' + startup.path], {
+    const child = spawn(electron, [join(desktop, 'dist/main/main.cjs'), '--babacom-startup-pipe=' + startup.path,
+      ...(mediaStartup ? ['--babacom-media-pipe=' + mediaStartup.path] : [])], {
       env: { ...process.env, BABACOM_RENDERER_URL: renderer.url },
       stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true,
     });
@@ -425,7 +435,7 @@ async function main() {
     });
     process.exitCode = code ?? 1;
   } finally {
-    await Promise.allSettled([renderer?.close(), startup?.close(), service?.close()]);
+    await Promise.allSettled([renderer?.close(), startup?.close(), mediaStartup?.close(), service?.close()]);
   }
 }
 

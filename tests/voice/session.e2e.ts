@@ -5,11 +5,150 @@ import { mediaSessionSchema } from '@babacom/contracts';
 import type { ElectronApplication, Page } from '@playwright/test';
 import { join } from 'node:path';
 import { desktop } from '../../apps/desktop/scripts/build.mjs';
-import { startRenderer, startStartupPipe, startTestService, startMediaService } from '../../apps/desktop/scripts/dev.mjs';
+import { startRenderer, startStartupPipe, startTestService, startMediaService, startRealMediaService } from '../../apps/desktop/scripts/dev.mjs';
 import type { StartupConfiguration, MediaStartup, AdmissionSuccess, MediaRuntimeCommand } from '@babacom/contracts';
 import { MediaSession } from '../../apps/desktop/src/main/media-session';
 
+test('real finite session enters and leaves SFU muted, preserves identity after rename, and refuses reissue after revocation', async () => {
+  const service = await startRealMediaService();
+  try {
+    const running = await launch(service.configuration, service.media);
+    try {
+      let identity: string | undefined;
+      for (const name of ['真实准入玩家', '更改显示昵称']) {
+        await prepare(running, name);
+        await running.page.getByRole('button', { name: '加入语音房间', exact: true }).click();
+        const region = running.page.getByRole('region', { name: '语音房间' });
+        await expect(region.getByRole('status')).toContainText('已进入语音房间', { timeout: 30_000 });
+        const snapshot = await running.page.evaluate(() => window.media.getSnapshot());
+        const local = snapshot.members.find((member) => member.isLocal);
+        expect(local?.displayName).toBe(name);
+        expect(snapshot.microphone).toBe('off');
+        expect(snapshot.playback).toBe('off');
+        if (identity) expect(local?.identity).toBe(identity);
+        else identity = local?.identity;
+        expect(identity).toBeTruthy();
+        expect((await service.command('inspect')).participants).toEqual([{ identity, tracks: 0 }]);
+        expect((await service.command('inspect-room-b')).participants).toEqual([]);
+        await running.page.getByRole('button', { name: '离开语音房间' }).click();
+        await expect(running.page.getByLabel('展示昵称')).toBeVisible();
+        await expect.poll(async () => (await service.command('inspect')).participants.length).toBe(0);
+      }
+      await service.command('revoke-subject');
+      await running.page.getByLabel('展示昵称').fill('撤销后玩家');
+      await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
+      await expect(running.page.getByRole('status')).toContainText('会话无效');
+      expect(await running.page.evaluate(() => window.media.join())).toMatchObject({ code: 'NOT_PREPARED' });
+      expect(running.application.windows()).toHaveLength(1);
+      expect((await service.command('inspect')).participants).toEqual([]);
+      expect(service.responses()).toEqual([200, 200, 401]);
+      expect(running.browserCredentialLeak()).toBe(false);
+    } finally { await running.close(); }
+  } finally { await service.close(); }
+});
+
 test.describe.configure({ timeout: 90_000 });
+
+for (const scenario of ['expired-session', 'revoked-session', 'unauthorized-room', 'missing-action']) {
+  test('real finite admission refuses ' + scenario + ' before creating a media context', async () => {
+    const service = await startRealMediaService(scenario);
+    try {
+      const running = await launch(service.configuration, service.media);
+      try {
+        await running.page.getByLabel('展示昵称').fill('真实拒绝用例');
+        await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
+        const unauthenticated = scenario === 'expired-session' || scenario === 'revoked-session';
+        await expect(running.page.getByRole('status')).toContainText(unauthenticated ? '会话无效' : '没有进入这个房间的权限');
+        expect(service.responses()).toEqual([unauthenticated ? 401 : 403]);
+        expect(await running.page.evaluate(() => window.media.join())).toMatchObject({ code: 'NOT_PREPARED' });
+        expect(running.application.windows()).toHaveLength(1);
+        expect((await service.command('inspect')).participants).toEqual([]);
+        expect((await service.command('inspect-room-b')).participants).toEqual([]);
+        expect(running.browserCredentialLeak()).toBe(false);
+      } finally { await running.close(); }
+    } finally { await service.close(); }
+  });
+}
+
+test('real finite admission UI preserves six room tickets per rolling minute', async () => {
+  const service = await startRealMediaService();
+  try {
+    const running = await launch(service.configuration, service.media);
+    try {
+      for (let index = 0; index < 6; index++) {
+        await prepare(running, '额度玩家' + index);
+        await running.page.getByRole('button', { name: '取消准备', exact: true }).click();
+        await expect(running.page.getByRole('status')).not.toContainText('准备完成');
+      }
+      await running.page.getByRole('button', { name: '准备入房', exact: true }).click();
+      await expect(running.page.getByRole('status')).toContainText('请求过快');
+      expect(service.responses()).toEqual([200, 200, 200, 200, 200, 200, 429]);
+      expect(await running.page.evaluate(() => window.media.join())).toMatchObject({ code: 'NOT_PREPARED' });
+      expect(running.application.windows()).toHaveLength(1);
+      expect((await service.command('inspect')).participants).toEqual([]);
+      expect(running.browserCredentialLeak()).toBe(false);
+    } finally { await running.close(); }
+  } finally { await service.close(); }
+});
+
+for (const scenario of ['valid', 'bad-signature', 'expired', 'tampered-room-b']) {
+  test('real admission HTTP ticket at actual SFU: ' + scenario, async () => {
+    const service = await startRealMediaService(scenario === 'expired' ? 'expired-ticket' : 'ready');
+    let application: ElectronApplication | null = null;
+    let pipe: Awaited<ReturnType<typeof startStartupPipe>> | null = null;
+    try {
+      const ticket = await service.command('ticket');
+      expect(ticket.status).toBe(200);
+      const credentials: AdmissionSuccess = { ...ticket.credentials };
+      const segments = credentials.accessToken.split('.');
+      const claims = JSON.parse(Buffer.from(segments[1], 'base64url').toString('utf8'));
+      expect(claims.video.room).toBe('t1-room');
+      expect(claims.exp - claims.nbf).toBe(120);
+      expect(claims.sub).toBe(credentials.participantIdentity);
+      if (scenario === 'bad-signature') {
+        credentials.accessToken = segments[0] + '.' + segments[1] + '.'
+          + (segments[2][0] === 'A' ? 'B' : 'A') + segments[2].slice(1);
+      } else if (scenario === 'tampered-room-b') {
+        // This is a real attempt to change the authorized room, retaining A's signature.
+        claims.video.room = 't2-ungranted-room';
+        credentials.roomName = 't2-ungranted-room';
+        credentials.accessToken = segments[0] + '.'
+          + Buffer.from(JSON.stringify(claims)).toString('base64url') + '.' + segments[2];
+      }
+      pipe = await startStartupPipe(credentials);
+      application = await electron.launch({ args: [
+        join(desktop, '../../tests/voice/sfu-peer.cjs'), '--peer-pipe=' + pipe.path, '--peer-header-auth',
+      ] });
+      const page = await application.firstWindow();
+      let leaked = false;
+      const inspect = (text: string) => { leaked ||= /eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+/.test(text); };
+      page.on('console', (message) => inspect(message.text()));
+      page.on('pageerror', (error) => inspect(error.message));
+      const protocol = await page.context().newCDPSession(page);
+      protocol.on('Log.entryAdded', ({ entry }: { entry: { text: string } }) => inspect(entry.text));
+      protocol.on('Network.webSocketCreated', ({ url }: { url: string }) => inspect(url));
+      await protocol.send('Log.enable');
+      await protocol.send('Network.enable');
+      await expect(page.locator('#status')).toHaveText(scenario === 'valid' ? 'connected' : 'failed',
+        { timeout: 30_000 });
+      if (scenario === 'valid') {
+        expect((await service.command('inspect')).participants).toEqual([
+          { identity: credentials.participantIdentity, tracks: 0 },
+        ]);
+      } else {
+        expect((await service.command('inspect')).participants).toEqual([]);
+      }
+      expect((await service.command('inspect-room-b')).participants).toEqual([]);
+      expect(leaked, 'SFU refusal diagnostics and URLs must contain no real JWT').toBe(false);
+      expect(service.responses()).toEqual([200]);
+    } finally {
+      await application?.close();
+      await pipe?.close();
+      await service.close();
+    }
+  });
+}
+
 
 async function launch(configuration: StartupConfiguration, mediaConfiguration: MediaStartup | null = null, peerConfiguration: AdmissionSuccess | null = null) {
   const packaged = test.info().project.name === 'packaged';

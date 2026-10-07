@@ -17,13 +17,16 @@ import jwt
 import uvicorn
 
 from app.auth.provider import User
-from app.factory import ServiceConfig, create_app
+from app.auth.session import SessionRegistry
+from app.factory import Clock, ServiceConfig, create_app
 from app.permissions.policy import Channel
+from app.permissions.room_access import RoomAccess
 from app.tokens.service import AdmissionContracts, MediaTokens
 
 ROOT = Path(__file__).resolve().parents[2]
 SFU_SHA256 = "951f9466cd4450b3c3c7f1a5830a05a9bb97cc11d93cf1be9ebcd3b47cc316d1"
 ROOM = "t1-room"
+UNGRANTED_ROOM = "t2-ungranted-room"
 
 
 class FixtureAuthentication:
@@ -65,8 +68,21 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--scenario",
-        choices=["ready", "bad-signature", "url-mismatch", "expired-peer"],
+        choices=[
+            "ready",
+            "bad-signature",
+            "url-mismatch",
+            "expired-peer",
+            "expired-session",
+            "revoked-session",
+            "unauthorized-room",
+            "missing-action",
+            "expired-ticket",
+        ],
         default="ready",
+    )
+    parser.add_argument(
+        "--provider", choices=["fixture", "registry"], default="fixture"
     )
     args = parser.parse_args()
     binary = Path(
@@ -132,10 +148,37 @@ def main():
             secret if args.scenario != "bad-signature" else secrets.token_urlsafe(48)
         )
         config = ServiceConfig(key, signer, livekit_url)
+        session_offset = 0.0
+        if args.provider == "registry":
+            authentication = SessionRegistry(
+                utc_seconds=lambda: time.time() + session_offset
+            )
+            session = authentication.issue(subject)
+            actions = AdmissionContracts().actions
+            authorization = RoomAccess(
+                [ROOM, UNGRANTED_ROOM],
+                {
+                    subject: {
+                        ROOM: actions[1:]
+                        if args.scenario == "missing-action"
+                        else actions
+                    }
+                },
+            )
+            if args.scenario == "expired-session":
+                session_offset = 3600.0
+            elif args.scenario == "revoked-session":
+                authentication.revoke(session)
+        else:
+            authentication = FixtureAuthentication(session, subject)
+            authorization = FixtureAuthorization(subject)
         application = create_app(
-            FixtureAuthentication(session, subject),
-            FixtureAuthorization(subject),
+            authentication,
+            authorization,
             config,
+            clock=Clock(utc_seconds=lambda: time.time() - 180)
+            if args.scenario == "expired-ticket"
+            else None,
         )
         request_count = 0
 
@@ -146,7 +189,16 @@ def main():
                 print(
                     json.dumps({"event": "request", "count": request_count}), flush=True
                 )
-            await application(scope, receive, send)
+
+            async def observed_send(message):
+                if message["type"] == "http.response.start":
+                    print(
+                        json.dumps({"event": "response", "status": message["status"]}),
+                        flush=True,
+                    )
+                await send(message)
+
+            await application(scope, receive, observed_send)
 
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
@@ -184,7 +236,9 @@ def main():
                     "configuration": {
                         "apiBase": f"http://127.0.0.1:{sock.getsockname()[1]}",
                         "applicationSession": session,
-                        "roomName": ROOM,
+                        "roomName": UNGRANTED_ROOM
+                        if args.scenario == "unauthorized-room"
+                        else ROOM,
                         "environment": "local-test",
                     },
                     "media": {"sfuBase": url},
@@ -200,29 +254,57 @@ def main():
                 command = json.loads(line)
                 operation = command["command"]
                 result = {"event": operation, "requestId": command["requestId"]}
-                if operation == "stop-sfu":
+                if operation in ("revoke-session", "revoke-subject", "expire-session"):
+                    if args.provider != "registry":
+                        raise ValueError(
+                            "Registry controls require explicit real providers"
+                        )
+                    if operation == "revoke-session":
+                        authentication.revoke(session)
+                    elif operation == "revoke-subject":
+                        authentication.revoke_subject(subject)
+                    else:
+                        session_offset += 3600.0
+                elif operation == "ticket":
+                    if args.provider != "registry":
+                        raise ValueError(
+                            "Real HTTP tickets require explicit real providers"
+                        )
+                    response = client.post(
+                        f"http://127.0.0.1:{sock.getsockname()[1]}/api/v1/tokens/media",
+                        headers={"Authorization": "Bearer " + session},
+                        json={"roomName": ROOM, "displayName": "真实准入玩家"},
+                    )
+                    result["status"] = response.status_code
+                    if response.status_code == 200:
+                        result["credentials"] = response.json()
+                    else:
+                        result["code"] = response.json()["code"]
+                elif operation == "stop-sfu":
                     sfu.terminate()
                     sfu.wait(timeout=5)
-                elif operation in ("inspect", "remove", "refresh"):
+                elif operation in ("inspect", "inspect-room-b", "remove", "refresh"):
+                    inspection = operation in ("inspect", "inspect-room-b")
+                    room = UNGRANTED_ROOM if operation == "inspect-room-b" else ROOM
                     now = int(time.time())
                     admin = jwt.encode(
                         {
                             "iss": key,
                             "nbf": now,
                             "exp": now + 30,
-                            "video": {"roomAdmin": True, "room": ROOM},
+                            "video": {"roomAdmin": True, "room": room},
                         },
                         secret,
                         algorithm="HS256",
                     )
                     method = (
                         "ListParticipants"
-                        if operation == "inspect"
+                        if inspection
                         else "UpdateParticipant"
                         if operation == "refresh"
                         else "RemoveParticipant"
                     )
-                    payload = {"room": ROOM}
+                    payload = {"room": room}
                     if operation in ("remove", "refresh"):
                         payload["identity"] = subject
                     if operation == "refresh":
@@ -237,7 +319,7 @@ def main():
                         json=payload,
                     )
                     if (
-                        operation == "inspect"
+                        inspection
                         and response.status_code == 404
                         and response.json().get("code") == "not_found"
                     ):
@@ -245,7 +327,7 @@ def main():
                         print(json.dumps(result), flush=True)
                         continue
                     response.raise_for_status()
-                    if operation == "inspect":
+                    if inspection:
                         result["participants"] = [
                             {
                                 "identity": p["identity"],
