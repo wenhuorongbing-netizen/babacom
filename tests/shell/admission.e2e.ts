@@ -501,8 +501,13 @@ test('the distributed application contains only bundled client resources and no 
     expect(files).toContain('dist/main/main.cjs');
     expect(files).toContain('dist/main/preload.cjs');
     expect(files).toContain('dist/renderer/index.html');
+    expect(files).toContain('dist/main/media-preload.cjs');
+    expect(files).toContain('dist/media/media.html');
     for (const file of files) {
-      expect(file === 'package.json' || ['dist/main/main.cjs', 'dist/main/preload.cjs', 'dist/renderer/index.html'].includes(file)
+      expect(file === 'package.json' || [
+        'dist/main/main.cjs', 'dist/main/preload.cjs', 'dist/renderer/index.html',
+        'dist/main/media-preload.cjs', 'dist/media/media.html',
+      ].includes(file)
         || /^dist\/renderer\/assets\/[^/]+\.(js|css)$/.test(file), 'Only bundled application resources').toBe(true);
     }
     const resourceDirectory = join(desktop, 'build/windows/win-unpacked/resources');

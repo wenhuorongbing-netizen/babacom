@@ -14,3 +14,9 @@ export function TextInput({ label, id, ...props }: InputHTMLAttributes<HTMLInput
 export function StatusFeedback({ children, state }: { children: ReactNode; state: string }) {
   return <p className="status" role="status" aria-live="polite" aria-atomic="true" data-state={state}>{children}</p>;
 }
+
+export function List({ label, items }: { label: string; items: readonly { key: string; content: ReactNode }[] }) {
+  return <ul className="field" aria-label={label}>
+    {items.map((item) => <li key={item.key}>{item.content}</li>)}
+  </ul>;
+}

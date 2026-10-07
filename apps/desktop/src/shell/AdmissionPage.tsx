@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { admissionSchema } from '@babacom/contracts';
 import type { AdmissionSummary, RendererResult } from '@babacom/contracts';
 import { Button, StatusFeedback, TextInput } from '@babacom/ui';
@@ -16,13 +17,15 @@ function normalizeName(raw: string): string | null {
   return value;
 }
 
-export function AdmissionPage() {
+export function AdmissionPage({ children, onPreparedChange }: { children?: ReactNode; onPreparedChange?: (ready: boolean) => void }) {
   const [name, setName] = useState('');
   const [state, setState] = useState<State>({ status: 'idle' });
   const [retryUntil, setRetryUntil] = useState(0);
   const [now, setNow] = useState(Date.now());
   const inFlight = useRef(false);
   const operation = useRef(0);
+
+  useEffect(() => { onPreparedChange?.(state.status === 'ready'); }, [state, onPreparedChange]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 250);
@@ -103,5 +106,6 @@ export function AdmissionPage() {
       </dl> : null}
       <p className="hint">{t('notConnected')}</p>
     </section>
+    {children}
   </main>;
 }

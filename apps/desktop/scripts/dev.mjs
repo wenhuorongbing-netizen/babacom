@@ -25,6 +25,7 @@ export async function startStartupPipe(configuration) {
   // The script is ASCII and receives the credential solely through its stdin.
   const script = [
     '$ErrorActionPreference = "Stop"',
+    '[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)',
     '$pipe = $null',
     '$writer = $null',
     '$stage = "INPUT"',
@@ -83,6 +84,58 @@ export async function startStartupPipe(configuration) {
       const exited = new Promise((resolvePromise) => child.once('exit', resolvePromise));
       child.kill();
       await exited;
+    },
+  };
+}
+
+
+export async function startMediaService(scenario = 'ready') {
+  const child = spawn('uv', ['run', '--frozen', '--directory', join(root, 'apps/api'),
+    'python', '../../tests/voice/local_media_service.py', '--scenario', scenario], {
+    cwd: root, env: { ...process.env, PYTHONPATH: join(root, 'apps/api') },
+    stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+  });
+  let errors = '';
+  let requests = 0;
+  child.stderr.on('data', (chunk) => { errors += String(chunk); });
+  const reader = createInterface({ input: child.stdout });
+  const waiting = new Map();
+  const handshake = await new Promise((resolvePromise, reject) => {
+    const timeout = setTimeout(() => { child.kill(); reject(new Error('Media fixture startup timed out')); }, 20_000);
+    child.once('error', () => { clearTimeout(timeout); reject(new Error('Media fixture unavailable')); });
+    child.once('exit', () => { clearTimeout(timeout); reject(new Error('Media fixture stopped: ' + errors)); });
+    reader.once('line', (line) => {
+      clearTimeout(timeout);
+      try {
+        if (line.length > 4096) throw new Error('Invalid private media handshake');
+        resolvePromise(JSON.parse(line));
+      } catch { child.kill(); reject(new Error('Invalid private media handshake')); }
+    });
+  });
+  reader.on('line', (line) => {
+    try {
+      const event = JSON.parse(line);
+      if (event.event === 'request') requests = event.count;
+      waiting.get(event.requestId)?.(event);
+    } catch { /* private fixture events only */ }
+  });
+  const command = (name) => new Promise((resolvePromise, reject) => {
+    const requestId = randomUUID();
+    const timeout = setTimeout(() => { waiting.delete(requestId); reject(new Error('Media fixture command timed out')); }, 7_000);
+    waiting.set(requestId, (event) => { clearTimeout(timeout); waiting.delete(requestId); resolvePromise(event); });
+    child.stdin.write(JSON.stringify({ command: name, requestId }) + '\n');
+  });
+  return {
+    ...handshake, requests: () => requests, command,
+    diagnostics: () => errors,
+    close: async () => {
+      if (child.exitCode !== null) { reader.close(); return; }
+      const exited = new Promise((resolvePromise) => child.once('exit', resolvePromise));
+      child.stdin.end();
+      const timeout = setTimeout(() => child.kill(), 15_000);
+      await exited;
+      clearTimeout(timeout);
+      reader.close();
     },
   };
 }

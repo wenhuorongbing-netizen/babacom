@@ -17,6 +17,7 @@
     "@babacom/contracts": "0.1.0",
     "@babacom/ui": "0.1.0",
     "ajv": "8.20.0",
+    "livekit-client": "2.22.3",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

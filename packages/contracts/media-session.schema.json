@@ -1,0 +1,332 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$ref": "#/$defs/snapshot",
+  "$defs": {
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "isLocal": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "identity",
+        "displayName",
+        "isLocal"
+      ]
+    },
+    "mediaStartup": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sfuBase": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "sfuBase"
+      ]
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "idle",
+            "connecting",
+            "connected",
+            "leaving",
+            "failed",
+            "cleanup-failed"
+          ]
+        },
+        "sessionId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9-]{36}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "microphone": {
+          "const": "off"
+        },
+        "playback": {
+          "const": "off"
+        },
+        "members": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/member"
+          }
+        },
+        "audioReceiving": {
+          "type": "boolean"
+        },
+        "code": {
+          "enum": [
+            "NOT_CONFIGURED",
+            "NOT_PREPARED",
+            "EXPIRED",
+            "UNAPPROVED_SFU",
+            "CONNECT_FAILED",
+            "CONNECT_TIMEOUT",
+            "CLEANUP_FAILED",
+            "FORBIDDEN",
+            "INVALID_COMMAND"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "sessionId",
+        "microphone",
+        "playback",
+        "members",
+        "audioReceiving"
+      ]
+    },
+    "command": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "join"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "snapshot"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "cancelJoin"
+            },
+            "sessionId": {
+              "type": "string",
+              "pattern": "^[a-f0-9-]{36}$"
+            }
+          },
+          "required": [
+            "type",
+            "sessionId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "leave"
+            },
+            "sessionId": {
+              "type": "string",
+              "pattern": "^[a-f0-9-]{36}$"
+            }
+          },
+          "required": [
+            "type",
+            "sessionId"
+          ]
+        }
+      ]
+    },
+    "runtimeCommand": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "start"
+            },
+            "sessionId": {
+              "type": "string",
+              "pattern": "^[a-f0-9-]{36}$"
+            },
+            "livekitUrl": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "roomName": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "participantIdentity": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "sessionId",
+            "livekitUrl",
+            "roomName",
+            "participantIdentity"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "stop"
+            },
+            "sessionId": {
+              "type": "string",
+              "pattern": "^[a-f0-9-]{36}$"
+            }
+          },
+          "required": [
+            "type",
+            "sessionId"
+          ]
+        }
+      ]
+    },
+    "runtimeEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "connected"
+            },
+            "sessionId": {
+              "type": "string",
+              "pattern": "^[a-f0-9-]{36}$"
+            },
+            "members": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/member"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "sessionId",
+            "members"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "members"
+            },
+            "sessionId": {
+              "type": "string",
+              "pattern": "^[a-f0-9-]{36}$"
+            },
+            "members": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/member"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "sessionId",
+            "members"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "receiving"
+            },
+            "sessionId": {
+              "type": "string",
+              "pattern": "^[a-f0-9-]{36}$"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "sessionId",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "failed"
+            },
+            "sessionId": {
+              "type": "string",
+              "pattern": "^[a-f0-9-]{36}$"
+            }
+          },
+          "required": [
+            "type",
+            "sessionId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "ended"
+            },
+            "sessionId": {
+              "type": "string",
+              "pattern": "^[a-f0-9-]{36}$"
+            }
+          },
+          "required": [
+            "type",
+            "sessionId"
+          ]
+        }
+      ]
+    }
+  }
+}

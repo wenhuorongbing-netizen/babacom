@@ -5,10 +5,11 @@ import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { createConnection } from 'node:net';
 import Ajv from 'ajv';
-import { admissionSchema, tokenClaimsSchema } from '@babacom/contracts';
+import { admissionSchema, tokenClaimsSchema, mediaSessionSchema } from '@babacom/contracts';
+import { MediaSession } from './media-session';
 import type {
   AdmissionError, AdmissionRequest, AdmissionSuccess, MediaClaims,
-  RendererResult, StartupConfiguration,
+  RendererResult, StartupConfiguration, MediaStartup, MediaCommand, MediaRuntimeEvent, MediaRuntimeCommand,
 } from '@babacom/contracts';
 
 const ajv = new Ajv({ strict: true });
@@ -21,6 +22,12 @@ const validSuccess = validator<AdmissionSuccess>('success');
 const validError = validator<AdmissionError>('error');
 const validClaims = ajv.compile<MediaClaims>(tokenClaimsSchema);
 
+const mediaValidator = <T>(definition: string) => ajv.compile<T>({ ...mediaSessionSchema, $ref: '#/$defs/' + definition });
+const validMediaStartup = mediaValidator<MediaStartup>('mediaStartup');
+const validMediaCommand = mediaValidator<MediaCommand>('command');
+const validRuntimeEvent = mediaValidator<MediaRuntimeEvent>('runtimeEvent');
+let mediaConfiguration: MediaStartup | null = null;
+let media: MediaSession | null = null;
 let configuration: StartupConfiguration | null = null;
 let window: BrowserWindow | null = null;
 let approvedPage = '';
@@ -29,6 +36,113 @@ let generation = 0;
 // Only the main process retains this response; the renderer gets four public fields.
 let credentials: AdmissionSuccess | null = null;
 let expiry: NodeJS.Timeout | null = null;
+
+type MediaContext = {
+  window: BrowserWindow; id: string; authorization: string | null; valid: boolean; ready: boolean;
+  destroyTimer: NodeJS.Timeout | null;
+};
+let mediaContext: MediaContext | null = null;
+const mediaPage = () => pathToFileURL(join(__dirname, '../media/media.html')).href;
+
+function destroyMediaContext(context: MediaContext) {
+  context.authorization = null;
+  context.valid = false;
+  if (!context.window.isDestroyed()) context.window.destroy();
+}
+
+function runMedia(command: MediaRuntimeCommand, startup?: AdmissionSuccess) {
+  if (command.type === 'stop') {
+    const context = mediaContext;
+    if (!context || context.id !== command.sessionId) return;
+    context.authorization = null;
+    context.valid = false;
+    context.destroyTimer = setTimeout(() => destroyMediaContext(context), 4_500);
+    if (context.ready && !context.window.webContents.isDestroyed()) {
+      context.window.webContents.send('media:run', command);
+    } else destroyMediaContext(context);
+    return;
+  }
+  if (!startup || mediaContext) {
+    media?.receive({ type: 'failed', sessionId: command.sessionId });
+    return;
+  }
+  const page = mediaPage();
+  const target = new URL(startup.livekitUrl);
+  const mediaWindow = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      preload: join(__dirname, 'media-preload.cjs'), partition: 'media-' + randomUUID(),
+      contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true, webviewTag: false,
+    },
+  });
+  const context: MediaContext = { window: mediaWindow, id: command.sessionId,
+    authorization: startup.accessToken, valid: true, ready: false, destroyTimer: null };
+  mediaContext = context;
+  const contents = mediaWindow.webContents;
+  const redirects = new Set<number>();
+  const current = () => mediaContext === context && context.valid && !contents.isDestroyed()
+    && media?.snapshot.sessionId === context.id;
+  const signalRequest = (details: Electron.OnBeforeRequestListenerDetails | Electron.OnBeforeSendHeadersListenerDetails) => {
+    const url = new URL(details.url);
+    return current() && contents.mainFrame.frames.length === 0 && details.webContentsId === contents.id
+      && details.frame === contents.mainFrame && details.frame.url === page && contents.getURL() === page
+      && details.method === 'GET' && !redirects.has(details.id)
+      && url.hostname === target.hostname && url.port === target.port && !url.username && !url.password && !url.hash
+      && ['ws:', 'http:'].includes(url.protocol)
+      && ['/rtc', '/rtc/v1', '/rtc/validate', '/rtc/v1/validate'].includes(url.pathname);
+  };
+  contents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  contents.session.setPermissionCheckHandler(() => false);
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  contents.on('will-navigate', (event) => event.preventDefault());
+  contents.on('will-frame-navigate', (event) => event.preventDefault());
+  contents.on('will-attach-webview', (event) => event.preventDefault());
+  // Chromium can attribute about:blank child requests to their parent. The
+  // static media domain therefore loses authorization as soon as a child exists.
+  contents.on('frame-created', (_event, { frame }) => {
+    if (frame && !frame.parent) return;
+    context.authorization = null;
+    media?.stop(context.id, 'CONNECT_FAILED');
+  });
+  contents.session.webRequest.onBeforeRequest((details, callback) => {
+    callback({ cancel: !(current() && details.url === page && details.method === 'GET'
+      && details.resourceType === 'mainFrame' && !redirects.has(details.id) || signalRequest(details)) });
+  });
+  contents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+    const headers = { ...details.requestHeaders };
+    for (const key of Object.keys(headers)) if (key.toLowerCase() === 'authorization') delete headers[key];
+    if (signalRequest(details) && context.authorization) headers.Authorization = 'Bearer ' + context.authorization;
+    callback({ requestHeaders: headers });
+  });
+  contents.session.webRequest.onBeforeRedirect((details) => {
+    redirects.add(details.id);
+    context.authorization = null;
+    if (current()) media?.stop(context.id, 'CONNECT_FAILED');
+  });
+  contents.once('destroyed', () => {
+    if (context.destroyTimer) clearTimeout(context.destroyTimer);
+    context.destroyTimer = null;
+    context.authorization = null;
+    context.valid = false;
+    if (mediaContext !== context) return;
+    mediaContext = null;
+    if (media?.snapshot.status !== 'leaving') media?.stop(context.id, 'CONNECT_FAILED');
+    media?.destroyed(context.id);
+  });
+  contents.on('render-process-gone', () => {
+    context.authorization = null;
+    media?.stop(context.id, 'CONNECT_FAILED');
+    destroyMediaContext(context);
+  });
+  void mediaWindow.loadURL(page).then(() => {
+    if (!current()) { destroyMediaContext(context); return; }
+    context.ready = true;
+    contents.send('media:run', command);
+  }).catch(() => {
+    media?.stop(context.id, 'CONNECT_FAILED');
+    destroyMediaContext(context);
+  });
+}
 
 function clearCredentials() {
   credentials = null;
@@ -50,11 +164,12 @@ function trustedSender(event: IpcMainInvokeEvent): boolean {
     && window.webContents.getURL() === approvedPage);
 }
 
-function readStartup(): Promise<StartupConfiguration> {
+function readPipe<T>(name: string, validate: (value: unknown) => value is T): Promise<T> {
   return new Promise((resolve, reject) => {
     const prefix = '\\\\.\\pipe\\babacom-';
-    const argument = process.argv.find((arg) => arg.startsWith('--babacom-startup-pipe='));
-    const path = argument?.slice('--babacom-startup-pipe='.length);
+    const flag = '--babacom-' + name + '-pipe=';
+    const argument = process.argv.find((arg) => arg.startsWith(flag));
+    const path = argument?.slice(flag.length);
     if (!path?.startsWith(prefix) || !/^[a-f0-9-]{36}$/.test(path.slice(prefix.length))) {
       reject(new Error('Missing controlled startup configuration'));
       return;
@@ -63,7 +178,7 @@ function readStartup(): Promise<StartupConfiguration> {
     let finished = false;
     let text = '';
     const timeout = setTimeout(() => finish(), 15_000);
-    const finish = (value?: StartupConfiguration) => {
+    const finish = (value?: T) => {
       if (finished) return;
       finished = true;
       clearTimeout(timeout);
@@ -80,15 +195,49 @@ function readStartup(): Promise<StartupConfiguration> {
       if (end < 0) return;
       try {
         const value: unknown = JSON.parse(text.slice(0, end));
-        if (!validStartup(value)) { finish(); return; }
-        const address = new URL(value.apiBase);
-        if (address.hostname !== '127.0.0.1' || !address.port || address.port === '0') { finish(); return; }
+        if (!validate(value)) { finish(); return; }
         finish(value);
       } catch { finish(); }
     });
     socket.on('end', () => finish());
     socket.on('error', () => finish());
   });
+}
+
+function readStartup(): Promise<StartupConfiguration> {
+  return readPipe('startup', (value): value is StartupConfiguration => {
+    if (!validStartup(value)) return false;
+    const address = new URL(value.apiBase);
+    return address.hostname === '127.0.0.1' && Boolean(address.port) && address.port !== '0';
+  });
+}
+
+function approvedSfu(value: unknown): value is MediaStartup {
+  if (!validMediaStartup(value)) return false;
+  try {
+    const url = new URL(value.sfuBase);
+    return url.protocol === 'ws:' && url.hostname === '127.0.0.1' && Boolean(url.port) && url.port !== '0'
+      && url.pathname === '/' && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
+}
+
+async function mediaCommand(event: IpcMainInvokeEvent, value: unknown) {
+  if (!media) throw new Error('Media unavailable');
+  if (!trustedSender(event)) return {
+    status: 'failed', sessionId: null, microphone: 'off', playback: 'off',
+    members: [], audioReceiving: false, code: 'FORBIDDEN',
+  };
+  if (!validMediaCommand(value)) return media.reject('INVALID_COMMAND');
+  if (value.type === 'snapshot') return media.snapshot;
+  if (value.type === 'leave' || value.type === 'cancelJoin') return media.stop(value.sessionId);
+  if (media.active) return media.snapshot;
+  if (!mediaConfiguration) return media.reject('NOT_CONFIGURED');
+  if (!credentials || pending) return media.reject('NOT_PREPARED');
+  const handed = credentials;
+  clearCredentials();
+  if (Date.parse(handed.expiresAt) <= Date.now()) return media.reject('EXPIRED');
+  if (handed.livekitUrl !== mediaConfiguration.sfuBase) return media.reject('UNAPPROVED_SFU');
+  return media.join(handed);
 }
 
 async function responseJson(response: Response): Promise<unknown> {
@@ -128,7 +277,7 @@ async function prepare(event: IpcMainInvokeEvent, value: unknown): Promise<Rende
   if (!validRequest(value) || !configuration || value.roomName !== configuration.roomName) {
     return { status: 'failure', code: 'INVALID_REQUEST' };
   }
-  if (pending) return { status: 'failure', code: 'REQUEST_FAILED' };
+  if (pending || media?.active) return { status: 'failure', code: 'REQUEST_FAILED' };
   clearCredentials();
   const current = ++generation;
   const controller = new AbortController();
@@ -167,8 +316,11 @@ async function prepare(event: IpcMainInvokeEvent, value: unknown): Promise<Rende
 
 async function main() {
   const startup = readStartup();
+  const mediaStartup = process.argv.some((arg) => arg.startsWith('--babacom-media-pipe='))
+    ? readPipe('media', approvedSfu).catch(() => null) : Promise.resolve(null);
   await app.whenReady();
   configuration = await startup;
+  mediaConfiguration = await mediaStartup;
   const devUrl = process.env.BABACOM_RENDERER_URL;
   delete process.env.BABACOM_RENDERER_URL;
   if (devUrl) {
@@ -191,6 +343,10 @@ async function main() {
     },
   });
   const contents = window.webContents;
+  media = new MediaSession(
+    runMedia,
+    (snapshot) => { if (!contents.isDestroyed()) contents.send('media:snapshot', snapshot); },
+  );
   contents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   contents.session.setPermissionCheckHandler(() => false);
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -204,13 +360,32 @@ async function main() {
       : url.protocol === 'file:' && url.pathname.startsWith(page.pathname.slice(0, page.pathname.lastIndexOf('/') + 1));
     callback({ cancel: !allowed });
   });
+  ipcMain.handle('media:command', mediaCommand);
+  ipcMain.on('media:runtime', (event, value: unknown) => {
+    const context = mediaContext;
+    if (!context || context.window.webContents.isDestroyed() || !validRuntimeEvent(value)
+      || event.sender !== context.window.webContents || event.senderFrame !== context.window.webContents.mainFrame
+      || event.senderFrame.url !== mediaPage() || context.window.webContents.getURL() !== mediaPage()
+      || value.sessionId !== context.id) return;
+    if (value.type === 'ended') { destroyMediaContext(context); return; }
+    if (!context.valid) return;
+    if (value.type === 'connected') context.authorization = null;
+    media?.receive(value);
+  });
   ipcMain.handle('admission:prepare', prepare);
   ipcMain.handle('admission:cancel', (event) => { if (trustedSender(event)) cancel(); });
   window.once('ready-to-show', () => window?.show());
   window.on('closed', () => {
+    media?.close();
+    if (mediaContext) destroyMediaContext(mediaContext);
+    mediaConfiguration = null;
     cancel(); configuration = null; window = null; app.quit();
   });
-  app.on('before-quit', () => { cancel(); configuration = null; });
+  app.on('before-quit', () => {
+    media?.close();
+    if (mediaContext) destroyMediaContext(mediaContext);
+    cancel(); configuration = null; mediaConfiguration = null;
+  });
   await window.loadURL(approvedPage);
 }
 
