@@ -1,8 +1,8 @@
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
-  testDir: '../../tests/shell',
-  testMatch: 'admission.e2e.ts',
+  testDir: '../../tests',
+  testMatch: ['**/shell/admission.e2e.ts', '**/voice/*.e2e.ts'],
   outputDir: 'build/test-results',
   workers: 1,
   retries: 0,

@@ -18,6 +18,7 @@ export async function generateContracts() {
     admissionSchema: 'admission.schema.json',
     tokenClaimsSchema: 'token-claims.schema.json',
     permissionsSchema: 'permissions.schema.json',
+    mediaSessionSchema: 'media-session.schema.json',
   })) {
     const schema = JSON.parse(await readFile(join(root, 'packages/contracts', filename), 'utf8'));
     ajv.compile(schema);
@@ -34,6 +35,13 @@ export async function generateContracts() {
   })) {
     lines.push('const ' + definition + 'Schema = { ...admissionSchema, $ref: "#/$defs/' + definition + '" } as const;');
     lines.push('export type ' + name + ' = FromSchema<typeof ' + definition + 'Schema>;');
+  }
+  for (const [name, definition] of Object.entries({
+    MediaStartup: 'mediaStartup', MediaSnapshot: 'snapshot', MediaCommand: 'command',
+    MediaRuntimeCommand: 'runtimeCommand', MediaRuntimeEvent: 'runtimeEvent',
+  })) {
+    lines.push('const media' + definition + 'Schema = { ...mediaSessionSchema, $ref: "#/$defs/' + definition + '" } as const;');
+    lines.push('export type ' + name + ' = FromSchema<typeof media' + definition + 'Schema>;');
   }
   lines.push('export type MediaClaims = FromSchema<typeof tokenClaimsSchema>;');
   lines.push('export type PermissionAction = FromSchema<typeof permissionsSchema>;');
@@ -52,10 +60,22 @@ function execute(tool, args) {
   });
 }
 
+
+export async function buildMediaPeer() {
+  await build({
+    root: desktop, configFile: false, logLevel: 'warn',
+    build: {
+      target: 'node22', outDir: 'build', emptyOutDir: false,
+      lib: { entry: join(root, 'tests/voice/sfu-peer.ts'), formats: ['cjs'], fileName: () => 'sfu-peer.cjs' },
+      rolldownOptions: { external: ['electron'] },
+    },
+  });
+}
+
 export async function buildDesktop({ renderer = true } = {}) {
   await generateContracts();
   const external = ['electron', ...builtinModules, ...builtinModules.map((name) => 'node:' + name)];
-  for (const [name, emptyOutDir] of [['main', true], ['preload', false]]) {
+  for (const [name, emptyOutDir] of [['main', true], ['preload', false], ['media-preload', false]]) {
     await build({
       root: desktop, configFile: false, logLevel: 'warn',
       build: {
@@ -66,6 +86,9 @@ export async function buildDesktop({ renderer = true } = {}) {
     });
   }
   if (renderer) await build({ root: desktop, configFile: join(desktop, 'vite.config.ts'), logLevel: 'warn' });
+  await mkdir(join(desktop, 'dist/media'), { recursive: true });
+  await cp(join(desktop, 'media.html'), join(desktop, 'dist/media/media.html'));
+  await buildMediaPeer();
 }
 
 export async function packageWindows() {
@@ -101,7 +124,7 @@ async function main() {
   } else if (process.argv.includes('--lint')) {
     await execute('eslint/bin/eslint.js', ['--config', join(desktop, 'eslint.config.mjs'),
       'apps/desktop/src', 'apps/desktop/scripts', 'apps/desktop/vite.config.ts',
-      'apps/desktop/playwright.config.ts', 'packages/ui/src', 'tests/shell']);
+      'apps/desktop/playwright.config.ts', 'packages/ui/src', 'tests/shell', 'tests/voice']);
   } else {
     if (process.argv.includes('--test-packaged')) {
       await execute('@playwright/test/cli.js', ['test', '--config', join(desktop, 'playwright.config.ts'), '--project', 'packaged']);
