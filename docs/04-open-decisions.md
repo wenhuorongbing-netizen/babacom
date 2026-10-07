@@ -111,10 +111,11 @@ Owner: 8.1
 | D6 | 一个房间还是两个 | **SPIKE (R00)** | 1.2 | 3.1 / 4.x |
 | D7 | 回声消除 | 待 PO 确认 | 3.2 | — |
 | D8 | 域名 | 待 PO 确认 | 1.1 | TLS 部署 |
-| D9 | **Tech Lead 人选** | 全局未指派；T1固定；T2 Owner已由PR15签认 | 全局：PO；T1/T2：Jack | 全局并行；T2-C2范围修订等具体docs PR签认 |
+| D9 | **Tech Lead 人选** | 全局未指派；T1固定；T2 Owner已由PR15签认 | 全局：PO；T1/T2：Jack | 全局并行；T2-C3具体docs范围PR待审阅合并 |
 | D10 | 并行度上限 | 待 Tech Lead 确认 | TL | wave 规划 |
 | D11 | 韩国服务器定位 | 待 PO 确认 | 8.1 | — |
-| D12 | 本 fork T2 媒体执行与凭据边界 | **T2-C2修订待签认；兼容SPIKE** | T2 Owner：Jack（PR15已签认） | 修订PR合并前#16 BLOCKED；后续真实SDK/SFU验证 |
+| D12 | 本 fork T2 媒体执行与凭据边界 | **DECIDED：PR20已合并；本地兼容有证据** | T2 Owner：Jack（PR15已签认） | 整体验收未完成，#16当前打包清单阻塞见D13 |
+| D13 | T2打包资源断言的最小例外 | **DECIDED方案；具体docs PR待审阅合并** | T2 Owner：Jack | #16保持BLOCKED；合并后同步27路径与狭窄测试修复 |
 
 **本 fork 发布阶段校准：DECIDED（2026-10-04，用户授权修正并合并基线 PR）。**
 沿用 [01-scope-v2.md](01-scope-v2.md) 的既有 R04 范围：完整每频道权限、
@@ -147,10 +148,11 @@ Owner: 8.1
 原T2-C规格已由Jack签认并在[PR15](https://github.com/wenhuorongbing-netizen/babacom/pull/15)合并。
 T2-01诊断使同窗口执行、零设备枚举与JWT信令URL例外受阻；本节修订为T2-C2，
 完整规格见[T2-spec.md](T2-spec.md)，逐文件范围见[t2清单](../.agents/modules/t2.md)。
-Jack已确认修订方向；具体Module: docs修订PR待其审阅合并后生效，#16保持BLOCKED。
-不关闭T1父票、不扩展全局D9；方向确认、文档签认和产品/设备验收分别判断。
+Jack已批准并合并具体T2-C2修订[PR20](https://github.com/wenhuorongbing-netizen/babacom/pull/20)，该契约前置已完成。
+#16当前因T1打包资源清单冲突保持BLOCKED，T2-C3例外与解除条件见D13。
+不关闭T1父票、不扩展全局D9；方案签认、具体文档PR合并和产品/设备验收分别判断。
 
-### D12 媒体执行与凭据边界 —— 修订待签认，实际兼容仍为SPIKE
+### D12 媒体执行与凭据边界 —— PR20已签认，本地兼容有证据
 
 main仅在明确join后创建专用隐藏BrowserWindow，使用全新非持久partition、静态页面与隔离沙箱媒体preload。
 业务UI和媒体域使用不同webContents；UI只获得有限命令和快照，不能请求或借用媒体认证头。
@@ -170,7 +172,9 @@ SDK被动枚举仅允许在当前媒体上下文生存期间发生，不申请�
 不依赖Room断连或GC证明SDK监听销毁。超时进入cleanup-failed隔离，不自动允许重入。
 通用可访问成员列表加入共享UI导出，只接收稳定键与展示内容，不依赖媒体schema。
 
-| 项目 | T2-C2修订 | 当前状态/解除条件 |
+以下表格为2026-10-06的T2-C2修订检查点，PR20已合并；其中旧NOT_RUN不代表2026-10-07产品运行状态，当前证据与阻塞见D13。
+
+| 项目 | T2-C2修订 | 2026-10-06状态/解除条件 |
 |---|---|---|
 | 签认者与集成 | 本fork T2唯一Owner为Jack；A起草/验证并串行处理获准Issue | PR15已签认；修订方向已确认，具体修订PR待Jack审阅合并 |
 | 测试主边界 | 实际Windows应用→HTTP准入→真实SFU；复用既有provider与can | RECORDED旧诊断9例4通过5失败；独立上下文实际修复/打包及刷新后失败验证NOT_RUN |
@@ -187,3 +191,24 @@ T1历史段落中的NOT_RUN是2026-10-04规划检查点，不作为当前工程�
 T1已在[PR13](https://github.com/wenhuorongbing-netizen/babacom/pull/13)合并；
 本修订基线为PR15的cb0fd0c71c4a4b99796fc1e37370b6b91fe4fd25，T1最终真人/产品签认仍独立。
 T2不签收完整R01或Alpha，10语音/1共享/9观看/至少2小时目标保持原样。
+
+### D13 打包资源断言例外 —— 最小方案已签认，具体范围PR待合并（2026-10-07）
+
+用户已签认独立契约/测试修订票[#21](https://github.com/wenhuorongbing-netizen/babacom/issues/21)的最小方案。
+权威测试边界见[T2规格的T2-C3打包资源断言例外](T2-spec.md)，文件上界见[t2清单](../.agents/modules/t2.md)。
+只授权后续#16的分发资源用例增加两项必需媒体文件的存在性检查与精确白名单；
+其他原断言、其他T1测试及辅助函数保持原样，不能把提前失败后的秘密扫描写成PASS。
+
+具体Module: docs PR仅改本文件、T2规格与t2清单三份文档，不夹带产品或测试。
+相对已合并PR20，总上界34→35仅增加`tests/shell/admission.e2e.ts`；
+具体PR经Jack审阅合并后，先同步#16的26→27路径与明确测试修复例外，再继续其产品分支。
+该路径既有CODEOWNERS已指向Jack，无需改所有权文件；#17/#18不获得此测试路径权限。
+方案签认、文档校验或Issue关闭单独不解除#16；#14与M0/R01/Alpha继续独立验收。
+
+RECORDED修订前实际证据（产品代码树`59875dfb3b6c5a0f670aee934cf96b6de70cc0d2`）：
+开发52 passed / 3 packaged-only skipped (11.6m)，exit 0；
+EXE54 passed / 1 failed (9.7m)，exit 1，32条T2媒体用例全部通过。
+失败断言为`Only bundled application resources`（Expected true，Received false）；
+ASAR实际新增`dist/main/media-preload.cjs`与`dist/media/media.html`，
+该用例后续分发资源秘密扫描NOT_RUN。本轮docs未重跑产品，不签收#16；
+后续必须完整开发/EXE回归0 failed且秘密扫描实际执行。物理设备、人耳与中德仍NOT_RUN/HOLD。

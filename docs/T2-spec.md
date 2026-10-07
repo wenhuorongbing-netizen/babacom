@@ -1,8 +1,8 @@
 # T2 — 从受控准入走向真实桌面语音
 
-> T2-C2 契约修订草案 · 2026-10-06 · 本 fork T2 唯一契约签认与集成裁决者为 Jack。
-> 原 T2-C 已由 Jack 批准并在 PR15 合并；本次三项修订方向已确认。
-> 本修订的具体 Module: docs PR 待 Jack 审阅合并后生效；#16 保持 BLOCKED。
+> T2-C3 打包资源断言修订 · 2026-10-07 · 本 fork T2 唯一契约签认与集成裁决者为 Jack。
+> T2-C / T2-C2 已分别在 PR15 / PR20 合并；Jack 已签认本次最小测试修订方案。
+> 本次具体 Module: docs 范围 PR 经 Jack 审阅合并并同步 #16 子集后生效；此前 #16 保持 BLOCKED。
 > 方向确认和文档合并均不等于产品修复、物理设备同意或媒体验收。
 
 ## Problem Statement
@@ -11,17 +11,18 @@ T1 已交付可启动的 Windows 客户端和本地受控准入，但“准备�
 
 T2-01 的真实诊断已发现：锁定 SDK 在设备变化时被动枚举，退出后的 SDK 监听仍可响应；坏签名握手使 Chromium 网络诊断记录带 JWT 的连接 URL。现有共享组件库还缺少成员列表。用户需要保持默认闭麦、安全退出和无凭据日志，不能用隐藏失败或降低脱敏断言交付。
 
-T2-C2 将媒体执行位置与初始票据传输分开修订，并明确被动枚举的有限例外。主界面的准入准备与既有 T1 安全边界继续保留。
+T2-C2 已将媒体执行位置与初始票据传输分开修订，并明确被动枚举的有限例外。
+T2-C3 处理实际EXE中必需媒体资源与旧T1打包白名单的契约冲突，仅修订该资源断言的精确清单；主界面准入与既有安全断言继续保留。
 
 ## Solution
 
-按已合并 T2-C → T2-C2 修订 → T2-01 → T2-02 → T2-03 串行推进：
-先签认专用可销毁媒体执行域、初始认证头、被动枚举边界及共享列表范围；
+按已合并 T2-C → T2-C2 → T2-C3 打包断言修订 → T2-01 → T2-02 → T2-03 串行推进：
+专用可销毁媒体执行域、初始认证头、被动枚举边界及共享列表已由PR20签认；本次先固定打包资源测试的狭窄例外；
 再默认闭麦连接真实本地 SFU，显示真实成员并安全离开；
 随后将非 fixture 的受控会话与统一房间权限接入同一条链；
 最后在明确设备同意下开麦、静音、退出并完成真实双设备听音。
 
-本轮 T2-C2 只交付可审阅的文档与范围 PR。T2-01 的合成媒体只证明真实协议和媒体传输；
+本轮 T2-C3 只交付可审阅的文档与范围 PR，不修改测试或产品。T2-01 的合成媒体只证明真实协议和媒体传输；
 物理采集、双设备听音、中德网络和 M0 分别保留独立条件与证据。沿用现有技术栈、UI 原语和三份 T1 schema，不重建脚手架。
 
 ## User Stories
@@ -60,20 +61,23 @@ T2-C2 将媒体执行位置与初始票据传输分开修订，并明确被动�
 32. As a 受控房间维护者, I want 连接失败和信令诊断不出现真实票据, so that 短期凭据不会通过错误信息泄露。
 33. As a Windows 测试用户, I want 成员列表使用统一且可访问的共享组件, so that 控件语义与现有客户端一致。
 34. As a 审查者, I want 修订契约与范围先独立合并再修复产品, so that 可清楚区分批准的设计与尚未验收的实现。
+35. As a Windows 用户, I want EXE确实包含两个必需媒体资源, so that 已批准的独立媒体上下文可以启动。
+36. As a 审查者, I want 打包白名单只新增两个精确文件且仍检查它们存在, so that 缺失或其他额外资源继续被拒绝。
+37. As a 受控房间维护者, I want 分发秘密扫描及其他T1断言保持并实际执行, so that 资源扩展不会掩盖安全失败。
 
 ## Implementation Decisions
 
 ### 1. 基线、签认与非目标边界
 
-- 本修订基线为 PR15 合并提交 `cb0fd0c71c4a4b99796fc1e37370b6b91fe4fd25`。
+- 本次T2-C3基线为PR20合并提交 `c0064f522b7ccec3e9211f4cceb692115f51d883`；T2-C2此前基于PR15的 `cb0fd0c71c4a4b99796fc1e37370b6b91fe4fd25`。
   T1 工程基线仍是 PR13 的 `9f523711634fc21fbf3c3b0459046141c28ad82f`；
   父票 #1 最终签认与 T2 父票 #14 保持 OPEN，本文不代 Jack 关闭。
 - 技术栈保持 Electron 44.5.1、React、TypeScript、Vite、FastAPI、npm workspaces 与 uv。
   继续锁定已获准的 `livekit-client@2.22.3`，不新增 RTC 依赖或升级现有版本。
   诊断 worktree 已安装并运行该版本；本轮文档 worktree 不安装依赖。
 - Jack 已作为本 fork T2 唯一契约签认与集成 Owner 批准 PR15；A 起草、验证和串行执行获准任务。
-  2026-10-06 已确认本次修订方向；具体范围以本修订 PR 经 Jack 审阅合并为准，全局 D9 不变。
-- 同窗口媒体方案因诊断失败停止；本次改用专用媒体上下文须先完成独立文档签认。
+  2026-10-07已签认T2-C3最小方案；具体范围以本次docs PR经Jack审阅合并为准，全局D9不变。
+- 同窗口媒体方案因诊断失败停止；专用媒体上下文已通过PR20独立文档签认，本次保持该设计。
   修订方案的首轮兼容验证仍限约一个有效工作日；失败记录阻碍并重新裁定，
   不叠加 shim、修改 SDK、升级服务器或关闭安全开关。
 - 此前本地 SFU/合成实验仅为资源线索。首票必须核对缓存官方 SFU 二进制及版本/校验值，
@@ -238,9 +242,30 @@ T2-02 实现运营者预置的有限会话注册表；不能只是给 fixture �
 SDK 适配器只在真实异步顺序难以重现的拒绝/迟到轨道/发布失败/清理失败中使用可控替身；
 替身不能替代真实 Room/SFU 证据。
 
-T1 回归保持原样并确实运行。新 voice/audio/account/permission 目录须接入检查发现，
+除下述T2-C3打包资源断言例外外，T1回归保持原样并确实运行。新 voice/audio/account/permission 目录须接入检查发现，
 从输出证明用例被运行；不能以未发现新测试的全绿命令签收。
 单写者、逐票更小文件子集；代码、schema、类型生成与消费者在对应实现票中同步。
+
+### T2-C3 打包资源断言例外
+
+本例外由独立契约/测试修订票[#21](https://github.com/wenhuorongbing-netizen/babacom/issues/21)固定。
+Jack于2026-10-07签认最小方案；具体Module: docs范围PR经其审阅合并，并将#16同步为27路径及明确测试修复范围后，才可执行。
+
+只允许#16修改`tests/shell/admission.e2e.ts`中
+`the distributed application contains only bundled client resources and no runtime secrets`用例的
+必需资源存在性检查和精确文件白名单：增加`dist/main/media-preload.cjs`与`dist/media/media.html`两项。
+两文件必须存在；其余文件仍按原闭集拒绝，不能扩大成任意dist文件或目录放行。
+保留resources目录只含app.asar、会话/JWT哨兵不进入ASAR/UI/诊断、fixture与测试启动器排除等全部其他原断言。
+该用例的其他断言、所有其他T1用例及测试辅助函数零改动；冻结schema、昵称、120秒TTL、grants和限流保持原样。
+不跳过失败用例，不修改SDK、构建器或产品来隐藏新资源。#17/#18不因总上界变化获得该路径权限。
+
+原始完整结果（代码树`59875dfb3b6c5a0f670aee934cf96b6de70cc0d2`）：
+开发52 passed / 3 packaged-only skipped (11.6m)，exit 0；
+EXE54 passed / 1 failed (9.7m)，exit 1，全部32条T2媒体用例通过。
+失败为原资源白名单的`Error: Only bundled application resources; Expected: true; Received: false`。
+后续分发资源秘密扫描因提前失败尚未执行，不作为PASS；ASAR实测仅新增上述两个必需文件。
+这些是修订前RECORDED证据，本轮docs不重跑产品或声称修复通过。
+后续#16须运行完整六项客户端验证，开发与EXE测试均exit 0、0 failed，且全部原分发/秘密扫描断言实际执行，才可签收。
 
 ### 本修订新增的外部断言
 
@@ -258,7 +283,7 @@ T1 回归保持原样并确实运行。新 voice/audio/account/permission 目录
 - 两窗口的实际沙箱/隔离偏好、独立权限域、初始化失败/崩溃/销毁及打包路径均在真实 Electron 验证。
   T2-03 的启用播放还需独立媒体域的用户激活与人耳验证，不能从本轮夹具发布合成音轨推断。
 - 本次明确授权实现票同步修正 T2 专用“默认零枚举”和同窗口交接断言，保留原失败证据；
-  以默认零采集、准备零枚举、退出后零旧响应和授权隔离断言替代。T1正常测试与旧schema仍零改动。
+  以默认零采集、准备零枚举、退出后零旧响应和授权隔离断言替代。除T2-C3打包资源断言例外外，T1正常测试与旧schema仍零改动。
 - 共享成员列表检查真实成员数量/稳定身份、可访问列表语义与中文标签；不以UI元素名断言内部实现。
 
 ### 四层证据与通过条件
@@ -293,13 +318,14 @@ Alpha 的10语音/1共享/9观看/至少2小时保持原规划，T2通过不签�
 | 顺序 | 用户可见结果 | 完成条件 | 依赖/停止条件 |
 |---|---|---|---|
 | T2-C | 原规格及31路径 | Jack已批准，PR15合并 | 原文档票已完成；同窗口方案的T2-01诊断失败，T2-01不能视为完成 |
-| T2-C2 | 修订规格及34路径 | 四份文档一致；方向已确认；文档校验及Jack审阅合并 | 本轮仅文档；未合并前#16保持BLOCKED |
-| T2-01 | 闭麦进入真实本地房间、看见成员、离开并重入 | 开发/打包真实SDK；合成订阅；专用上下文销毁/重入；头认证隔离、刷新后无URL/日志凭据；共享列表与T1回归 | T2-C2合并并同步#16的新契约与26路径；依赖/本地资源核验；兼容失败不关沙箱、不再自行换架构 |
+| T2-C2 | 修订规格及34路径 | Jack已审阅并在PR20合并 | 已完成契约前置，产品验收独立 |
+| T2-C3 | 打包资源断言例外及35路径 | 三份文档一致；方案已签认；文档校验及Jack审阅合并 | 本轮仅文档；合并并同步#16的27路径与例外前保持BLOCKED |
+| T2-01 | 闭麦进入真实本地房间、看见成员、离开并重入 | 开发/打包真实SDK；合成订阅；专用上下文销毁/重入；头认证隔离、刷新后无URL/日志凭据；共享列表与T1回归 | T2-C3合并并同步#16的新契约、27路径与打包断言例外；依赖/本地资源核验；兼容失败不关沙箱、不再自行换架构 |
 | T2-02 | 非fixture主体进入获准房间，拒绝分支无媒体票 | 真实有限会话/房间provider；完整HTTP及真实SFU验票与隔离；缺provider拒绝 | 发放/到期/撤销契约明确；不声明生产登录或即时媒体撤销 |
 | T2-03 | 显式开麦、静音、退出及真实双设备通话 | 权限/迟到轨道/清理/播放回归；两台Windows人耳证据；跨境条件成立后另验 | 物理设备明确同意、两主体与资源条件；缺中德证据不签收M0 |
 
 每票使用单独 Issue，声明具体 Allowed Files 子集及依赖。既有实现票为#16、#17、#18，
-保持串行依赖；本轮单独发布T2-C2文档票与PR，不重新创建三张实现票。
+保持串行依赖；本轮单独发布T2-C3契约/测试修订票#21与docs PR，不重新创建三张实现票。
 T2父规格的签收条件是Jack书面签认及T2-01、T2-02、T2-03的双设备标准全部满足。
 中德窗口未通过时，M0与3.1/R01整体仍为HOLD，不因本地或双设备签收解除。
 无 ORM/数据库/迁移变化时 DB NOT_APPLICABLE；不能编造 alembic PASS。
@@ -312,18 +338,18 @@ T2父规格的签收条件是Jack书面签认及T2-01、T2-02、T2-03的双设�
 - 生产账号安全、已签发媒体 token 即时撤销、同主体同时多设备通话。
 - 外部 API 地址/凭据发放、采购/部署、韩国现有服务器、自动联系朋友或启动物理采集。
 - SDK fork、自研信令代理/RTC、关闭沙箱或隔离、任意 IPC/网络放行。
-- 改 T1 昵称/TTL/grants/限流，未经明确契约修订降低既有测试断言，提前宣称完整R01/M0/Alpha；本次只授权上述T2专属断言同步，正常T1测试仍零改动。
+- 改 T1 昵称/TTL/grants/限流，未经明确契约修订降低既有测试断言，提前宣称完整R01/M0/Alpha；仅授权已签认T2专属断言同步及上述T2-C3打包资源例外，其他正常T1测试仍零改动。
 
 ## Further Notes
 
 ### 本轮与后续精确范围
 
-本轮 T2-C2 的源文件仅为：
-`docs/T2-spec.md`、`docs/04-open-decisions.md`、
-`.agents/modules/t2.md`、`.github/CODEOWNERS`。所有应用、schema 与依赖文件零 diff。
+本轮T2-C3的源文件仅为：
+`docs/T2-spec.md`、`docs/04-open-decisions.md`、`.agents/modules/t2.md`。
+所有应用、测试、schema、依赖、infra、T1规格/清单与CODEOWNERS零diff。
 临时验证脚本及Issue/PR正文仅放已忽略的桌面build目录，不提交。
 
-下列34个路径是修订后 T2 实现的拟签认上界，不是本轮产品改动授权；
+下列35个路径是T2-C3修订后实现的拟签认上界，不是本轮产品或测试改动授权；
 已有或拟建状态均以本轮基线核对。每张票只使用实际需要的更小子集：
 
 ```text
@@ -361,15 +387,17 @@ tests/voice/session.e2e.ts
 tests/audio/microphone.e2e.ts
 tests/accounts/test_session.py
 tests/permissions/test_room_access.py
+tests/shell/admission.e2e.ts
 ```
 
-相对PR15只新增三个产品路径：静态媒体入口、专用媒体preload与现有共享UI导出。
-桌面打包规则已包含全部dist文件；媒体入口/预载的构建接线在既有build脚本完成，不改打包器配置。
-#16的23路径子集修订为26路径（只增加上述三条）；#17/#18按实际需要逐个声明子集。
+PR20已签认34路径；本次相对PR20仅增加`tests/shell/admission.e2e.ts`，用途严格限定于T2-C3打包资源断言例外。
+桌面打包规则已包含全部dist文件；媒体入口/预载构建接线在既有build脚本完成，不改打包器配置。
+具体docs PR合并后，将既有#16的26路径子集同步为27路径，只新增该测试路径并明确该票包含此狭窄测试修复。
+#17/#18按实际需要逐个声明子集，不包含本例外测试路径。
 
 `tests/accounts/test_session.py`属于账号测试；不新建`tests/auth`。
 已有认证/权限原语不需修改；不另建同用途permissions/service。
-正常T1测试与冻结schema不进入本轮或后续默认改动上界。
+本轮docs中的正常T1测试与冻结schema零diff；后续仅#16可执行上述狭窄测试例外，其他T1测试与冻结schema零改动。
 如实际发现必须改表外文件，停止并先走独立 docs 范围 PR。
 CODEOWNERS 为上述路径及 T2 治理文件逐个指定 Jack，只影响本 fork T2，不任命全局 D9。
 
@@ -378,13 +406,13 @@ CODEOWNERS 为上述路径及 T2 治理文件逐个指定 Jack，只影响本 fo
 本轮运行并记录退出码：
 ```powershell
 git diff --check
-node .agents/scope_guard.mjs docs --files docs/T2-spec.md docs/04-open-decisions.md .agents/modules/t2.md .github/CODEOWNERS
+node .agents/scope_guard.mjs docs --files docs/T2-spec.md docs/04-open-decisions.md .agents/modules/t2.md
 node --test .agents/scope_guard.test.mjs
 ```
-另运行不提交的可执行验证脚本，断言实际diff仅四文件、T2清单与本文34路径完全一致、
-相对PR15仅增加上述三条路径、34个产品路径与治理所有权为Jack、相对链接可解析；
-T1-spec/t1清单、全部应用/schema/依赖/infra文件零diff，原诊断worktree暂存树保持不变。
-同时断言新凭据/枚举/销毁/刷新后失败边界及文档签认状态互相一致。所有断言必须成功。
+另运行不提交的`node apps/desktop/build/t2-c3-validation-20261007.mjs`：断言实际diff恰好三文件，
+T2清单与本文同为35路径且相对PR20只增加指定测试路径，狭窄例外、#16后续27路径及合并前BLOCKED状态一致；
+全部产品/测试、T1-spec/t1清单、schema、依赖、infra、其他模块与CODEOWNERS零diff，既有Jack所有权有效，
+相对链接可解析，两个原工作副本暂存树保持不变。原C2安全边界保持。所有断言必须成功。
 
 以下为修订后实现票的 Validation；本轮文档任务 NOT_RUN，不沿用诊断结果冒充修复通过：
 ```powershell
@@ -402,12 +430,12 @@ uv run python -m ruff format --check app ../../tests/conftest.py ../../tests/tok
 uv run python -m pytest ../../tests/tokens ../../tests/ratelimit ../../tests/accounts ../../tests/permissions -v
 ```
 未来实际本地SFU、合成peer、双设备与跨境命令、输入和通过条件必须在对应Issue中固定后执行。
-本轮不把规划命令写成测试通过记录，也不重跑与四份文档无关的已通过T1产品检查。
+本轮不把规划命令写成测试通过记录，也不重跑与三份文档无关的产品检查；已有失败仍按RECORDED报告，不冒充本轮PASS。
 
 ### 来源与事实状态
 
 - VERIFIED：原规格已在[PR15](https://github.com/wenhuorongbing-netizen/babacom/pull/15)合并；
-  本修订从cb0fd0c开始。T1历史交付见[PR13](https://github.com/wenhuorongbing-netizen/babacom/pull/13)，本轮未重跑。
+  T2-C2历史修订从cb0fd0c开始；本次T2-C3从已合并PR20的c0064f5开始。T1历史交付见[PR13](https://github.com/wenhuorongbing-netizen/babacom/pull/13)，本轮未重跑。
 - RECORDED（2026-10-05诊断）：9个定向用例4通过、5失败；未连接Room设备事件枚举1次，
   实际连接/离开后计数1→2，物理采集0；坏签名触发Chromium network诊断JWT。
   头认证夹具证明有效签名/合成发布、坏签名、缺头和不同窗口拒绝；同frame UI validate却返回200，
@@ -415,7 +443,7 @@ uv run python -m pytest ../../tests/tokens ../../tests/ratelimit ../../tests/acc
   当时typecheck/lint/docs外产品scope通过，Windows打包、物理设备与跨境未运行；#16未提交或发布。
 - RECORDED：原[战略PO对话](https://chatgpt.com/g/g-p-6a4aab478af48191b7e4c5e4e3dfcb4d-ezde-you-xi/c/6ac2188a-8b8c-83ee-ab67-968c584fe99f)，
   2026-10-05完整答复；其建议不增加权限。原3600秒应用会话、超时与独立媒体配置管道已随PR15签认。
-  Jack于2026-10-06确认本次修订方向；本修订PR待审阅合并，产品检查继续独立。
+  Jack于2026-10-06确认C2方向并已批准合并PR20；2026-10-07签认C3最小方案，本次docs PR待审阅合并，产品检查继续独立。
 - 官方依据：[LiveKit token寿命/撤销](https://docs.livekit.io/frontends/reference/tokens-grants/)，
   [固定JS v2.22.3信令](https://github.com/livekit/client-sdk-js/blob/v2.22.3/src/api/SignalClient.ts)，
   [固定信令URL构造](https://github.com/livekit/client-sdk-js/blob/v2.22.3/src/api/utils.ts)，
