@@ -124,7 +124,7 @@ async function main() {
   } else if (process.argv.includes('--lint')) {
     await execute('eslint/bin/eslint.js', ['--config', join(desktop, 'eslint.config.mjs'),
       'apps/desktop/src', 'apps/desktop/scripts', 'apps/desktop/vite.config.ts',
-      'apps/desktop/playwright.config.ts', 'packages/ui/src', 'tests/shell', 'tests/voice']);
+      'apps/desktop/playwright.config.ts', 'packages/ui/src', 'tests/shell', 'tests/voice', 'tests/audio']);
   } else {
     if (process.argv.includes('--test-packaged')) {
       await execute('@playwright/test/cli.js', ['test', '--config', join(desktop, 'playwright.config.ts'), '--project', 'packaged']);

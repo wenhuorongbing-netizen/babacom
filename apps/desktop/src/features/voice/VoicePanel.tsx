@@ -11,17 +11,19 @@ export function VoicePanel({ snapshot, prepared }: { snapshot: MediaSnapshot; pr
     idle: 'mediaIdle', connecting: 'mediaConnecting', connected: 'mediaConnected',
     leaving: 'mediaLeaving', failed: 'mediaFailed', 'cleanup-failed': 'mediaCleanupFailed',
   } as const;
+  const microphoneKey = { off: 'microphoneOff', requesting: 'microphoneRequesting', on: 'microphoneOn', muted: 'microphoneMuted' } as const;
   const act = (operation: () => Promise<MediaSnapshot>) => {
     setUnavailable(false);
     void operation().catch(() => setUnavailable(true));
   };
   return <section className="card" aria-labelledby="voice-heading">
     <h2 id="voice-heading">{t('voiceHeading')}</h2>
-    <p>{t('microphoneOff')}</p>
+    <p>{t(microphoneKey[snapshot.microphone])}</p>
     {snapshot.status !== 'idle' || unavailable ? <StatusFeedback state={snapshot.status}>
       {unavailable ? t('mediaUnavailable') : snapshot.code ? t(snapshot.code) : t(statusKey[snapshot.status])}
     </StatusFeedback> : null}
-    {snapshot.status === 'connected' ? <p>{t(snapshot.audioReceiving ? 'audioReceiving' : 'audioWaiting')}</p> : null}
+    {snapshot.status === 'connected' ? <p>{t(snapshot.audioReceiving
+      ? snapshot.playback === 'on' ? 'audioReceivingActive' : 'audioReceiving' : 'audioWaiting')}</p> : null}
     <div className="actions">
       {!active ? <Button type="button" disabled={!prepared} onClick={() => act(() => window.media.join())}>
         {t('joinVoice')}

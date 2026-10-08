@@ -66,10 +66,13 @@
           ]
         },
         "microphone": {
-          "const": "off"
+          "enum": ["off", "requesting", "on", "muted"]
         },
         "playback": {
-          "const": "off"
+          "enum": ["off", "on", "blocked"]
+        },
+        "audioCode": {
+          "enum": ["MICROPHONE_DENIED", "MICROPHONE_FAILED", "MICROPHONE_TIMEOUT", "PLAYBACK_BLOCKED"]
         },
         "members": {
           "type": "array",
@@ -106,6 +109,23 @@
     },
     "command": {
       "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "type": { "const": "setMicrophoneEnabled" },
+            "sessionId": { "type": "string", "pattern": "^[a-f0-9-]{36}$" },
+            "enabled": { "type": "boolean" }
+          },
+          "required": ["type", "sessionId", "enabled"]
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "type": { "const": "enableAudio" },
+            "sessionId": { "type": "string", "pattern": "^[a-f0-9-]{36}$" }
+          },
+          "required": ["type", "sessionId"]
+        },
         {
           "type": "object",
           "additionalProperties": false,
@@ -169,6 +189,24 @@
     "runtimeCommand": {
       "oneOf": [
         {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "type": { "const": "microphone" },
+            "sessionId": { "type": "string", "pattern": "^[a-f0-9-]{36}$" },
+            "operation": { "type": "integer", "minimum": 1 },
+            "enabled": { "type": "boolean" }
+          },
+          "required": ["type", "sessionId", "operation", "enabled"]
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "type": { "const": "enableAudio" },
+            "sessionId": { "type": "string", "pattern": "^[a-f0-9-]{36}$" }
+          },
+          "required": ["type", "sessionId"]
+        },
+        {
           "type": "object",
           "additionalProperties": false,
           "properties": {
@@ -221,6 +259,35 @@
     },
     "runtimeEvent": {
       "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "type": { "const": "captureEnded" },
+            "sessionId": { "type": "string", "pattern": "^[a-f0-9-]{36}$" },
+            "operation": { "type": "integer", "minimum": 1 }
+          },
+          "required": ["type", "sessionId", "operation"]
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "type": { "const": "microphone" },
+            "sessionId": { "type": "string", "pattern": "^[a-f0-9-]{36}$" },
+            "operation": { "type": "integer", "minimum": 1 },
+            "value": { "enum": ["off", "on", "muted"] },
+            "code": { "enum": ["MICROPHONE_DENIED", "MICROPHONE_FAILED"] }
+          },
+          "required": ["type", "sessionId", "operation", "value"]
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "type": { "const": "playback" },
+            "sessionId": { "type": "string", "pattern": "^[a-f0-9-]{36}$" },
+            "value": { "enum": ["on", "blocked"] }
+          },
+          "required": ["type", "sessionId", "value"]
+        },
         {
           "type": "object",
           "additionalProperties": false,

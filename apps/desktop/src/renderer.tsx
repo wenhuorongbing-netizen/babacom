@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import type { MediaSnapshot } from '@babacom/contracts';
 import { AdmissionPage } from './shell/AdmissionPage';
 import { VoicePanel } from './features/voice/VoicePanel';
+import { AudioControls } from './features/audio/AudioControls';
 import { t } from './i18n';
 import './styles/tokens.css';
 
@@ -31,7 +32,7 @@ function Desktop() {
   }, []);
   const panel = <VoicePanel snapshot={snapshot} prepared={prepared} />;
   const active = ['connecting', 'connected', 'leaving', 'cleanup-failed'].includes(snapshot.status);
-  return active ? <main><p>{t('appName')}</p>{panel}</main>
+  return active ? <main><p>{t('appName')}</p>{panel}<AudioControls snapshot={snapshot} /></main>
     : <AdmissionPage onPreparedChange={setPrepared}>{panel}</AdmissionPage>;
 }
 

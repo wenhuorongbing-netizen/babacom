@@ -13,5 +13,5 @@
     "allowJs": true,
     "types": ["node"]
   },
-  "include": ["src", "vite.config.ts", "playwright.config.ts", "../../packages/ui/src", "../../packages/contracts/dist", "../../tests/shell", "../../tests/voice"]
+  "include": ["src", "vite.config.ts", "playwright.config.ts", "../../packages/ui/src", "../../packages/contracts/dist", "../../tests/shell", "../../tests/voice", "../../tests/audio"]
 }

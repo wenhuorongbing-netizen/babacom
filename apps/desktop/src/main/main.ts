@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -7,6 +7,7 @@ import { createConnection } from 'node:net';
 import Ajv from 'ajv';
 import { admissionSchema, tokenClaimsSchema, mediaSessionSchema } from '@babacom/contracts';
 import { MediaSession } from './media-session';
+import { t } from '../i18n';
 import type {
   AdmissionError, AdmissionRequest, AdmissionSuccess, MediaClaims,
   RendererResult, StartupConfiguration, MediaStartup, MediaCommand, MediaRuntimeEvent, MediaRuntimeCommand,
@@ -62,6 +63,21 @@ function runMedia(command: MediaRuntimeCommand, startup?: AdmissionSuccess) {
     } else destroyMediaContext(context);
     return;
   }
+  if (command.type !== 'start') {
+    const context = mediaContext;
+    if (!context || !context.valid || !context.ready || context.id !== command.sessionId
+      || context.window.webContents.isDestroyed() || media?.snapshot.status !== 'connected') return;
+    const contents = context.window.webContents;
+    if (command.type === 'enableAudio') {
+      // Only this finite UI operation transfers activation into the isolated media world.
+      void contents.executeJavaScriptInIsolatedWorld(999, [{
+        code: 'globalThis.babacomEnableAudio(' + JSON.stringify(command) + ')',
+      }], true).catch(() => {
+        if (mediaContext === context && context.valid) media?.receive({ type: 'playback', sessionId: context.id, value: 'blocked' });
+      });
+    } else contents.send('media:run', command);
+    return;
+  }
   if (!startup || mediaContext) {
     media?.receive({ type: 'failed', sessionId: command.sessionId });
     return;
@@ -91,8 +107,16 @@ function runMedia(command: MediaRuntimeCommand, startup?: AdmissionSuccess) {
       && ['ws:', 'http:'].includes(url.protocol)
       && ['/rtc', '/rtc/v1', '/rtc/validate', '/rtc/v1/validate'].includes(url.pathname);
   };
-  contents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  contents.session.setPermissionCheckHandler(() => false);
+  const captureFrame = (requester: Electron.WebContents | null, details: Electron.PermissionRequest | Electron.PermissionCheckHandlerHandlerDetails) =>
+    current() && requester === contents && details.isMainFrame && details.requestingUrl === page
+      && contents.mainFrame.url === page && contents.getURL() === page && contents.mainFrame.frames.length === 0
+      && media?.captureAllowed(context.id) === true;
+  contents.session.setPermissionRequestHandler((requester, permission, callback, details) => callback(
+    permission === 'media' && captureFrame(requester, details) && 'mediaTypes' in details
+      && details.mediaTypes?.length === 1 && details.mediaTypes[0] === 'audio',
+  ));
+  contents.session.setPermissionCheckHandler((requester, permission, _origin, details) =>
+    permission === 'media' && details.mediaType === 'audio' && captureFrame(requester, details));
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
   contents.on('will-navigate', (event) => event.preventDefault());
   contents.on('will-frame-navigate', (event) => event.preventDefault());
@@ -230,6 +254,15 @@ async function mediaCommand(event: IpcMainInvokeEvent, value: unknown) {
   if (!validMediaCommand(value)) return media.reject('INVALID_COMMAND');
   if (value.type === 'snapshot') return media.snapshot;
   if (value.type === 'leave' || value.type === 'cancelJoin') return media.stop(value.sessionId);
+  if (value.type === 'enableAudio') return media.enableAudio(value.sessionId);
+  if (value.type === 'setMicrophoneEnabled') return media.setMicrophoneEnabled(value.sessionId, value.enabled, async () => {
+    if (!window || window.isDestroyed()) return false;
+    const result = await dialog.showMessageBox(window, {
+      type: 'question', title: t('microphoneConsentTitle'), message: t('microphoneConsentMessage'),
+      buttons: [t('microphoneConsentAllow'), t('microphoneConsentDeny')], defaultId: 1, cancelId: 1, noLink: true,
+    });
+    return result.response === 0;
+  });
   if (media.active) return media.snapshot;
   if (!mediaConfiguration) return media.reject('NOT_CONFIGURED');
   if (!credentials || pending) return media.reject('NOT_PREPARED');
