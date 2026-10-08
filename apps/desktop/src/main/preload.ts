@@ -5,6 +5,8 @@ export interface MediaBridge {
   join(): Promise<MediaSnapshot>;
   cancelJoin(sessionId: string): Promise<MediaSnapshot>;
   leave(sessionId: string): Promise<MediaSnapshot>;
+  setMicrophoneEnabled(sessionId: string, enabled: boolean): Promise<MediaSnapshot>;
+  enableAudio(sessionId: string): Promise<MediaSnapshot>;
   getSnapshot(): Promise<MediaSnapshot>;
   subscribe(listener: (snapshot: MediaSnapshot) => void): () => void;
 }
@@ -14,6 +16,10 @@ const mediaBridge: MediaBridge = Object.freeze({
   join: (...args: unknown[]) => args.length ? Promise.reject(new Error('INVALID_COMMAND')) : invoke({ type: 'join' }),
   cancelJoin: (sessionId: string) => invoke({ type: 'cancelJoin', sessionId }),
   leave: (sessionId: string) => invoke({ type: 'leave', sessionId }),
+  setMicrophoneEnabled: (sessionId: string, enabled: boolean, ...extra: unknown[]) => extra.length
+    ? Promise.reject(new Error('INVALID_COMMAND')) : invoke({ type: 'setMicrophoneEnabled', sessionId, enabled }),
+  enableAudio: (sessionId: string, ...extra: unknown[]) => extra.length
+    ? Promise.reject(new Error('INVALID_COMMAND')) : invoke({ type: 'enableAudio', sessionId }),
   getSnapshot: () => invoke({ type: 'snapshot' }),
   subscribe: (listener: (snapshot: MediaSnapshot) => void) => {
     if (typeof listener !== 'function') throw new Error('INVALID_COMMAND');

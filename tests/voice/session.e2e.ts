@@ -8,6 +8,403 @@ import { desktop } from '../../apps/desktop/scripts/build.mjs';
 import { startRenderer, startStartupPipe, startTestService, startMediaService, startRealMediaService } from '../../apps/desktop/scripts/dev.mjs';
 import type { StartupConfiguration, MediaStartup, AdmissionSuccess, MediaRuntimeCommand } from '@babacom/contracts';
 import { MediaSession } from '../../apps/desktop/src/main/media-session';
+import { createAudioReceiver } from '../../apps/desktop/src/features/audio/playback';
+
+async function simulateCapture(running: Awaited<ReturnType<typeof launch>>, scenario: 'ready' | 'denied' | 'no-device' | 'late' = 'ready', consent = true) {
+  await running.application.evaluate(({ dialog }, consent) => {
+    Reflect.set(globalThis, '__consentPrompts', 0);
+    Reflect.set(dialog, 'showMessageBox', async () => {
+      Reflect.set(globalThis, '__consentPrompts', Number(Reflect.get(globalThis, '__consentPrompts')) + 1);
+      return { response: consent ? 0 : 1, checkboxChecked: false };
+    });
+  }, consent);
+  await running.application.evaluate(async ({ BrowserWindow }, scenario) => {
+    const contents = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith('/media.html'))?.webContents;
+    if (!contents) throw new Error('Missing media context');
+    await contents.executeJavaScriptInIsolatedWorld(999, [{ code: `
+      (() => {
+        const scenario = ${JSON.stringify(scenario)};
+        const probe = globalThis.__captureProbe = { calls: 0, active: 0, stopped: 0, constraints: null, pending: false };
+        navigator.mediaDevices.getUserMedia = async (constraints) => {
+          probe.calls++; probe.constraints = constraints;
+          if (scenario === 'denied') throw new DOMException('Test permission refusal', 'NotAllowedError');
+          if (scenario === 'no-device') throw new DOMException('Test device unavailable', 'NotFoundError');
+          if (scenario === 'late') await new Promise((resolve) => { probe.pending = true; globalThis.__releaseCapture = resolve; });
+          const context = new AudioContext();
+          const oscillator = context.createOscillator();
+          const destination = context.createMediaStreamDestination();
+          oscillator.frequency.value = 440; oscillator.connect(destination); oscillator.start();
+          const track = destination.stream.getAudioTracks()[0];
+          probe.active++;
+          const stop = track.stop.bind(track);
+          let stopped = false;
+          track.stop = () => {
+            if (stopped) return;
+            stopped = true; stop(); probe.active--; probe.stopped++;
+            oscillator.stop(); void context.close();
+          };
+          return destination.stream;
+        };
+      })()
+    ` }]);
+  }, scenario);
+}
+
+async function captureProbe(running: Awaited<ReturnType<typeof launch>>) {
+  return running.application.evaluate(async ({ BrowserWindow }) => {
+    const contents = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith('/media.html'))?.webContents;
+    if (!contents) throw new Error('Missing media context');
+    return JSON.parse(await contents.executeJavaScriptInIsolatedWorld(999, [{ code: 'JSON.stringify(globalThis.__captureProbe)' }]));
+  });
+}
+
+async function joinAudio(running: Awaited<ReturnType<typeof launch>>) {
+  await prepare(running);
+  await running.page.getByRole('button', { name: '加入语音房间', exact: true }).click();
+  await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).status,
+    { timeout: 30_000 }).toBe('connected');
+}
+
+test('T2-03 joined desktop offers independent playback and consent-gated microphone controls', async () => {
+  const service = await startRealMediaService();
+  try {
+    const running = await launch(service.configuration, service.media);
+    try {
+      await prepare(running);
+      await running.page.getByRole('button', { name: '加入语音房间', exact: true }).click();
+      await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).status).toBe('connected');
+      await expect(running.page.getByRole('button', { name: '开启麦克风', exact: true })).toBeVisible();
+      await expect(running.page.getByRole('button', { name: '启用声音', exact: true })).toBeVisible();
+      expect((await service.command('inspect')).participants[0].tracks).toBe(0);
+      expect(await running.page.evaluate(() => window.media.getSnapshot())).toMatchObject({ microphone: 'off', playback: 'off' });
+    } finally { await running.close(); }
+  } finally { await service.close(); }
+});
+
+test('T2-03 real Room publishes synthetic capture once, mutes, resumes and destroys capture on leave', async () => {
+  const service = await startRealMediaService();
+  try {
+    const running = await launch(service.configuration, service.media);
+    try {
+      await joinAudio(running);
+      await simulateCapture(running);
+      await running.page.getByRole('button', { name: '开启麦克风', exact: true }).click();
+      await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).microphone).toBe('on');
+      expect(await captureProbe(running)).toMatchObject({ calls: 1, active: 1,
+        constraints: { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false } });
+      await expect.poll(async () => (await service.command('inspect')).participants[0].tracks).toBe(1);
+      await running.page.getByRole('button', { name: '静音麦克风', exact: true }).click();
+      await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).microphone).toBe('muted');
+      expect(await captureProbe(running)).toMatchObject({ calls: 1, active: 1, stopped: 0 });
+      await running.page.getByRole('button', { name: '开启麦克风', exact: true }).click();
+      await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).microphone).toBe('on');
+      expect(await captureProbe(running)).toMatchObject({ calls: 1, active: 1 });
+      expect(await running.application.evaluate(() => Reflect.get(globalThis, '__consentPrompts'))).toBe(1);
+      const mediaPage = running.application.windows().find((page) => page !== running.page)!;
+      await running.page.getByRole('button', { name: '离开语音房间' }).click();
+      await expect(running.page.getByLabel('展示昵称')).toBeVisible();
+      expect(mediaPage.isClosed()).toBe(true);
+      await expect.poll(async () => (await service.command('inspect')).participants.length).toBe(0);
+      await joinAudio(running);
+      await simulateCapture(running, 'ready', false);
+      await running.page.getByRole('button', { name: '开启麦克风', exact: true }).click();
+      await expect(running.page.getByRole('region', { name: '音频控制' })).toContainText('未允许使用麦克风');
+      expect(await captureProbe(running)).toMatchObject({ calls: 0, active: 0 });
+      expect(await running.page.evaluate(() => window.media.getSnapshot())).toMatchObject({ microphone: 'off', playback: 'off' });
+      expect(running.browserCredentialLeak()).toBe(false);
+    } finally { await running.close(); }
+  } finally { await service.close(); }
+});
+
+for (const scenario of ['denied', 'no-device'] as const) {
+  test('T2-03 capture ' + scenario + ' keeps actual SFU membership without a local publication', async () => {
+    const service = await startRealMediaService();
+    try {
+      const running = await launch(service.configuration, service.media);
+      try {
+        await joinAudio(running);
+        await simulateCapture(running, scenario);
+        await running.page.getByRole('button', { name: '开启麦克风', exact: true }).click();
+        await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).audioCode)
+          .toBe(scenario === 'denied' ? 'MICROPHONE_DENIED' : 'MICROPHONE_FAILED');
+        expect(await running.page.evaluate(() => window.media.getSnapshot())).toMatchObject({ status: 'connected', microphone: 'off' });
+        expect((await service.command('inspect')).participants[0].tracks).toBe(0);
+        expect(await captureProbe(running)).toMatchObject({ calls: 1, active: 0 });
+        await expect(running.page.getByRole('button', { name: '启用声音', exact: true })).toBeVisible();
+        expect(running.browserCredentialLeak()).toBe(false);
+      } finally { await running.close(); }
+    } finally { await service.close(); }
+  });
+}
+
+test('T2-03 canceled real SDK capture discards a late synthetic track and allows a fresh consented operation', async () => {
+  const service = await startRealMediaService();
+  try {
+    const running = await launch(service.configuration, service.media);
+    try {
+      await joinAudio(running);
+      await simulateCapture(running, 'late');
+      await running.page.getByRole('button', { name: '开启麦克风', exact: true }).click();
+      await expect.poll(async () => (await captureProbe(running)).pending).toBe(true);
+      await running.page.getByRole('button', { name: '取消开麦', exact: true }).click();
+      await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).microphone).toBe('off');
+      await running.page.getByRole('button', { name: '开启麦克风', exact: true }).click();
+      expect((await captureProbe(running)).calls).toBe(1);
+      await running.application.evaluate(async ({ BrowserWindow }) => {
+        const contents = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith('/media.html'))!.webContents;
+        await contents.executeJavaScriptInIsolatedWorld(999, [{ code: 'globalThis.__releaseCapture()' }]);
+      });
+      await expect.poll(async () => (await captureProbe(running)).stopped).toBe(1);
+      expect((await service.command('inspect')).participants[0].tracks).toBe(0);
+      await simulateCapture(running);
+      await running.page.getByRole('button', { name: '开启麦克风', exact: true }).click();
+      await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).microphone).toBe('on');
+      expect(running.browserCredentialLeak()).toBe(false);
+    } finally { await running.close(); }
+  } finally { await service.close(); }
+});
+
+test('T2-03 UI playback transfers activation to the real isolated Room and owns one player per remote track', async () => {
+  const service = await startMediaService();
+  try {
+    const running = await launch(service.configuration, service.media, service.peer);
+    try {
+      await joinAudio(running);
+      const mediaPage = running.application.windows().find((page) => page !== running.page)!;
+      await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).audioReceiving).toBe(true);
+      await expect(mediaPage.locator('audio')).toHaveCount(0);
+      await running.application.evaluate(async ({ BrowserWindow }) => {
+        const contents = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith('/media.html'))!.webContents;
+        await contents.executeJavaScriptInIsolatedWorld(999, [{ code: `
+          const original = globalThis.babacomEnableAudio;
+          globalThis.__playbackActivations = [];
+          globalThis.babacomEnableAudio = (command) => {
+            globalThis.__playbackActivations.push(navigator.userActivation.isActive);
+            original(command);
+          };
+          void 0;
+        ` }]);
+      });
+      await running.page.getByRole('button', { name: '启用声音', exact: true }).click();
+      await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).playback).toBe('on');
+      await expect(mediaPage.locator('audio')).toHaveCount(1);
+      expect(await mediaPage.locator('audio').evaluate((element: HTMLAudioElement) => ({ paused: element.paused, muted: element.muted, stream: Boolean(element.srcObject) })))
+        .toEqual({ paused: false, muted: false, stream: true });
+      expect(await running.application.evaluate(async ({ BrowserWindow }) => {
+        const contents = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith('/media.html'))!.webContents;
+        return contents.executeJavaScriptInIsolatedWorld(999, [{ code: 'JSON.stringify(globalThis.__playbackActivations)' }]);
+      })).toBe('[true]');
+      const id = (await running.page.evaluate(() => window.media.getSnapshot())).sessionId!;
+      await running.page.evaluate((id) => window.media.enableAudio(id), id);
+      await expect(mediaPage.locator('audio')).toHaveCount(1);
+      expect(await running.page.evaluate(() => window.media.getSnapshot())).toMatchObject({ microphone: 'off' });
+      await running.page.getByRole('button', { name: '离开语音房间' }).click();
+      await expect(running.page.getByLabel('展示昵称')).toBeVisible();
+      expect(mediaPage.isClosed()).toBe(true);
+      expect(running.browserCredentialLeak()).toBe(false);
+    } finally { await running.close(); }
+  } finally { await service.close(); }
+});
+
+test('T2-03 duplicate and old remote tracks cannot remove replacements or revive playback', async () => {
+  const service = await startRealMediaService();
+  try {
+    const running = await launch(service.configuration, service.media);
+    try {
+      await joinAudio(running);
+      const result = await running.application.evaluate(async ({ BrowserWindow }, source) => {
+        const contents = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith('/media.html'))!.webContents;
+        return contents.executeJavaScriptInIsolatedWorld(999, [{ code: `
+          (async () => {
+            const make = ${source};
+            const events = [];
+            const receiver = make((value) => events.push(value));
+            const track = () => {
+              let element;
+              return { sid: 'duplicate-track',
+                attach() { element = document.createElement('audio'); return element; },
+                detach() { return element ? [element] : []; },
+                getReceiverStats: async () => ({ bytesReceived: 1 }),
+                get element() { return element; },
+              };
+            };
+            const old = track(); const replacement = track();
+            receiver.add(old); receiver.add(old);
+            const beforeEnable = document.querySelectorAll('audio').length;
+            await receiver.enable(async () => {}, () => true);
+            receiver.add(old);
+            const afterDuplicate = document.querySelectorAll('audio').length;
+            receiver.add(replacement); receiver.add(replacement); receiver.remove(old);
+            const replacementPreserved = replacement.element.isConnected && !old.element.isConnected;
+            const afterOldUnsubscribe = document.querySelectorAll('audio').length;
+            receiver.clear();
+            const cleaned = [old, replacement].every((value) => !value.element.isConnected && value.element.paused && value.element.srcObject === null);
+            let releaseStats; let started;
+            const inspecting = new Promise((resolve) => { started = resolve; });
+            const late = track();
+            late.getReceiverStats = () => { started(); return new Promise((resolve) => { releaseStats = resolve; }); };
+            receiver.add(late);
+            await inspecting;
+            receiver.clear();
+            releaseStats({ bytesReceived: 1 });
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            let releaseStart;
+            receiver.add(track());
+            const pending = receiver.enable(() => new Promise((resolve) => { releaseStart = resolve; }), () => true);
+            receiver.clear(); releaseStart();
+            const lateEnable = await pending;
+            return { beforeEnable, afterDuplicate, replacementPreserved, afterOldUnsubscribe, cleaned,
+              lateReceiving: events.includes(true), lateEnable, players: document.querySelectorAll('audio').length };
+          })()
+        ` }]);
+      }, createAudioReceiver.toString());
+      expect(result).toEqual({ beforeEnable: 0, afterDuplicate: 1, replacementPreserved: true,
+        afterOldUnsubscribe: 1, cleaned: true, lateReceiving: false, lateEnable: false, players: 0 });
+      expect(await running.page.evaluate(() => window.media.getSnapshot())).toMatchObject({ microphone: 'off', playback: 'off' });
+    } finally { await running.close(); }
+  } finally { await service.close(); }
+});
+
+test('T2-03 native permission checks and requests allow repeated audio checks only within the approved capture transaction', async () => {
+  const service = await startRealMediaService();
+  try {
+    const running = await launch(service.configuration, service.media);
+    try {
+      await running.application.evaluate(({ session }) => {
+        const prototype = Object.getPrototypeOf(session.defaultSession);
+        const handlers = new Map();
+        Reflect.set(globalThis, '__permissionHandlers', handlers);
+        for (const name of ['setPermissionCheckHandler', 'setPermissionRequestHandler']) {
+          const original = Reflect.get(prototype, name);
+          Reflect.set(prototype, name, function (this: unknown, callback: unknown) {
+            const entry = handlers.get(this) ?? {};
+            entry[name] = callback; handlers.set(this, entry);
+            return Reflect.apply(original, this, [callback]);
+          });
+        }
+      });
+      await joinAudio(running);
+      await simulateCapture(running, 'late');
+      const permissions = () => running.application.evaluate(({ BrowserWindow }) => {
+        const contents = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith('/media.html'))!.webContents;
+        const ui = BrowserWindow.getAllWindows().find((window) => !window.webContents.getURL().endsWith('/media.html'))!.webContents;
+        const handlers = Reflect.get(globalThis, '__permissionHandlers').get(contents.session);
+        const check = handlers.setPermissionCheckHandler;
+        const request = handlers.setPermissionRequestHandler;
+        const details = { isMainFrame: true, requestingUrl: contents.getURL(), mediaType: 'audio' };
+        const requestDetails = { isMainFrame: true, requestingUrl: contents.getURL(), mediaTypes: ['audio'] };
+        const query = (owner = contents, permission = 'media', value = details) => check(owner, permission, 'file://', value);
+        const ask = (value = requestDetails) => {
+          let result: boolean | null = null;
+          request(contents, 'media', (allowed: boolean) => { result = allowed; }, value);
+          return result;
+        };
+        return {
+          audio: [query(), query(), ask(), ask()],
+          denied: [query(ui), query(contents, 'display-capture'), query(contents, 'unknown'),
+            query(contents, 'media', { ...details, isMainFrame: false }),
+            query(contents, 'media', { ...details, requestingUrl: 'about:blank' }),
+            query(contents, 'media', { ...details, mediaType: 'video' }),
+            query(contents, 'media', { ...details, mediaType: 'unknown' }),
+            ask({ ...requestDetails, mediaTypes: ['audio', 'video'] }),
+            ask({ ...requestDetails, mediaTypes: [] })],
+        };
+      });
+      expect((await permissions()).audio).toEqual([false, false, false, false]);
+      await running.page.getByRole('button', { name: '开启麦克风', exact: true }).click();
+      await expect.poll(async () => (await captureProbe(running)).pending).toBe(true);
+      expect(await permissions()).toEqual({ audio: [true, true, true, true], denied: Array(9).fill(false) });
+      expect(await running.page.evaluate(async () => {
+        try { await navigator.mediaDevices.getUserMedia({ audio: true }); return 'allowed'; }
+        catch { return 'denied'; }
+      })).toBe('denied');
+      await running.page.getByRole('button', { name: '取消开麦', exact: true }).click();
+      expect((await permissions()).audio).toEqual([false, false, false, false]);
+      expect((await service.command('inspect')).participants[0].tracks).toBe(0);
+    } finally { await running.close(); }
+  } finally { await service.close(); }
+});
+
+test('T2-03 the real 30-second capture deadline stops a late SDK track without a publication', async () => {
+  const service = await startRealMediaService();
+  try {
+    const running = await launch(service.configuration, service.media);
+    try {
+      await joinAudio(running);
+      await simulateCapture(running, 'late');
+      await running.page.getByRole('button', { name: '开启麦克风', exact: true }).click();
+      await expect.poll(async () => (await captureProbe(running)).pending).toBe(true);
+      await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).microphone,
+        { timeout: 32_000, intervals: [250] }).toBe('off');
+      await running.application.evaluate(async ({ BrowserWindow }) => {
+        const contents = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith('/media.html'))!.webContents;
+        await contents.executeJavaScriptInIsolatedWorld(999, [{ code: 'globalThis.__releaseCapture()' }]);
+      });
+      await expect.poll(async () => (await captureProbe(running)).stopped).toBe(1);
+      expect(await captureProbe(running)).toMatchObject({ active: 0 });
+      expect((await service.command('inspect')).participants[0].tracks).toBe(0);
+      expect(await running.page.evaluate(() => window.media.getSnapshot())).toMatchObject({ status: 'connected', microphone: 'off' });
+    } finally { await running.close(); }
+  } finally { await service.close(); }
+});
+
+test('T2-03 blocked playback leaves microphone off and a later explicit click recovers with one player', async () => {
+  const service = await startMediaService();
+  try {
+    const running = await launch(service.configuration, service.media, service.peer);
+    try {
+      await joinAudio(running);
+      await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).audioReceiving).toBe(true);
+      const mediaPage = running.application.windows().find((page) => page !== running.page)!;
+      await running.application.evaluate(async ({ BrowserWindow }) => {
+        const contents = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith('/media.html'))!.webContents;
+        await contents.executeJavaScriptInIsolatedWorld(999, [{ code: `
+          globalThis.__originalAudioPlay = HTMLMediaElement.prototype.play;
+          HTMLMediaElement.prototype.play = () => Promise.reject(new DOMException('Test playback blocked', 'NotAllowedError'));
+          void 0;
+        ` }]);
+      });
+      await running.page.getByRole('button', { name: '启用声音', exact: true }).click();
+      await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).playback).toBe('blocked');
+      await expect(mediaPage.locator('audio')).toHaveCount(0);
+      expect(await running.page.evaluate(() => window.media.getSnapshot())).toMatchObject({ microphone: 'off' });
+      await running.application.evaluate(async ({ BrowserWindow }) => {
+        const contents = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith('/media.html'))!.webContents;
+        await contents.executeJavaScriptInIsolatedWorld(999, [{ code: 'HTMLMediaElement.prototype.play = globalThis.__originalAudioPlay; void 0;' }]);
+      });
+      await running.page.getByRole('button', { name: '启用声音', exact: true }).click();
+      await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).playback).toBe('on');
+      await expect(mediaPage.locator('audio')).toHaveCount(1);
+      expect(running.browserCredentialLeak()).toBe(false);
+    } finally { await running.close(); }
+  } finally { await service.close(); }
+});
+
+for (const operation of ['remove', 'stop-sfu', 'window-close'] as const) {
+  test('T2-03 live capture terminates and destroys its context after ' + operation, async () => {
+    const service = await startRealMediaService();
+    try {
+      const running = await launch(service.configuration, service.media);
+      try {
+        await joinAudio(running);
+        await simulateCapture(running);
+        await running.page.getByRole('button', { name: '开启麦克风', exact: true }).click();
+        await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).microphone).toBe('on');
+        const mediaPage = running.application.windows().find((page) => page !== running.page)!;
+        if (operation === 'window-close') await running.application.close();
+        else {
+          await service.command(operation);
+          await expect.poll(async () => (await running.page.evaluate(() => window.media.getSnapshot())).status,
+            { timeout: 10_000 }).toBe('failed');
+          expect(await running.page.evaluate(() => window.media.getSnapshot())).toMatchObject({ microphone: 'off', playback: 'off' });
+        }
+        expect(mediaPage.isClosed()).toBe(true);
+        if (operation !== 'stop-sfu') await expect.poll(async () => (await service.command('inspect')).participants.length).toBe(0);
+        expect(running.browserCredentialLeak()).toBe(false);
+      } finally { await running.close(); }
+    } finally { await service.close(); }
+  });
+}
 
 test('real finite session enters and leaves SFU muted, preserves identity after rename, and refuses reissue after revocation', async () => {
   const service = await startRealMediaService();
@@ -817,7 +1214,9 @@ test('real SFU membership and synthetic audio survive handoff then leave and rej
       const text = await running.page.locator('body').innerText() + running.diagnostics() + service.diagnostics();
       expect(text.includes(service.configuration.applicationSession)).toBe(false);
       expect(/eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+/.test(text)).toBe(false);
-      expect(await running.page.evaluate(() => Object.keys(window.media).sort())).toEqual(['cancelJoin', 'getSnapshot', 'join', 'leave', 'subscribe']);
+      expect(await running.page.evaluate(() => Object.keys(window.media).sort())).toEqual([
+        'cancelJoin', 'enableAudio', 'getSnapshot', 'join', 'leave', 'setMicrophoneEnabled', 'subscribe',
+      ]);
       await running.page.screenshot({ path: join(desktop, 'build/' + test.info().project.name + '-voice-connected.png') });
       // Real wall time exceeds the unchanged 120-second initial ticket lifetime.
       await running.page.waitForTimeout(121_000);
