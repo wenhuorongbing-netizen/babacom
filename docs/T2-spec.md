@@ -544,3 +544,19 @@ git diff --name-only --no-renames -z origin/main...HEAD | node .agents/scope_gua
 T2-V1不扩展为沙盒双客户端、非回环HTTPS/WSS启动、跨设备会话发放、真实开麦或中德验收。
 这些是后续独立任务；下一步双客户端须另固定两稳定主体、同一API/SFU、依赖复制及精确文件子集。
 本票通过不关闭#18/T2/M0，也不替代两台真实Windows、两测试者及人耳/物理设备释放证据。
+
+## T2-A1：开发启动与测试清理的独立范围（docs PR合并生效）
+
+2026-10-08 Jack以`/implement 1`请求实施测试调研中的A1：启动超时与失败清理。
+具体契约见[testing-automation-spec.md](testing-automation-spec.md)。该独立Module: docs范围PR经Jack审阅合并前，
+正常T1测试及其辅助函数的零改动继续有效；本地草稿或研究报告不解除限制。
+
+该PR生效后，仅T2-A1独立实施票允许修改以下三条的必要子集：
+`apps/desktop/scripts/dev.mjs`、`tests/shell/admission.e2e.ts`、`tests/voice/session.e2e.ts`。
+T1狭窄例外只涉及受控启动/关闭helper、调用接线及新生命周期回归；既有测试主体、全部断言、
+原始期限、昵称/凭据/限流语义与打包资源白名单保持。产品main/preload、旧schema、媒体fixture、infra和依赖零diff。
+第四条必要文件、Job Object新脚本、框架/运行时/fuse/系统配置变更先另签范围。
+
+本节不扩展T2-V1/#28；A1不得混入#28实现。验收包含原始超时RED→GREEN、完整development/packaged回归、
+启动失败/取消/worker退出清理及非本次资源保存、同产物真实SandboxPASS与实例释放。
+A2及后续自动化、双端/物理/中德验收仍是独立任务；#18边界不变。签认者仅为本fork的Jack，已于2026-10-08明确授权发布/合并本范围PR及继续实施A1。
