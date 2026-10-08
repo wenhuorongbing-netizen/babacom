@@ -460,3 +460,87 @@ uv run python -m pytest ../../tests/tokens ../../tests/ratelimit ../../tests/acc
 - NOT_RUN（本修订）：独立媒体上下文的实际开发/packaged修复、刷新票据后失败链、
   播放用户激活、物理设备、双设备及跨境。本轮不安装依赖、不采购部署、不运行设备采集。
   T1工程交付、T2方向确认、具体PR合并及真人产品验收分别保留事实。
+
+## T2-V1 提案：沙盒启动与结果回传修复
+
+> 2026-10-08 · 独立于 #18 的测试启动器任务；Module: t2。
+> 本节为待签认的具体范围，不改变 #18 的18条 Allowed Files或真人验收条件。
+> 先经Jack审阅并合并独立 Module: docs 范围PR，再建立引用本节的单独实现Issue。
+> 本节未签认或范围PR未合并时，不修改下面的产品/测试文件。
+
+### 问题与目标
+
+本机 `wsb` CLI 0.8.107.0 已可调用，但现有沙盒入口仅在120秒内等待最终结果文件。
+先前运行exit 1、NOT_RUN，没有实际guest结果；失败原因尚未确定。
+进程名检查和终止启动器不构成沙盒实例生命周期证明。
+本票先定位启动、用户桌面、guest脚本及结果回传的故障，并在干净Windows中保留既有EXE启动验收。
+来源与环境核实见 [调研报告](T2-03-acceptance-research.md)。
+
+### 实现边界与设计
+
+- 复用已安装 `wsb`、现有打包产物、Python运行时及T1 fixture；不新增依赖或安装软件。
+- 使用本次随机实例ID和本次唯一运行目录。记录启动前实例集合，验证CLI返回ID及创建结果；
+  归属不明确时拒绝connect、exec、share和stop。既有或陌生实例不作为测试目标，不终止它们。
+- 通过CLI创建/连接本次实例，在实际登录用户桌面执行既有guest启动检查；
+  仅System命令成功不构成客户端窗口或当前用户环境证据。
+- 每个CLI动作有15秒期限，既有guest结果等待上限120秒保留，拥有实例的清理最多15秒；
+  整轮在180秒总预算内结束。超时不增加无界重试，也不放宽原客户端/API的启动、关闭断言。
+- guest仅向本次映射输出目录写不含秘密的阶段结果：执行开始、fixture就绪、客户端启动、最终结果。
+  每项使用独立新文件，保留历史字节；输入只读，输出仅限本次目录，不共享其他目录。
+- 每种失败报告固定阶段与有限错误类别，保留实际退出码；不直接输出CLI/guest原始stdout、stderr，
+  不发布应用会话、JWT、API secret、HAR或任意异常正文。
+- 只有本次guest实际返回既有PASS字段、产物摘要匹配且本次实例已释放才报告PASS；
+  缺少结果为NOT_RUN，实际断言或执行失败为FAIL，清理失败单独报告并阻止PASS。
+- 网络、AudioInput、VideoInput、剪贴板与打印机转接维持显式Disable；
+  不采集物理设备，不连接外部服务，不改变API/SFU回环白名单、SDK、服务端版本或生产启动入口。
+
+### Allowed Files（实现票仅两条）
+
+- `apps/desktop/scripts/dev.mjs`
+- `tests/voice/session.e2e.ts`
+
+仅修复沙盒运行编排、有限诊断与本次测试。既有T1 guest的环境、窗口、准入控件、
+秘密检查及客户端/API关闭断言全部保留；正常T1测试、T1规格/清单、三份旧schema、
+产品main/preload、认证/授权原语、媒体fixture和infra零diff。
+发现第三条必要文件时先停，重新提交独立docs范围变更。
+
+### 自动化与真实运行断言
+
+新增 `Sandbox runner` 用例通过既有Playwright入口发现并执行，至少覆盖以下行为：
+
+1. 既有陌生实例不会被connect、exec、share或stop，创建返回未知ID也不会借用或停止它。
+2. CLI启动失败/超时保持非PASS，输出只含允许的错误类别和退出码，不泄露原始诊断中的秘密。
+3. 缺少guest结果、无实际用户客户端证据或结果结构无效均不能报告PASS。
+4. guest返回的应用摘要与本次打包产物不同则拒绝PASS。
+5. 正常完成、失败与取消均仅清理本次已确认拥有的实例和调用方资源。
+6. 清理失败或超时不能被成功guest结果覆盖，结果明确保留未释放状态。
+
+可控CLI替身仅用于难复现故障/顺序；不能替代真实Windows Sandbox运行。
+真实运行须证明本次实例创建及用户桌面就绪、既有EXE窗口/准入控件、实际guest结果、
+app.asar摘要相同、本次实例释放、陌生实例保留。条件未齐如实记录NOT_RUN/HOLD。
+
+### Validation与完成条件
+
+实现前以下均NOT_RUN；必须记录实际退出码、发现的用例及guest结果，不能用全绿替身签收。
+
+```powershell
+node --check apps/desktop/scripts/dev.mjs
+node node_modules/@playwright/test/cli.js test --config apps/desktop/playwright.config.ts --project development tests/voice/session.e2e.ts --grep "Sandbox runner"
+npm run typecheck --workspace apps/desktop
+npm run lint --workspace apps/desktop
+npm run test --workspace apps/desktop
+npm run build --workspace apps/desktop
+npm run package:win --workspace apps/desktop
+npm run test:e2e --workspace apps/desktop
+npm run dev --workspace apps/desktop -- --sandbox-acceptance
+git diff --check
+git diff --name-only --no-renames -z origin/main...HEAD | node .agents/scope_guard.mjs t2
+```
+
+通过条件：所需命令exit 0、自动化0失败，新增用例实际执行，diff仅两条Allowed Files，
+原有T1回归不变，真实guest检查PASS且本次实例实际释放。若沙盒资源或登录桌面不可用，
+保留软件验证结果和明确运行阻塞，不把本票或设备验收写成完成。DB NOT_APPLICABLE。
+
+T2-V1不扩展为沙盒双客户端、非回环HTTPS/WSS启动、跨设备会话发放、真实开麦或中德验收。
+这些是后续独立任务；下一步双客户端须另固定两稳定主体、同一API/SFU、依赖复制及精确文件子集。
+本票通过不关闭#18/T2/M0，也不替代两台真实Windows、两测试者及人耳/物理设备释放证据。
