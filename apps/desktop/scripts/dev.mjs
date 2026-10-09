@@ -9,15 +9,173 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { buildDesktop, desktop, root } from './build.mjs';
 
+let processOwner;
+export async function ensureWindowsProcessOwner() {
+  if (process.platform !== 'win32') return;
+  // One native owner per worker, established before the first resource allocation.
+  // Keep its handle outside the worker so forced exit cannot bypass tree cleanup.
+  return processOwner ??= new Promise((resolvePromise, reject) => {
+    const child = spawn(join(process.env.SystemRoot ?? 'C:/Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', join(desktop, 'scripts/windows-process-owner.ps1'),
+        '-OwnerProcessId', String(process.pid)], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    child.stderr.resume();
+    const reader = createInterface({ input: child.stdout });
+    const failure = (code) => Object.assign(new Error('Windows process ownership unavailable'), {
+      stage: 'OWNERSHIP', category: 'START_FAILED', ...(Number.isInteger(code) ? { exitCode: code } : {}),
+    });
+    const timeout = setTimeout(() => { reader.close(); child.kill(); reject(failure()); }, 5_000);
+    child.once('error', () => { clearTimeout(timeout); reader.close(); reject(failure()); });
+    child.once('exit', (code) => { clearTimeout(timeout); reader.close(); reject(failure(code)); });
+    reader.once('line', (line) => {
+      clearTimeout(timeout); reader.close();
+      if (line !== 'BABACOM_PROCESS_OWNER_READY') { child.kill(); reject(failure()); return; }
+      // The watchdog must not keep a normally finished worker alive.
+      child.unref(); child.stdout.unref(); child.stderr.unref();
+      resolvePromise(child.pid);
+    });
+  });
+}
+
+/** @returns {Promise<{ url: string, pid: number | undefined, close: () => Promise<void> }>} */
 export async function startRenderer() {
-  const server = await createServer({ root: desktop, configFile: join(desktop, 'vite.config.ts') });
-  await server.listen();
-  const address = server.httpServer.address();
-  if (!address || typeof address === 'string') throw new Error('Renderer server did not bind');
-  return { url: 'http://127.0.0.1:' + address.port + '/', close: () => server.close() };
+  await ensureWindowsProcessOwner();
+  // Keep Vite's startup and file watching outside the Electron driver's event loop.
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--renderer-only'], {
+    cwd: root, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+  });
+  child.stderr.resume();
+  let spawnFailed = false;
+  child.once('error', () => { spawnFailed = true; });
+  child.stdin.on('error', () => { /* The exit/error listeners report pipe closure. */ });
+  const reader = createInterface({ input: child.stdout });
+  let closing;
+  const releaseFailure = () => Object.assign(new Error('Renderer release failed'), {
+    stage: 'RELEASE', category: 'RELEASE_FAILED', cleanup: 'FAILED',
+    ...(Number.isInteger(child.exitCode) ? { exitCode: child.exitCode } : {}),
+  });
+  const close = () => closing ??= new Promise((resolvePromise, reject) => {
+    reader.close();
+    if (spawnFailed) { resolvePromise(); return; }
+    const finished = () => child.exitCode === 0 ? resolvePromise() : reject(releaseFailure());
+    if (child.exitCode !== null || child.signalCode !== null) { finished(); return; }
+    const timeout = setTimeout(() => { child.kill(); reject(releaseFailure()); }, 5_000);
+    child.once('exit', () => { clearTimeout(timeout); finished(); });
+    child.once('error', () => { clearTimeout(timeout); reject(releaseFailure()); });
+    child.stdin.end();
+  });
+  try {
+    const url = await new Promise((resolvePromise, reject) => {
+      const timeout = setTimeout(() => reject(Object.assign(new Error('Renderer startup timed out'), { name: 'TimeoutError' })), 10_000);
+      const finish = (error, value) => {
+        clearTimeout(timeout);
+        if (error) reject(error); else resolvePromise(value);
+      };
+      child.once('error', () => finish(new Error('Renderer could not start')));
+      child.once('exit', (code) => finish(Object.assign(new Error('Renderer stopped before startup'),
+        Number.isInteger(code) ? { code } : {})));
+      reader.on('line', (line) => {
+        if (!line.startsWith('BABACOM_RENDERER_READY ')) return;
+        try {
+          const address = new URL(line.slice('BABACOM_RENDERER_READY '.length));
+          if (address.protocol !== 'http:' || address.hostname !== '127.0.0.1' || !address.port || address.port === '0'
+            || address.username || address.password || address.search || address.hash || address.pathname !== '/') throw new Error();
+          finish(null, address.href);
+        } catch { finish(new Error('Invalid renderer handshake')); }
+      });
+    });
+    return { url, pid: child.pid, close };
+  } catch (error) {
+    try { await close(); } catch { error.cleanup = 'FAILED'; }
+    throw error;
+  }
+}
+
+async function rendererProcess() {
+  let server;
+  let starting;
+  let closing;
+  let released = false;
+  let failed = false;
+  const close = () => closing ??= (async () => {
+    released = true;
+    const timeout = setTimeout(() => process.exit(1), 5_000);
+    try {
+      const ownedServer = server ?? await starting;
+      await ownedServer?.close();
+      process.exitCode = failed ? 1 : 0;
+    }
+    catch { process.exitCode = 1; }
+    finally { clearTimeout(timeout); process.stdin.pause(); }
+  })();
+  process.stdin.once('end', () => { void close(); });
+  process.once('SIGINT', () => { void close(); });
+  process.once('SIGTERM', () => { void close(); });
+  process.stdin.resume();
+  try {
+    // Build and test outputs can contain tens of thousands of files. Watching them
+    // synchronously starts Windows watchers while application imports are loading.
+    const generated = join(desktop, 'build').replaceAll('\\', '/');
+    starting = createServer({ root: desktop, configFile: join(desktop, 'vite.config.ts'),
+      server: { watch: { ignored: [generated, generated + '/**'] } } });
+    server = await starting;
+    if (released) { await close(); return; }
+    await server.listen();
+    if (released) { await close(); return; }
+    const address = server.httpServer.address();
+    if (!address || typeof address === 'string') throw new Error('Renderer server did not bind');
+    process.stdout.write('BABACOM_RENDERER_READY http://127.0.0.1:' + address.port + '/\n');
+  } catch { failed = true; process.exitCode = 1; await close(); }
+}
+
+export function createStartupCleanup(releaseBudgetMs = 5_500) {
+  if (!Number.isInteger(releaseBudgetMs) || releaseBudgetMs <= 0 || releaseBudgetMs > 5_500) throw new Error('Invalid startup release budget');
+  const stages = new Set(['API', 'RENDERER', 'PIPE', 'DRIVER', 'WINDOW', 'UI']);
+  const entries = [];
+  let closing;
+  const release = async (entry) => {
+    let timeout;
+    try {
+      await Promise.race([Promise.resolve().then(entry.close), new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('Startup release timed out')), releaseBudgetMs);
+      })]);
+    } finally { clearTimeout(timeout); }
+  };
+  const close = () => closing ??= Promise.resolve().then(async () => {
+    const failedStages = [];
+    for (const entry of [...entries].reverse()) {
+      try { await release(entry); } catch { failedStages.push(entry.stage); }
+    }
+    if (failedStages.length) throw Object.assign(new Error('Controlled startup cleanup failed'), {
+      stage: 'RELEASE', category: 'RELEASE_FAILED', cleanup: 'FAILED', failedStages,
+    });
+  });
+  return {
+    own: async (stage, releaseResource) => {
+      if (!stages.has(stage) || typeof releaseResource !== 'function') throw new Error('Invalid startup ownership');
+      const entry = { stage, close: releaseResource };
+      if (closing) {
+        try { await release(entry); }
+        catch { throw Object.assign(new Error('Late startup resource release failed'), { stage: 'RELEASE', category: 'RELEASE_FAILED', cleanup: 'FAILED' }); }
+        throw Object.assign(new Error('Startup owner is closed'), { stage, category: 'OWNER_CLOSED' });
+      }
+      entries.push(entry);
+    },
+    close,
+    fail: async (stage, error) => {
+      let cleanup = error?.cleanup === 'FAILED' ? 'FAILED' : 'RELEASED';
+      try { await close(); } catch { cleanup = 'FAILED'; }
+      const category = error?.name === 'TimeoutError' ? 'START_TIMEOUT' : 'START_FAILED';
+      const exitCode = Number.isInteger(error?.code) ? error.code : error?.exitCode;
+      throw Object.assign(new Error('Controlled startup failed at ' + (stages.has(stage) ? stage : 'UNKNOWN')), {
+        stage: stages.has(stage) ? stage : 'UNKNOWN', category, cleanup,
+        ...(Number.isInteger(exitCode) ? { exitCode } : {}),
+      });
+    },
+  };
 }
 
 export async function startStartupPipe(configuration) {
+  await ensureWindowsProcessOwner();
   const name = 'babacom-' + randomUUID();
   const path = '\\\\.\\pipe\\' + name;
   // Windows' default pipe DACL grants Everyone read access. This test/dev broker
@@ -94,6 +252,7 @@ export async function startRealMediaService(scenario = 'ready') {
 }
 
 export async function startMediaService(scenario = 'ready', provider = 'fixture') {
+  await ensureWindowsProcessOwner();
   const child = spawn('uv', ['run', '--frozen', '--directory', join(root, 'apps/api'),
     'python', '../../tests/voice/local_media_service.py', '--scenario', scenario, '--provider', provider], {
     cwd: root, env: { ...process.env, PYTHONPATH: join(root, 'apps/api') },
@@ -147,6 +306,7 @@ export async function startMediaService(scenario = 'ready', provider = 'fixture'
 }
 
 export async function startTestService(scenario = 'ready') {
+  await ensureWindowsProcessOwner();
   const child = spawn('uv', ['run', '--frozen', '--directory', join(root, 'apps/api'),
     'python', '../../tests/tokens/local_service.py', '--scenario', scenario], {
     cwd: root, env: { ...process.env, PYTHONPATH: join(root, 'apps/api') },
@@ -630,7 +790,7 @@ async function main() {
 }
 
 if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
-  main().catch(() => {
+  (process.argv.includes('--renderer-only') ? rendererProcess() : main()).catch(() => {
     console.error('Controlled desktop startup failed.');
     process.exitCode = 1;
   });

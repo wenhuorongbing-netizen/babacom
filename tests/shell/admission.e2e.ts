@@ -2,7 +2,7 @@ import { _electron as electron, expect, test } from '@playwright/test';
 import { join } from 'node:path';
 import { readFile, readdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { startRenderer, startStartupPipe, startTestService } from '../../apps/desktop/scripts/dev.mjs';
+import { createStartupCleanup, startRenderer, startStartupPipe, startTestService } from '../../apps/desktop/scripts/dev.mjs';
 import { desktop } from '../../apps/desktop/scripts/build.mjs';
 import type { StartupConfiguration } from '@babacom/contracts';
 
@@ -18,67 +18,74 @@ async function postStatus(configuration: StartupConfiguration, displayName = '�
 }
 
 async function controlledApplication(scenario = 'ready', fillQuota = false) {
-  const service = await startTestService(scenario);
-  const packaged = test.info().project.name === 'packaged';
-  const renderer = packaged ? null : await startRenderer();
-  const startup = await startStartupPipe(service.configuration);
-  const environment: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) environment[key] = value;
-  }
-  delete environment.BABACOM_RENDERER_URL;
-  if (renderer) environment.BABACOM_RENDERER_URL = renderer.url;
-  if (packaged) {
-    environment.PATH = join(process.env.SystemRoot ?? 'C:/Windows', 'System32');
-    delete environment.NODE_OPTIONS;
-    delete environment.NODE_PATH;
-    delete environment.ELECTRON_RUN_AS_NODE;
-  }
-  let application;
+  const owner = createStartupCleanup();
+  let stage = 'API';
   try {
-    application = await electron.launch({
+    const service = await startTestService(scenario);
+    await owner.own('API', () => service.close());
+    const packaged = test.info().project.name === 'packaged';
+    stage = 'RENDERER';
+    const renderer = packaged ? null : await startRenderer();
+    if (renderer) await owner.own('RENDERER', () => renderer.close());
+    stage = 'PIPE';
+    const startup = await startStartupPipe(service.configuration);
+    await owner.own('PIPE', () => startup.close());
+    const environment: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined) environment[key] = value;
+    }
+    delete environment.BABACOM_RENDERER_URL;
+    if (renderer) environment.BABACOM_RENDERER_URL = renderer.url;
+    if (packaged) {
+      environment.PATH = join(process.env.SystemRoot ?? 'C:/Windows', 'System32');
+      delete environment.NODE_OPTIONS;
+      delete environment.NODE_PATH;
+      delete environment.ELECTRON_RUN_AS_NODE;
+    }
+    stage = 'DRIVER';
+    const application = await electron.launch({
       executablePath: packaged ? join(desktop, 'build/windows/win-unpacked/BabaCom.exe') : undefined,
       args: [...(packaged ? [] : [join(desktop, 'dist/main/main.cjs')]), '--babacom-startup-pipe=' + startup.path],
       env: environment,
     });
-  } catch (error) {
-    await Promise.allSettled([renderer?.close(), startup.close(), service.close()]);
-    throw error;
-  }
-  const applicationProcess = application.process();
-  let output = '';
-  applicationProcess.stdout?.on('data', (chunk) => { output += String(chunk); });
-  applicationProcess.stderr?.on('data', (chunk) => { output += String(chunk); });
-  if (fillQuota) {
-    for (let count = 0; count < 6; count++) {
-      expect(await postStatus(service.configuration, '初始')).toBe(200);
-    }
-  }
-  const page = await application.firstWindow();
-  const sockets: string[] = [];
-  page.on('websocket', (socket) => {
-    const developmentOrigin = renderer?.url.replace('http:', 'ws:');
-    if (!developmentOrigin || new URL(socket.url()).origin !== new URL(developmentOrigin).origin) sockets.push(socket.url());
-  });
-  if (packaged) {
-    expect(await application.evaluate(({ app }) => app.isPackaged)).toBe(true);
-    expect(new URL(page.url()).protocol).toBe('file:');
-  }
-  return {
-    application, applicationProcess, page, configuration: service.configuration,
-    diagnostics: () => output + service.diagnostics(),
-    recover: () => service.recover(),
-    responses: () => service.responses(),
-    traffic: () => service.traffic(),
-    release: () => service.release(),
-    close: async () => {
+    const applicationProcess = application.process();
+    await owner.own('DRIVER', async () => {
       if (applicationProcess.exitCode === null) await application.close();
-      await renderer?.close();
-      await startup.close();
-      await service.close();
-      expect(sockets, 'Admission never connects to an SFU').toEqual([]);
-    },
-  };
+    });
+    let output = '';
+    applicationProcess.stdout?.on('data', (chunk) => { output += String(chunk); });
+    applicationProcess.stderr?.on('data', (chunk) => { output += String(chunk); });
+    if (fillQuota) {
+      stage = 'API';
+      for (let count = 0; count < 6; count++) {
+        expect(await postStatus(service.configuration, '初始')).toBe(200);
+      }
+    }
+    stage = 'WINDOW';
+    const page = await application.firstWindow();
+    stage = 'UI';
+    const sockets: string[] = [];
+    page.on('websocket', (socket) => {
+      const developmentOrigin = renderer?.url.replace('http:', 'ws:');
+      if (!developmentOrigin || new URL(socket.url()).origin !== new URL(developmentOrigin).origin) sockets.push(socket.url());
+    });
+    if (packaged) {
+      expect(await application.evaluate(({ app }) => app.isPackaged)).toBe(true);
+      expect(new URL(page.url()).protocol).toBe('file:');
+    }
+    return {
+      application, applicationProcess, page, configuration: service.configuration,
+      diagnostics: () => output + service.diagnostics(),
+      recover: () => service.recover(),
+      responses: () => service.responses(),
+      traffic: () => service.traffic(),
+      release: () => service.release(),
+      close: async () => {
+        await owner.close();
+        expect(sockets, 'Admission never connects to an SFU').toEqual([]);
+      },
+    };
+  } catch (error) { return owner.fail(stage, error); }
 }
 
 test('real desktop prepares a normalized nickname without exposing credentials', async () => {
