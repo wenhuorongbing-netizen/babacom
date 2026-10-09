@@ -14,11 +14,14 @@
 
 A1目标是定位并最小修复启动故障，让原始开发用例恢复；集中本次测试资源所有权，使启动失败、取消、正常关闭和worker退出均有可验证的有限清理。先修根因，不借重构、跳过或重试掩盖失败。
 
-## 实施 Allowed Files：仅三条
+## 实施 Allowed Files：仅四条
+
+2026-10-09补充签认：Jack在当前会话明确签认Windows进程所有权脚本，并授权同步本契约与`.agents/modules/t2.md`。原三路径例外及其余红线保持；本补充只增加下列第四条实施路径，不授权发布或合并。
 
 - `apps/desktop/scripts/dev.mjs`
 - `tests/shell/admission.e2e.ts`
 - `tests/voice/session.e2e.ts`
+- `apps/desktop/scripts/windows-process-owner.ps1`
 
 dev.mjs只允许本次开发/测试启动、阶段诊断和拥有资源清理所需的最小函数子集。Sandbox已有行为、guest断言、结果语义、原生连接修复和拥有实例检查保留；不将A1功能写进#28提交。
 
@@ -26,7 +29,7 @@ admission.e2e.ts只允许受控启动/关闭helper、其调用接线及针对启
 
 session.e2e.ts只允许本次启动helper及针对启动失败、取消、迟到资源、worker结束和非本次资源保存的新回归。既有媒体/身份/准入断言和Sandbox runner回归不降低、不删除。
 
-Job Object候选脚本不在本次三路径内。若实际正确seam需要新helper、依赖、配置或第四处文件，先停并提交独立范围变更，不内联复杂机制来规避范围约束。
+windows-process-owner.ps1仅允许Windows测试/dev进程树的原生Job Object所有权与worker退出清理：首次业务资源分配前建立所有权，worker正常/强制退出或helper结束时释放已拥有进程树，保留非本次资源；不改产品入口、依赖或系统安全设置。四路径之外若还需要新helper、依赖、配置或其他文件，仍先停并提交独立范围变更，不内联复杂机制来规避范围约束。
 
 ## 不变与范围外
 
@@ -70,11 +73,11 @@ npm run build --workspace apps/desktop
 npm run package:win --workspace apps/desktop
 npm run test:e2e --workspace apps/desktop
 npm run dev --workspace apps/desktop -- --sandbox-acceptance
-node .agents/scope_guard.mjs t2 --files apps/desktop/scripts/dev.mjs tests/shell/admission.e2e.ts tests/voice/session.e2e.ts
+node .agents/scope_guard.mjs t2 --files apps/desktop/scripts/dev.mjs tests/shell/admission.e2e.ts tests/voice/session.e2e.ts apps/desktop/scripts/windows-process-owner.ps1
 git diff --check
 ```
 
-完成必须同时满足：原始development/packaged用例通过；启动各失败点、取消、迟到资源、worker退出的拥有资源回收实际成立；非本次资源保存；完整desktop回归0失败且旧覆盖无遗漏；同产物真实Sandbox PASS/RELEASED；新增诊断无秘密；实施diff仅三路径。新增原生检查的NOT_RUN/skip不能作为完成。DB NOT_APPLICABLE。
+完成必须同时满足：原始development/packaged用例通过；启动各失败点、取消、迟到资源、worker退出的拥有资源回收实际成立；非本次资源保存；完整desktop回归0失败且旧覆盖无遗漏；同产物真实Sandbox PASS/RELEASED；新增诊断无秘密；实施diff仅四路径。新增原生检查的NOT_RUN/skip不能作为完成。DB NOT_APPLICABLE。
 
 API业务/权限/媒体协议未修改，原完整desktop用例继续覆盖既有真实fixture。#18真人两设备、人耳、物理释放、中德验收保持原边界，A1通过不关闭它们。
 
@@ -89,3 +92,13 @@ git diff --check
 ```
 
 通过条件：exit 0，三份文档一致，现有实现源文件摘要不变；A1实施测试在docs范围生效前明确NOT_RUN。
+
+2026-10-09补充签认同步只修改本文件与`.agents/modules/t2.md`。该范围元数据使用独立Module: docs变更，不并入功能提交；原前置docs记录保留。同步验证：
+
+```powershell
+node .agents/scope_guard.mjs docs --files docs/testing-automation-spec.md .agents/modules/t2.md
+node --test .agents/scope_guard.test.mjs
+git diff --check
+```
+
+通过条件：exit 0；两份A1四路径清单一致，t2清单仅增加这条helper；四份实施文件摘要保持同步前值。不因本次仅修改范围元数据而重复运行已完成的完整开发/打包/Sandbox验证。
