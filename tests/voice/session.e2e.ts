@@ -4,14 +4,337 @@ import Ajv from 'ajv';
 import { mediaSessionSchema } from '@babacom/contracts';
 import type { ElectronApplication, Page } from '@playwright/test';
 import { join } from 'node:path';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { execFile, spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import * as desktopRunner from '../../apps/desktop/scripts/dev.mjs';
 import { desktop } from '../../apps/desktop/scripts/build.mjs';
-import { startRenderer, startStartupPipe, startTestService, startMediaService, startRealMediaService } from '../../apps/desktop/scripts/dev.mjs';
+import { createStartupCleanup, startRenderer, startStartupPipe, startTestService, startMediaService, startRealMediaService } from '../../apps/desktop/scripts/dev.mjs';
 import type { StartupConfiguration, MediaStartup, AdmissionSuccess, MediaRuntimeCommand } from '@babacom/contracts';
 import { MediaSession } from '../../apps/desktop/src/main/media-session';
 import { createAudioReceiver } from '../../apps/desktop/src/features/audio/playback';
+
+test('A1 startup concurrently serves the complete renderer import graph', async () => {
+  const renderer = await startRenderer();
+  const seen = new Set<string>();
+  const pending = new Set<Promise<void>>();
+  const failures: string[] = [];
+  const schedule = (url: URL) => {
+    if (url.origin !== new URL(renderer.url).origin || seen.has(url.href)) return;
+    seen.add(url.href);
+    if (seen.size > 100) throw new Error('Renderer import graph exceeded its bounded module count');
+    const task = (async () => {
+      try {
+        const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        for (const match of text.matchAll(/(?:from\s*|import\s*)["']([/.][^"']+)["']/g)) schedule(new URL(match[1], url));
+      } catch { failures.push(url.pathname.includes('/.vite/deps/') ? 'DEPENDENCY' : 'APPLICATION'); }
+    })();
+    pending.add(task);
+    void task.finally(() => pending.delete(task));
+  };
+  try {
+    schedule(new URL('/src/renderer.tsx', renderer.url));
+    while (pending.size) await Promise.all([...pending]);
+    expect(failures).toEqual([]);
+  } finally { await renderer.close(); }
+});
+
+test('A1 startup renderer reports an abnormal owned process exit during release', async () => {
+  const renderer = await startRenderer();
+  try {
+    process.kill(renderer.pid!, 'SIGKILL');
+    await expect.poll(() => {
+      try { process.kill(renderer.pid!, 0); return true; } catch { return false; }
+    }, { timeout: 5_000 }).toBe(false);
+    const closing = renderer.close();
+    await expect(closing).rejects.toMatchObject({ stage: 'RELEASE', category: 'RELEASE_FAILED', cleanup: 'FAILED' });
+    await expect(renderer.close()).rejects.toMatchObject({ category: 'RELEASE_FAILED' });
+  } finally {
+    await renderer.close().catch((error: unknown) => {
+      expect(error).toMatchObject({ category: 'RELEASE_FAILED' });
+    });
+  }
+});
+
+test('A1 startup development driver reaches a real window without a packaged fallback', async () => {
+  const directory = await mkdtemp(join(desktop, 'build/a1-entry-'));
+  const entry = join(directory, 'main.cjs');
+  await writeFile(entry, "const { app, BrowserWindow } = require('electron'); app.whenReady().then(() => { globalThis.window = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } }); window.loadURL('data:text/html,<p>A1 startup</p>'); });\n", { flag: 'wx' });
+  const owner = createStartupCleanup();
+  const renderer = await startRenderer();
+  await owner.own('RENDERER', renderer.close);
+  try {
+    const application = await electron.launch({ args: [entry], timeout: 10_000 });
+    await owner.own('DRIVER', () => application.close());
+    const page = await application.firstWindow({ timeout: 5_000 });
+    await expect(page.getByText('A1 startup', { exact: true })).toBeVisible();
+    expect(await application.evaluate(({ app }) => app.isPackaged)).toBe(false);
+  } finally {
+    await owner.close();
+    await unlink(entry);
+    await rmdir(directory);
+  }
+});
+
+test('A1 startup renderer serves the application entry and its React dependency', async () => {
+  const renderer = await startRenderer();
+  try {
+    const html = await fetch(renderer.url, { signal: AbortSignal.timeout(5_000) });
+    expect(html.status).toBe(200);
+    expect(await html.text()).toContain('/src/renderer.tsx');
+    const entry = await fetch(new URL('/src/renderer.tsx', renderer.url), { signal: AbortSignal.timeout(5_000) });
+    expect(entry.status).toBe(200);
+    const source = await entry.text();
+    const dependency = /from\s*["']([^"']+react[^"']*)["']/.exec(source)?.[1];
+    expect(dependency).toBeTruthy();
+    const react = await fetch(new URL(dependency!, renderer.url), { signal: AbortSignal.timeout(5_000) });
+    expect(react.status).toBe(200);
+    expect(await react.text()).toContain('react');
+    for (const path of ['/src/shell/AdmissionPage.tsx', '/src/features/voice/VoicePanel.tsx', '/src/features/audio/AudioControls.tsx']) {
+      const module = await fetch(new URL(path, renderer.url), { signal: AbortSignal.timeout(5_000) });
+      expect(module.status, path).toBe(200);
+      for (const match of (await module.text()).matchAll(/from\s*["'](\/[^"']+)["']/g)) {
+        let dependency: Response;
+        try { dependency = await fetch(new URL(match[1], renderer.url), { signal: AbortSignal.timeout(5_000) }); }
+        catch { throw new Error(match[1].includes('/packages/ui/') ? 'SHARED_UI_IMPORT_TIMEOUT'
+          : match[1].includes('/.vite/deps/') ? 'OPTIMIZED_IMPORT_TIMEOUT' : 'APPLICATION_IMPORT_TIMEOUT'); }
+        expect(dependency.status, path + ' dependency').toBe(200);
+        await dependency.arrayBuffer();
+      }
+    }
+  } finally { await renderer.close(); }
+});
+
+test('A1 startup cleanup continues in reverse order after a release fails', async () => {
+  const owner = desktopRunner.createStartupCleanup();
+  const released: string[] = [];
+  await owner.own('API', async () => { released.push('API'); });
+  await owner.own('RENDERER', async () => { released.push('RENDERER'); throw new Error('private-session-sentinel'); });
+  await owner.own('PIPE', async () => { released.push('PIPE'); });
+  const closing = owner.close();
+  await expect(closing).rejects.toMatchObject({ stage: 'RELEASE', category: 'RELEASE_FAILED', failedStages: ['RENDERER'] });
+  expect(released).toEqual(['PIPE', 'RENDERER', 'API']);
+  await expect(owner.close()).rejects.toMatchObject({ category: 'RELEASE_FAILED' });
+  expect(released).toEqual(['PIPE', 'RENDERER', 'API']);
+  await expect(closing).rejects.not.toThrow('private-session-sentinel');
+});
+
+test('A1 startup cleanup preserves the primary stage and numeric exit code', async () => {
+  for (const envelope of [{ code: 47 }, { exitCode: 47 }]) {
+    const owner = desktopRunner.createStartupCleanup();
+    await owner.own('API', async () => { throw new Error('private-session-sentinel'); });
+    const failure = owner.fail('WINDOW', Object.assign(new Error('private-session-sentinel'), envelope));
+    await expect(failure).rejects.toMatchObject({ stage: 'WINDOW', category: 'START_FAILED', exitCode: 47, cleanup: 'FAILED' });
+    await expect(failure).rejects.not.toThrow('private-session-sentinel');
+  }
+});
+
+for (const [label, start] of [['API', startTestService], ['MEDIA', startMediaService]] as const) {
+  test('A1 startup preserves the real ' + label + ' process exit code before readiness', async () => {
+    const owner = createStartupCleanup();
+    const failure = start('a1-invalid-scenario').catch((error: unknown) => owner.fail('API', error));
+    await expect(failure).rejects.toMatchObject({ stage: 'API', category: 'START_FAILED', exitCode: 2, cleanup: 'RELEASED' });
+  });
+}
+
+test('A1 startup preserves the real broker process exit code before readiness', async () => {
+  test.skip(process.platform !== 'win32', 'The broker requires Windows named pipes');
+  await desktopRunner.ensureWindowsProcessOwner();
+  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+  const previousPath = process.env[pathKey];
+  const owner = createStartupCleanup();
+  try {
+    // PowerShell remains available; the real broker fails to resolve whoami.exe.
+    process.env[pathKey] = join(process.env.SystemRoot ?? 'C:/Windows', 'System32/WindowsPowerShell/v1.0');
+    const failure = startStartupPipe({}).catch((error: unknown) => owner.fail('PIPE', error));
+    await expect(failure).rejects.toMatchObject({ stage: 'PIPE', category: 'START_FAILED', exitCode: 1, cleanup: 'RELEASED' });
+  } finally {
+    if (previousPath === undefined) delete process.env[pathKey]; else process.env[pathKey] = previousPath;
+  }
+});
+
+test('A1 startup cleanup releases late resources after cancellation only once', async () => {
+  const owner = desktopRunner.createStartupCleanup();
+  let released = 0;
+  await owner.close();
+  await expect(owner.own('RENDERER', async () => { released++; })).rejects.toMatchObject({ category: 'OWNER_CLOSED' });
+  await owner.close();
+  expect(released).toBe(1);
+});
+
+test('A1 startup cleanup retains a failed release reported by the allocating helper', async () => {
+  const owner = createStartupCleanup();
+  let released = false;
+  await owner.own('API', async () => { released = true; });
+  await expect(owner.fail('RENDERER', Object.assign(new Error('private-session-sentinel'), {
+    name: 'TimeoutError', code: 47, cleanup: 'FAILED',
+  }))).rejects.toMatchObject({ stage: 'RENDERER', category: 'START_TIMEOUT', exitCode: 47, cleanup: 'FAILED' });
+  expect(released).toBe(true);
+});
+
+test('A1 startup renderer is released when its owning worker is killed', async () => {
+  const directory = await mkdtemp(join(desktop, 'build/a1-worker-'));
+  const entry = join(directory, 'worker.mjs');
+  const sentinelEntry = join(directory, 'sentinel.cjs');
+  await writeFile(entry, `import { startRenderer } from ${JSON.stringify(pathToFileURL(join(desktop, 'scripts/dev.mjs')).href)}; const renderer = await startRenderer(); process.stdout.write(JSON.stringify({ pid: renderer.pid }) + '\\n'); process.stdin.resume();\n`, { flag: 'wx' });
+  await writeFile(sentinelEntry, 'process.stdin.resume();\n', { flag: 'wx' });
+  const sentinel = spawn(process.execPath, [sentinelEntry], { stdio: 'pipe', windowsHide: true });
+  const worker = spawn(process.execPath, [entry], { stdio: 'pipe', windowsHide: true });
+  worker.stderr.resume();
+  try {
+    const pid = await new Promise<number>((resolvePromise, reject) => {
+      const reader = createInterface({ input: worker.stdout });
+      const timeout = setTimeout(() => { reader.close(); reject(new Error('A1 worker startup timed out')); }, 10_000);
+      worker.once('error', () => { clearTimeout(timeout); reader.close(); reject(new Error('A1 worker unavailable')); });
+      worker.once('exit', () => { clearTimeout(timeout); reader.close(); reject(new Error('A1 worker stopped before readiness')); });
+      reader.once('line', (line) => {
+        clearTimeout(timeout); reader.close();
+        try {
+          const result = JSON.parse(line);
+          if (!Number.isInteger(result.pid) || result.pid <= 0) throw new Error();
+          resolvePromise(result.pid);
+        } catch { reject(new Error('Invalid A1 worker readiness')); }
+      });
+    });
+    const exited = new Promise<void>((resolvePromise) => worker.once('exit', () => resolvePromise()));
+    worker.kill('SIGKILL');
+    await exited;
+    await expect.poll(() => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    }, { timeout: 7_000 }).toBe(false);
+    expect(sentinel.exitCode, 'Only the owning worker and its renderer may be released').toBeNull();
+  } finally {
+    for (const child of [worker, sentinel]) {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
+    await expect.poll(() => [worker, sentinel].every((child) => child.exitCode !== null || child.signalCode !== null),
+      { timeout: 5_000 }).toBe(true);
+    await unlink(entry);
+    await unlink(sentinelEntry);
+    await rmdir(directory);
+  }
+});
+
+for (const termination of ['forced worker exit', 'normal worker exit', 'ownership helper exit'] as const) {
+test('A1 startup ' + termination + ' releases the real product process tree', async () => {
+  type ProcessIdentity = { ProcessId: number; ParentProcessId: number; CreationDate: string | null };
+  const inventory = async (): Promise<ProcessIdentity[]> => {
+    try {
+      const { stdout } = await promisify(execFile)('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+        'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate | ConvertTo-Json -Compress'],
+      { windowsHide: true, timeout: 5_000, encoding: 'utf8' });
+      const rows: ProcessIdentity[] = JSON.parse(stdout);
+      if (!Array.isArray(rows) || rows.some((row) => !Number.isInteger(row.ProcessId) || !Number.isInteger(row.ParentProcessId))) throw new Error();
+      return rows;
+    } catch { throw new Error('A1 process ownership inventory unavailable'); }
+  };
+  const directory = await mkdtemp(join(desktop, 'build/a1-worker-'));
+  const entry = join(directory, 'worker.mjs');
+  const sentinelEntry = join(directory, 'sentinel.cjs');
+  const packaged = test.info().project.name === 'packaged';
+  await writeFile(entry, `import { _electron as electron } from '@playwright/test';
+import { join } from 'node:path';
+import { ensureWindowsProcessOwner, startRenderer, startTestService, startStartupPipe } from ${JSON.stringify(pathToFileURL(join(desktop, 'scripts/dev.mjs')).href)};
+const service = await startTestService();
+const renderer = ${packaged} ? null : await startRenderer();
+const startup = await startStartupPipe(service.configuration);
+const environment = { ...process.env };
+delete environment.BABACOM_RENDERER_URL;
+if (renderer) environment.BABACOM_RENDERER_URL = renderer.url;
+if (${packaged}) {
+  environment.PATH = join(process.env.SystemRoot || 'C:/Windows', 'System32');
+  delete environment.NODE_OPTIONS; delete environment.NODE_PATH; delete environment.ELECTRON_RUN_AS_NODE;
+}
+const application = await electron.launch({ executablePath: ${packaged ? JSON.stringify(join(desktop, 'build/windows/win-unpacked/BabaCom.exe')) : 'undefined'},
+  args: [...${JSON.stringify(packaged ? [] : [join(desktop, 'dist/main/main.cjs')])}, '--babacom-startup-pipe=' + startup.path], env: environment, timeout: 10000 });
+const page = await application.firstWindow({ timeout: 5000 });
+await page.getByText('\\u672c\\u5730\\u6d4b\\u8bd5\\u73af\\u5883', { exact: true }).waitFor({ state: 'visible', timeout: 5000 });
+process.stdout.write(JSON.stringify({ event: 'READY', ownerPid: await ensureWindowsProcessOwner() }) + '\\n');
+process.stdin.once('end', async () => {
+  await application.close(); await startup.close();
+  if (renderer) await renderer.close(); await service.close();
+});
+process.stdin.resume();
+`, { flag: 'wx' });
+  await writeFile(sentinelEntry, 'process.stdin.resume();\n', { flag: 'wx' });
+  const sentinel = spawn(process.execPath, [sentinelEntry], { stdio: 'pipe', windowsHide: true });
+  const worker = spawn(process.execPath, [entry], { stdio: 'pipe', windowsHide: true });
+  sentinel.stderr.resume(); worker.stderr.resume();
+  let owned: ProcessIdentity[] = [];
+  const capture = async () => {
+    const rows = await inventory();
+    const ids = new Set([worker.pid]);
+    for (let depth = 0; depth < rows.length; depth++) {
+      const previous = ids.size;
+      for (const row of rows) if (ids.has(row.ParentProcessId)) ids.add(row.ProcessId);
+      if (ids.size === previous) break;
+    }
+    owned = rows.filter((row) => ids.has(row.ProcessId));
+    if (!owned.length || owned.some((row) => typeof row.CreationDate !== 'string')) throw new Error('A1 process ownership could not be verified');
+  };
+  const remaining = async () => {
+    const rows = await inventory();
+    return owned.filter((item) => rows.some((row) => row.ProcessId === item.ProcessId && row.CreationDate === item.CreationDate));
+  };
+  try {
+    const ownerPid = await new Promise<number>((resolvePromise, reject) => {
+      const reader = createInterface({ input: worker.stdout });
+      const finish = (error?: Error, pid?: number) => { clearTimeout(timeout); reader.close(); if (error) reject(error); else resolvePromise(pid!); };
+      const timeout = setTimeout(() => finish(new Error('A1 product worker startup timed out')), 10_000);
+      worker.once('error', () => finish(new Error('A1 product worker unavailable')));
+      worker.once('exit', () => finish(new Error('A1 product worker stopped before readiness')));
+      reader.once('line', (line) => {
+        try {
+          const ready = JSON.parse(line);
+          if (ready.event !== 'READY' || !Number.isInteger(ready.ownerPid) || ready.ownerPid <= 0) throw new Error();
+          finish(undefined, ready.ownerPid);
+        } catch { finish(new Error('Invalid A1 product readiness')); }
+      });
+    });
+    await capture();
+    expect(owned.length).toBeGreaterThan(1);
+    const exited = new Promise<void>((resolvePromise) => worker.once('exit', () => resolvePromise()));
+    if (termination === 'normal worker exit') worker.stdin.end();
+    else if (termination === 'ownership helper exit') {
+      const helper = (await remaining()).find((item) => item.ProcessId === ownerPid && item.ParentProcessId === worker.pid);
+      expect(helper, 'Only the verified ownership helper may be terminated').toBeDefined();
+      process.kill(helper!.ProcessId, 'SIGKILL');
+    } else worker.kill('SIGKILL');
+    await expect.poll(() => worker.exitCode !== null || worker.signalCode !== null,
+      { timeout: 7_000, message: 'The owned worker must exit within the release budget' }).toBe(true);
+    await exited;
+    expect(sentinel.exitCode, 'An unrelated process must survive worker termination').toBeNull();
+    await expect.poll(async () => (await remaining()).length,
+      { timeout: 7_000, message: 'WORKER_EXIT: every owned process must exit, including descendants of the Windows shell wrapper' }).toBe(0);
+    if (termination === 'normal worker exit') expect(worker.exitCode).toBe(0);
+    expect(sentinel.exitCode, 'An unrelated process must survive the entire owned-tree release').toBeNull();
+  } finally {
+    let released = false;
+    try {
+      if (!owned.length && worker.exitCode === null && worker.signalCode === null) await capture();
+      for (const item of (await remaining()).reverse()) {
+        try { process.kill(item.ProcessId, 'SIGKILL'); } catch { /* Already exited. */ }
+      }
+      await expect.poll(async () => (await remaining()).length, { timeout: 5_000 }).toBe(0);
+      released = true;
+    } catch { expect.soft(false, 'RELEASE_FAILED: diagnostic process tree could not be reclaimed').toBe(true); }
+    for (const child of [worker, sentinel]) {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
+    await expect.configure({ soft: true }).poll(() => [worker, sentinel].every((child) => child.exitCode !== null || child.signalCode !== null),
+      { timeout: 5_000 }).toBe(true);
+    if (released) {
+      try { await unlink(entry); await unlink(sentinelEntry); await rmdir(directory); }
+      catch { expect.soft(false, 'RELEASE_FAILED: diagnostic files could not be reclaimed').toBe(true); }
+    }
+  }
+});
+}
 
 test('Sandbox runner native connection advances after the CLI exits while the desktop stays open', async () => {
   test.skip(process.env.BABACOM_SANDBOX_NATIVE_TEST !== '1', 'Explicit opt-in for a real Windows Sandbox instance');
@@ -849,27 +1172,24 @@ for (const scenario of ['valid', 'bad-signature', 'expired', 'tampered-room-b'])
 
 async function launch(configuration: StartupConfiguration, mediaConfiguration: MediaStartup | null = null, peerConfiguration: AdmissionSuccess | null = null) {
   const packaged = test.info().project.name === 'packaged';
-  const renderer = packaged ? null : await startRenderer();
-  const pipes: Awaited<ReturnType<typeof startStartupPipe>>[] = [];
-  const applications: { application: ElectronApplication; closed: boolean }[] = [];
-  const own = (application: ElectronApplication) => {
+  const owner = createStartupCleanup();
+  let renderer: Awaited<ReturnType<typeof startRenderer>> | null = null;
+  let stage = 'RENDERER';
+  const own = async (application: ElectronApplication) => {
     const item = { application, closed: false };
     application.on('close', () => { item.closed = true; });
-    applications.push(item);
+    await owner.own('DRIVER', async () => { if (!item.closed) await application.close(); });
   };
   let diagnostics = '';
-  async function close() {
-    for (const item of applications.reverse()) {
-      if (!item.closed) await item.application.close();
-    }
-    await Promise.all(pipes.map((pipe) => pipe.close()));
-    await renderer?.close();
-  }
+  const close = () => owner.close();
   try {
+    renderer = packaged ? null : await startRenderer();
+    if (renderer) await owner.own('RENDERER', () => renderer!.close());
+    stage = 'PIPE';
     const startup = await startStartupPipe(configuration);
-    pipes.push(startup);
+    await owner.own('PIPE', () => startup.close());
     const mediaStartup = mediaConfiguration ? await startStartupPipe(mediaConfiguration) : null;
-    if (mediaStartup) pipes.push(mediaStartup);
+    if (mediaStartup) await owner.own('PIPE', () => mediaStartup.close());
     const environment: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) if (value !== undefined) environment[key] = value;
     delete environment.BABACOM_RENDERER_URL;
@@ -880,16 +1200,19 @@ async function launch(configuration: StartupConfiguration, mediaConfiguration: M
       delete environment.NODE_OPTIONS;
       delete environment.NODE_PATH;
     }
+    stage = 'DRIVER';
     const application = await electron.launch({
       executablePath: packaged ? join(desktop, 'build/windows/win-unpacked/BabaCom.exe') : undefined,
       args: [...(packaged ? [] : [join(desktop, 'dist/main/main.cjs')]), '--babacom-startup-pipe=' + startup.path,
         ...(mediaStartup ? ['--babacom-media-pipe=' + mediaStartup.path] : [])],
       env: environment,
     });
-    own(application);
+    await own(application);
     application.process().stdout?.on('data', (chunk) => { diagnostics += String(chunk); });
     application.process().stderr?.on('data', (chunk) => { diagnostics += String(chunk); });
+    stage = 'WINDOW';
     const page = await application.firstWindow();
+    stage = 'UI';
     let browserCredentialLeak = false;
     const inspectDiagnostic = (text: string) => {
       browserCredentialLeak ||= text.includes(configuration.applicationSession)
@@ -915,11 +1238,15 @@ async function launch(configuration: StartupConfiguration, mediaConfiguration: M
     }
     let peer: ElectronApplication | null = null;
     if (peerConfiguration) {
+      stage = 'PIPE';
       const pipe = await startStartupPipe(peerConfiguration);
-      pipes.push(pipe);
+      await owner.own('PIPE', () => pipe.close());
+      stage = 'DRIVER';
       peer = await electron.launch({ args: [join(desktop, '../../tests/voice/sfu-peer.cjs'), '--peer-pipe=' + pipe.path] });
-      own(peer);
+      await own(peer);
+      stage = 'WINDOW';
       const peerPage = await peer.firstWindow();
+      stage = 'UI';
       await expect(peerPage.locator('#status')).toHaveText('connected', { timeout: 15_000 });
       await peerPage.getByRole('button', { name: 'Start synthetic audio' }).click();
       await expect(peerPage.locator('#status')).toHaveText('publishing', { timeout: 10_000 });
@@ -928,7 +1255,7 @@ async function launch(configuration: StartupConfiguration, mediaConfiguration: M
       if (diagnosticProbeFailed) throw new Error('Native browser diagnostic probe failed');
       return browserCredentialLeak;
     }, close };
-  } catch (error) { await close(); throw error; }
+  } catch (error) { return owner.fail(stage, error); }
 }
 
 
