@@ -134,6 +134,30 @@ test('A1 startup cleanup preserves the primary stage and numeric exit code', asy
   }
 });
 
+for (const [label, start] of [['API', startTestService], ['MEDIA', startMediaService]] as const) {
+  test('A1 startup preserves the real ' + label + ' process exit code before readiness', async () => {
+    const owner = createStartupCleanup();
+    const failure = start('a1-invalid-scenario').catch((error: unknown) => owner.fail('API', error));
+    await expect(failure).rejects.toMatchObject({ stage: 'API', category: 'START_FAILED', exitCode: 2, cleanup: 'RELEASED' });
+  });
+}
+
+test('A1 startup preserves the real broker process exit code before readiness', async () => {
+  test.skip(process.platform !== 'win32', 'The broker requires Windows named pipes');
+  await desktopRunner.ensureWindowsProcessOwner();
+  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+  const previousPath = process.env[pathKey];
+  const owner = createStartupCleanup();
+  try {
+    // PowerShell remains available; the real broker fails to resolve whoami.exe.
+    process.env[pathKey] = join(process.env.SystemRoot ?? 'C:/Windows', 'System32/WindowsPowerShell/v1.0');
+    const failure = startStartupPipe({}).catch((error: unknown) => owner.fail('PIPE', error));
+    await expect(failure).rejects.toMatchObject({ stage: 'PIPE', category: 'START_FAILED', exitCode: 1, cleanup: 'RELEASED' });
+  } finally {
+    if (previousPath === undefined) delete process.env[pathKey]; else process.env[pathKey] = previousPath;
+  }
+});
+
 test('A1 startup cleanup releases late resources after cancellation only once', async () => {
   const owner = desktopRunner.createStartupCleanup();
   let released = 0;

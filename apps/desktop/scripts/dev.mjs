@@ -226,7 +226,8 @@ export async function startStartupPipe(configuration) {
     const reader = createInterface({ input: child.stdout });
     const timeout = setTimeout(() => { child.kill(); reject(new Error('Startup broker timed out')); }, 10_000);
     child.once('error', () => { clearTimeout(timeout); reject(new Error('Startup broker could not start')); });
-    child.once('exit', () => { clearTimeout(timeout); reject(new Error('Startup broker stopped: ' + failureStage)); });
+    child.once('exit', (exitCode) => { clearTimeout(timeout); reject(Object.assign(new Error('Startup broker stopped: ' + failureStage),
+      Number.isInteger(exitCode) ? { exitCode } : {})); });
     reader.once('line', (line) => {
       clearTimeout(timeout);
       reader.close();
@@ -267,7 +268,8 @@ export async function startMediaService(scenario = 'ready', provider = 'fixture'
   const handshake = await new Promise((resolvePromise, reject) => {
     const timeout = setTimeout(() => { child.kill(); reject(new Error('Media fixture startup timed out')); }, 20_000);
     child.once('error', () => { clearTimeout(timeout); reject(new Error('Media fixture unavailable')); });
-    child.once('exit', () => { clearTimeout(timeout); reject(new Error('Media fixture stopped: ' + errors)); });
+    child.once('exit', (exitCode) => { clearTimeout(timeout); reject(Object.assign(new Error('Media fixture stopped: ' + errors),
+      Number.isInteger(exitCode) ? { exitCode } : {})); });
     reader.once('line', (line) => {
       clearTimeout(timeout);
       try {
@@ -321,7 +323,8 @@ export async function startTestService(scenario = 'ready') {
   const configuration = await new Promise((resolvePromise, reject) => {
     const timeout = setTimeout(() => { child.kill(); reject(new Error('Test service startup timed out')); }, 15_000);
     child.once('error', () => { clearTimeout(timeout); reject(new Error('Test service could not start')); });
-    child.once('exit', () => { clearTimeout(timeout); reject(new Error('Test service stopped before startup')); });
+    child.once('exit', (exitCode) => { clearTimeout(timeout); reject(Object.assign(new Error('Test service stopped before startup'),
+      Number.isInteger(exitCode) ? { exitCode } : {})); });
     reader.once('line', (line) => {
       clearTimeout(timeout);
       try {
