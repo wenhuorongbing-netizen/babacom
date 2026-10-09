@@ -4,11 +4,311 @@ import Ajv from 'ajv';
 import { mediaSessionSchema } from '@babacom/contracts';
 import type { ElectronApplication, Page } from '@playwright/test';
 import { join } from 'node:path';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import * as desktopRunner from '../../apps/desktop/scripts/dev.mjs';
 import { desktop } from '../../apps/desktop/scripts/build.mjs';
 import { startRenderer, startStartupPipe, startTestService, startMediaService, startRealMediaService } from '../../apps/desktop/scripts/dev.mjs';
 import type { StartupConfiguration, MediaStartup, AdmissionSuccess, MediaRuntimeCommand } from '@babacom/contracts';
 import { MediaSession } from '../../apps/desktop/src/main/media-session';
 import { createAudioReceiver } from '../../apps/desktop/src/features/audio/playback';
+
+test('Sandbox runner native connection advances after the CLI exits while the desktop stays open', async () => {
+  test.skip(process.env.BABACOM_SANDBOX_NATIVE_TEST !== '1', 'Explicit opt-in for a real Windows Sandbox instance');
+  test.setTimeout(180_000);
+  const runDirectory = await mkdtemp(join(desktop, 'build/sandbox-connect-probe-'));
+  const input = join(runDirectory, 'input');
+  const outputDirectory = join(runDirectory, 'output');
+  await mkdir(input);
+  await mkdir(outputDirectory);
+  const guest = String.raw`$ErrorActionPreference = 'Stop'
+$proof = @{ stage = 'ENVIRONMENT'; interactiveUser = ([Diagnostics.Process]::GetCurrentProcess().SessionId -gt 0); probeComplete = $true }
+[IO.File]::WriteAllText('C:\T1Output\guest-complete.json', ($proof | ConvertTo-Json))
+[IO.File]::WriteAllText('C:\T1Output\result.json', '{"status":"FAIL","stage":"ENVIRONMENT"}')
+`;
+  await writeFile(join(input, 'probe.ps1'), guest, { encoding: 'ascii', flag: 'wx' });
+  const xml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  const configuration = '<Configuration><vGPU>Disable</vGPU><Networking>Disable</Networking>'
+    + '<AudioInput>Disable</AudioInput><VideoInput>Disable</VideoInput><ClipboardRedirection>Disable</ClipboardRedirection>'
+    + '<PrinterRedirection>Disable</PrinterRedirection><MappedFolders>'
+    + '<MappedFolder><HostFolder>' + xml(input) + '</HostFolder><SandboxFolder>C:\\T1Input</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>'
+    + '<MappedFolder><HostFolder>' + xml(outputDirectory) + '</HostFolder><SandboxFolder>C:\\T1Output</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>'
+    + '</MappedFolders><LogonCommand><Command>powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\\T1Input\\probe.ps1</Command></LogonCommand></Configuration>';
+  // A deliberate guest failure tests progress to RESULT without manufacturing T1 PASS evidence.
+  const result = await desktopRunner.runSandboxInstance({ outputDirectory, configuration, appSha256: 'a'.repeat(64) });
+  expect(JSON.parse(await readFile(join(outputDirectory, 'guest-complete.json'), 'utf8'))).toMatchObject({ interactiveUser: true, probeComplete: true });
+  expect(result).toMatchObject({ status: 'FAIL', stage: 'RESULT', category: 'GUEST_ASSERTION_FAILED', cleanup: { status: 'RELEASED', unrelatedPreserved: true } });
+});
+
+test('Sandbox runner reports the real CLI exit code without exposing its diagnostics', async () => {
+  const outputDirectory = await mkdtemp(join(tmpdir(), 'babacom-sandbox-test-'));
+  const result = Promise.resolve().then(() => desktopRunner.runSandboxInstance({
+    outputDirectory, configuration: '<Configuration/>', appSha256: 'a'.repeat(64),
+    execute: async () => { throw Object.assign(new Error('private-session-sentinel'), { code: 17, stderr: 'private-session-sentinel' }); },
+  }));
+  await expect(result).resolves.toMatchObject({ status: 'FAIL', stage: 'INVENTORY', exitCode: 17 });
+  expect(JSON.stringify(await result)).not.toContain('private-session-sentinel');
+});
+
+test('Sandbox runner refuses malformed CLI inventory without publishing its body', async () => {
+  const outputDirectory = await mkdtemp(join(tmpdir(), 'babacom-sandbox-test-'));
+  const result = Promise.resolve().then(() => desktopRunner.runSandboxInstance({
+    outputDirectory, configuration: '<Configuration/>', appSha256: 'a'.repeat(64),
+    execute: async () => ({ stdout: '{private-session-sentinel' }),
+  }));
+  await expect(result).resolves.toMatchObject({ status: 'FAIL', stage: 'INVENTORY', category: 'INVALID_RESPONSE' });
+  expect(JSON.stringify(await result)).not.toContain('private-session-sentinel');
+  expect(await readFile(join(outputDirectory, 'host-summary.json'), 'utf8')).not.toContain('private-session-sentinel');
+});
+
+test('Sandbox runner never connects to or stops an unrelated returned instance', async () => {
+  const outputDirectory = await mkdtemp(join(tmpdir(), 'babacom-sandbox-test-'));
+  const unrelated = '2c4eaad5-2c98-486d-b515-00e3d555c8ad';
+  const calls: string[][] = [];
+  const result = await desktopRunner.runSandboxInstance({
+    outputDirectory, configuration: '<Configuration/>', appSha256: 'a'.repeat(64),
+    execute: async (args: string[]) => {
+      calls.push(args);
+      return { stdout: JSON.stringify(args[0] === 'list'
+        ? { WindowsSandboxEnvironments: [{ Id: unrelated }] } : { Id: unrelated }) };
+    },
+  });
+  expect(result).toMatchObject({ status: 'FAIL', stage: 'CREATE', category: 'OWNERSHIP_UNVERIFIED' });
+  expect(calls.map((args) => args[0])).toEqual(['list', 'start']);
+  expect(calls[1]).toContain('--config');
+  expect(calls[1][calls[1].indexOf('--id') + 1]).not.toBe(unrelated);
+});
+
+async function sandboxScenario(guest: Record<string, unknown> | null, interactiveUser = true) {
+  const outputDirectory = await mkdtemp(join(tmpdir(), 'babacom-sandbox-test-'));
+  const unrelated = '2c4eaad5-2c98-486d-b515-00e3d555c8ad';
+  const calls: string[][] = [];
+  let instanceId = '';
+  let active = false;
+  const execute = async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+    expect(options.timeout).toBeGreaterThan(0);
+    expect(options.timeout).toBeLessThanOrEqual(15_000);
+    expect(options.windowsHide).toBe(true);
+    calls.push(args);
+    if (args[0] === 'list') {
+      return { stdout: JSON.stringify({ WindowsSandboxEnvironments: [{ Id: unrelated }, ...(active ? [{ Id: instanceId }] : [])] }) };
+    }
+    if (args[0] === 'start') {
+      instanceId = args[args.indexOf('--id') + 1];
+      active = true;
+      return { stdout: JSON.stringify({ Id: instanceId }) };
+    }
+    expect(args[args.indexOf('--id') + 1]).toBe(instanceId);
+    if (args[0] === 'connect' && guest) {
+      for (const [filename, stage] of [['guest-started.json', 'ENVIRONMENT'], ['fixture-ready.json', 'API'], ['client-started.json', 'CLIENT']]) {
+        await writeFile(join(outputDirectory, filename), JSON.stringify({ stage, interactiveUser }), { flag: 'wx' });
+      }
+      await writeFile(join(outputDirectory, 'result.json'), JSON.stringify(guest), { flag: 'wx' });
+    }
+    if (args[0] === 'stop') active = false;
+    return { stdout: '{}' };
+  };
+  return { outputDirectory, execute, calls, unrelated, isActive: () => active };
+}
+
+const sandboxPass = {
+  status: 'PASS', environment: 'Windows Sandbox', os: 'Microsoft Windows NT 10.0.26200.0',
+  nodeAbsent: true, npmAbsent: true, typescriptAbsent: true, viteAbsent: true,
+  actualWindow: true, admissionControlsVisible: true, apiRequestsDuringStartup: 0, clientExitCode: 0,
+  appSha256: 'a'.repeat(64),
+};
+
+test('Sandbox runner accepts guest proof only after releasing its owned instance', async () => {
+  const scenario = await sandboxScenario(sandboxPass);
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256 });
+  expect(result).toMatchObject({ status: 'PASS', cleanup: { status: 'RELEASED', unrelatedPreserved: true }, guest: sandboxPass });
+  expect(scenario.isActive()).toBe(false);
+  expect(scenario.calls.filter((args) => args[0] === 'connect' || args[0] === 'stop')).toHaveLength(2);
+});
+
+for (const [name, guest, category] of [
+  ['missing window proof', { ...sandboxPass, actualWindow: false, reason: 'private-session-sentinel' }, 'INVALID_RESULT'],
+  ['different artifact', { ...sandboxPass, appSha256: 'b'.repeat(64) }, 'ARTIFACT_MISMATCH'],
+] as const) {
+  test(`Sandbox runner rejects ${name} and still releases only its instance`, async () => {
+    const scenario = await sandboxScenario(guest);
+    const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256 });
+    expect(result).toMatchObject({ status: 'FAIL', stage: 'RESULT', category, cleanup: { status: 'RELEASED' } });
+    expect(scenario.isActive()).toBe(false);
+    expect(JSON.stringify(result)).not.toContain('private-session-sentinel');
+  });
+}
+
+test('Sandbox runner bounds missing guest evidence and reports NOT_RUN with owned cleanup', async () => {
+  test.setTimeout(1_000);
+  const scenario = await sandboxScenario(null);
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>',
+    appSha256: sandboxPass.appSha256, guestTimeoutMs: 40 });
+  expect(result).toMatchObject({ status: 'NOT_RUN', stage: 'GUEST', category: 'MISSING_RESULT', cleanup: { status: 'RELEASED' } });
+});
+
+test('Sandbox runner cancels an owned instance without accepting already-written PASS', async () => {
+  const scenario = await sandboxScenario(sandboxPass);
+  const controller = new AbortController();
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    signal: controller.signal, execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+      const response = await scenario.execute(args, options);
+      if (args[0] === 'connect') controller.abort();
+      return response;
+    },
+  });
+  expect(result).toMatchObject({ status: 'NOT_RUN', category: 'CANCELLED', cleanup: { status: 'RELEASED' } });
+  expect(scenario.isActive()).toBe(false);
+});
+
+test('Sandbox runner cancellation before inventory creates no instance', async () => {
+  const scenario = await sandboxScenario(null);
+  const controller = new AbortController();
+  controller.abort();
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256, signal: controller.signal });
+  expect(result).toMatchObject({ status: 'NOT_RUN', category: 'CANCELLED', cleanup: { status: 'NOT_OWNED' } });
+  expect(scenario.calls).toHaveLength(0);
+});
+
+test('Sandbox runner times out a stuck connection and releases the confirmed instance', async () => {
+  test.setTimeout(1_000);
+  const scenario = await sandboxScenario(null);
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    cliTimeoutMs: 40, execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+      if (args[0] === 'connect') return new Promise(() => {});
+      return scenario.execute(args, options);
+    },
+  });
+  expect(result).toMatchObject({ status: 'FAIL', stage: 'USER_SESSION', category: 'TIMEOUT', cleanup: { status: 'RELEASED' } });
+});
+
+test('Sandbox runner cleanup failure cannot be covered by guest PASS or leak CLI diagnostics', async () => {
+  const scenario = await sandboxScenario(sandboxPass);
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+      if (args[0] === 'stop') throw Object.assign(new Error('private-session-sentinel'), { code: 23, stderr: 'private-session-sentinel' });
+      return scenario.execute(args, options);
+    },
+  });
+  expect(result).toMatchObject({ status: 'FAIL', cleanup: { status: 'NOT_RELEASED', category: 'CLI_FAILED', exitCode: 23 } });
+  expect(scenario.isActive()).toBe(true);
+  expect(JSON.stringify(result)).not.toContain('private-session-sentinel');
+});
+
+test('Sandbox runner refuses System-session guest proof even with window fields', async () => {
+  const scenario = await sandboxScenario(sandboxPass, false);
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256 });
+  expect(result).toMatchObject({ status: 'FAIL', category: 'INVALID_RESULT', cleanup: { status: 'RELEASED' } });
+});
+
+test('Sandbox runner cleanup timeout cannot become PASS', async () => {
+  test.setTimeout(1_000);
+  const scenario = await sandboxScenario(sandboxPass);
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    cliTimeoutMs: 40, execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+      if (args[0] === 'stop') return new Promise(() => {});
+      return scenario.execute(args, options);
+    },
+  });
+  expect(result).toMatchObject({ status: 'FAIL', cleanup: { status: 'NOT_RELEASED', category: 'TIMEOUT' } });
+});
+
+test('Sandbox runner refuses PASS when the stop command leaves its instance listed', async () => {
+  const scenario = await sandboxScenario(sandboxPass);
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => args[0] === 'stop' ? { stdout: '{}' } : scenario.execute(args, options),
+  });
+  expect(result).toMatchObject({ status: 'FAIL', cleanup: { status: 'NOT_RELEASED' } });
+});
+
+for (const command of ['start', 'connect']) {
+  test(`Sandbox runner ${command} failure retains the CLI exit code and sanitizes evidence`, async () => {
+    const scenario = await sandboxScenario(null);
+    const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+      execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+        if (args[0] === command) throw Object.assign(new Error('private-session-sentinel'), { code: 29, stdout: 'private-session-sentinel' });
+        return scenario.execute(args, options);
+      },
+    });
+    expect(result).toMatchObject({ status: 'FAIL', stage: command === 'start' ? 'CREATE' : 'USER_SESSION', exitCode: 29 });
+    expect(result.cleanup.status).toBe(command === 'start' ? 'NOT_OWNED' : 'RELEASED');
+    expect(JSON.stringify(result)).not.toContain('private-session-sentinel');
+  });
+}
+
+test('Sandbox runner treats malformed guest JSON as failure and releases its instance', async () => {
+  const scenario = await sandboxScenario(null);
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+      const response = await scenario.execute(args, options);
+      if (args[0] === 'connect') await writeFile(join(scenario.outputDirectory, 'result.json'), '{private-session-sentinel', { flag: 'wx' });
+      return response;
+    },
+  });
+  expect(result).toMatchObject({ status: 'FAIL', stage: 'RESULT', category: 'INVALID_RESULT', cleanup: { status: 'RELEASED' } });
+  expect(JSON.stringify(result)).not.toContain('private-session-sentinel');
+});
+
+test('Sandbox runner cancellation while waiting releases the owned instance', async () => {
+  const scenario = await sandboxScenario(null);
+  const controller = new AbortController();
+  const resultPromise = desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    signal: controller.signal, execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+      const response = await scenario.execute(args, options);
+      if (args[0] === 'connect') setTimeout(() => controller.abort(), 20);
+      return response;
+    },
+  });
+  await expect(resultPromise).resolves.toMatchObject({ status: 'NOT_RUN', stage: 'GUEST', category: 'CANCELLED', cleanup: { status: 'RELEASED' } });
+  expect(scenario.isActive()).toBe(false);
+});
+
+test('Sandbox runner reserves cleanup inside the overall deadline instead of using the whole guest wait', async () => {
+  const scenario = await sandboxScenario(null);
+  const started = Date.now();
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    deadline: started + 15_080 });
+  expect(result).toMatchObject({ status: 'NOT_RUN', category: 'MISSING_RESULT', cleanup: { status: 'RELEASED' } });
+  expect(Date.now() - started).toBeLessThan(1_000);
+});
+
+test('Sandbox runner guest assertion failure reports only a fixed category and cleans up', async () => {
+  const scenario = await sandboxScenario({ status: 'FAIL', stage: 'WINDOW', category: 'private-session-sentinel' });
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256 });
+  expect(result).toMatchObject({ status: 'FAIL', stage: 'RESULT', category: 'GUEST_ASSERTION_FAILED', guestStage: 'WINDOW', cleanup: { status: 'RELEASED' } });
+  expect(await readFile(join(scenario.outputDirectory, 'host-summary.json'), 'utf8')).not.toContain('private-session-sentinel');
+});
+
+test('Sandbox runner cancellation during release prevents a late PASS', async () => {
+  const scenario = await sandboxScenario(sandboxPass);
+  const controller = new AbortController();
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    signal: controller.signal, execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+      if (args[0] === 'stop') controller.abort();
+      return scenario.execute(args, options);
+    },
+  });
+  expect(result).toMatchObject({ status: 'NOT_RUN', category: 'CANCELLED', cleanup: { status: 'RELEASED' } });
+});
+
+test('Sandbox runner input copying preserves source bytes and copies nested files with the native deadline', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'babacom-sandbox-copy-'));
+  const source = join(directory, 'source');
+  const target = join(directory, 'target');
+  await mkdir(join(source, 'nested'), { recursive: true });
+  await writeFile(join(source, 'nested', 'sample.txt'), 'sandbox-copy-proof', { flag: 'wx' });
+  await desktopRunner.copySandboxInput(source, target, { recursive: true, deadline: Date.now() + 15_000 });
+  expect(await readFile(join(target, 'nested', 'sample.txt'), 'utf8')).toBe('sandbox-copy-proof');
+  expect(await readFile(join(source, 'nested', 'sample.txt'), 'utf8')).toBe('sandbox-copy-proof');
+});
+
+test('Sandbox runner refuses an expired copy budget before invoking any native copy', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'babacom-sandbox-copy-'));
+  const result = Promise.resolve().then(() => desktopRunner.copySandboxInput(join(directory, 'source'), join(directory, 'target'),
+    { deadline: Date.now() - 1 }));
+  await expect(result).rejects.toThrow('Sandbox preparation timed out');
+  await expect(result).rejects.toMatchObject({ category: 'TIMEOUT' });
+});
 
 async function simulateCapture(running: Awaited<ReturnType<typeof launch>>, scenario: 'ready' | 'denied' | 'no-device' | 'late' = 'ready', consent = true) {
   await running.application.evaluate(({ dialog }, consent) => {
