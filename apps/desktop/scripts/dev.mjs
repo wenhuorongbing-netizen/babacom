@@ -1,10 +1,10 @@
 import { execFile, spawn } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import { createHash, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { buildDesktop, desktop, root } from './build.mjs';
@@ -221,7 +221,17 @@ $client = $null
 $pipe = $null
 $writer = $null
 $result = [ordered]@{ status = 'FAIL'; stage = $stage }
+function Write-GuestEvidence([string]$filename, $evidence) {
+  $destination = 'C:\T1Output\' + $filename
+  $stream = [IO.File]::Open(($destination + '.pending'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+  $evidenceWriter = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false))
+  try { $evidenceWriter.Write(($evidence | ConvertTo-Json)) } finally { $evidenceWriter.Dispose() }
+  [IO.File]::Move(($destination + '.pending'), $destination)
+}
 try {
+  $interactiveUser = [Diagnostics.Process]::GetCurrentProcess().SessionId -gt 0
+  Write-GuestEvidence 'guest-started.json' ([ordered]@{ stage = $stage; interactiveUser = $interactiveUser })
+  if (-not $interactiveUser) { throw 'No interactive user session' }
   $tools = @(Get-Command node.exe,npm.cmd,npx.cmd,tsc.cmd,vite.cmd -ErrorAction SilentlyContinue)
   if ($tools.Count -ne 0) { throw 'Development tools are present' }
   $stage = 'API'
@@ -242,6 +252,7 @@ try {
   $configurationText = $handshake.Result
   $configuration = $configurationText | ConvertFrom-Json
   if ($configuration.apiBase -notmatch '^http://127[.]0[.]0[.]1:[0-9]+$') { throw 'Invalid API handshake' }
+  Write-GuestEvidence 'fixture-ready.json' ([ordered]@{ stage = $stage; interactiveUser = $interactiveUser })
   $apiOutput = $api.StandardOutput.ReadToEndAsync()
   $stage = 'BROKER'
   $name = 'babacom-' + [Guid]::NewGuid().ToString()
@@ -262,6 +273,7 @@ try {
   $clientInfo.RedirectStandardOutput = $true
   $clientInfo.RedirectStandardError = $true
   $client = [Diagnostics.Process]::Start($clientInfo)
+  Write-GuestEvidence 'client-started.json' ([ordered]@{ stage = $stage; interactiveUser = ($client.SessionId -gt 0) })
   $clientOutput = $client.StandardOutput.ReadToEndAsync()
   $clientErrors = $client.StandardError.ReadToEndAsync()
   if (-not $connected.AsyncWaitHandle.WaitOne(15000)) { throw 'Client startup timed out' }
@@ -335,66 +347,242 @@ try {
   if ($null -ne $api -and -not $api.HasExited) { $api.Kill() }
   $configuration = $null
   $configurationText = $null
-  [IO.File]::WriteAllText('C:\T1Output\result.json', ($result | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
-  Stop-Computer -Force
+  Write-GuestEvidence 'result.json' $result
 }
 `;
 
-export async function runSandboxAcceptance() {
-  const execute = promisify(execFile);
-  const occupied = await execute('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-    '@(Get-Process | Where-Object ProcessName -In WindowsSandbox,WindowsSandboxClient).Count'], { windowsHide: true });
-  if (Number(occupied.stdout.trim()) !== 0) throw new Error('Existing Windows Sandbox is not owned by this test');
-  const runtime = JSON.parse((await execute('uv', ['run', '--frozen', '--directory', join(root, 'apps/api'),
-    'python', '-c', 'import json,sys,platform; print(json.dumps({"base":sys.base_prefix,"version":platform.python_version()}))'],
-  { cwd: root, windowsHide: true })).stdout);
-  const runDirectory = await mkdtemp(join(desktop, 'build/sandbox-'));
-  const input = join(runDirectory, 'input');
-  const output = join(runDirectory, 'output');
-  await mkdir(output, { recursive: true });
-  await cp(join(desktop, 'build/windows/win-unpacked'), join(input, 'client'), { recursive: true });
-  await cp(runtime.base, join(input, 'python'), { recursive: true, dereference: true });
-  await cp(join(root, 'apps/api/.venv/Lib/site-packages'), join(input, 'site-packages'), { recursive: true, dereference: true });
-  await cp(join(root, 'apps/api/app'), join(input, 'root/apps/api/app'), { recursive: true });
-  await mkdir(join(input, 'root/packages/contracts'), { recursive: true });
-  for (const filename of ['admission.schema.json', 'token-claims.schema.json', 'permissions.schema.json']) {
-    await cp(join(root, 'packages/contracts', filename), join(input, 'root/packages/contracts', filename));
-  }
-  await mkdir(join(input, 'root/tests/tokens'), { recursive: true });
-  await cp(join(root, 'tests/tokens/local_service.py'), join(input, 'root/tests/tokens/local_service.py'));
-  await writeFile(join(input, 'guest.ps1'), sandboxGuestScript, 'ascii');
-  const xml = (value) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-  const configuration = '<Configuration><vGPU>Disable</vGPU><Networking>Disable</Networking>'
-    + '<AudioInput>Disable</AudioInput><VideoInput>Disable</VideoInput><ClipboardRedirection>Disable</ClipboardRedirection>'
-    + '<PrinterRedirection>Disable</PrinterRedirection><MappedFolders>'
-    + '<MappedFolder><HostFolder>' + xml(input) + '</HostFolder><SandboxFolder>C:\\T1Input</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>'
-    + '<MappedFolder><HostFolder>' + xml(output) + '</HostFolder><SandboxFolder>C:\\T1Output</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>'
-    + '</MappedFolders><LogonCommand><Command>powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\\T1Input\\guest.ps1</Command></LogonCommand></Configuration>';
-  const configurationPath = join(runDirectory, 'acceptance.wsb');
-  await writeFile(configurationPath, configuration);
-  const child = spawn(join(process.env.SystemRoot ?? 'C:/Windows', 'System32/WindowsSandbox.exe'),
-    [configurationPath], { stdio: 'ignore', windowsHide: true });
-  let launchFailed = false;
-  child.once('error', () => { launchFailed = true; });
-  const deadline = Date.now() + 120_000;
-  let result = { status: 'NOT_RUN', reason: 'Windows Sandbox did not return an actual guest result' };
+async function withinSandboxDeadline(operation, timeout, signal) {
+  const error = (category) => Object.assign(new Error(category), { category });
+  if (signal?.aborted) throw error('CANCELLED');
+  if (timeout <= 0) throw error('TIMEOUT');
+  const controller = new AbortController();
+  let timer;
+  let cancel;
+  const interrupted = new Promise((_, reject) => {
+    timer = setTimeout(() => { reject(error('TIMEOUT')); controller.abort(); }, timeout);
+    cancel = () => { reject(error('CANCELLED')); controller.abort(); };
+    signal?.addEventListener('abort', cancel, { once: true });
+  });
   try {
-    while (!launchFailed && Date.now() < deadline) {
-      try {
-        result = JSON.parse(await readFile(join(output, 'result.json'), 'utf8'));
-        break;
-      } catch (error) {
-        if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
-      }
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
+    return await Promise.race([operation({ timeout, windowsHide: true, signal: controller.signal }), interrupted]);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', cancel);
+  }
+}
+
+/**
+ * @param {string[]} args
+ * @param {{timeout: number, windowsHide: boolean, signal: AbortSignal}} options
+ * @returns {Promise<{stdout: string}>}
+ */
+async function executeSandboxCommand(args, options) {
+  if (args[0] !== 'connect') return promisify(execFile)('wsb.exe', args, { ...options, encoding: 'utf8' });
+  // The desktop process inherits piped output and can keep execFile pending after wsb exits.
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('wsb.exe', args, { ...options, stdio: 'ignore' });
+    child.once('error', reject);
+    child.once('exit', (code) => {
+      if (code === 0) resolvePromise({ stdout: '' });
+      else reject(Object.assign(new Error('CLI_FAILED'), { code }));
+    });
+  });
+}
+
+/**
+ * @param {{outputDirectory: string, configuration: string, appSha256: string, signal?: AbortSignal,
+ * cliTimeoutMs?: number, guestTimeoutMs?: number, deadline?: number,
+ * execute?: (args: string[], options: {timeout: number, windowsHide: boolean, signal: AbortSignal}) => Promise<{stdout: string}>}} options
+ */
+export async function runSandboxInstance({ outputDirectory, configuration, appSha256,
+  signal, cliTimeoutMs = 15_000, guestTimeoutMs = 120_000, deadline = Date.now() + 180_000,
+  execute = executeSandboxCommand }) {
+  const requestedId = randomUUID();
+  const runnerError = (category) => Object.assign(new Error(category), { category });
+  const record = async (filename, value, final = false) => {
+    try {
+      await withinSandboxDeadline(({ signal: writeSignal }) => writeFile(join(outputDirectory, filename), JSON.stringify(value),
+        { flag: 'wx', signal: writeSignal }), Math.min(15_000, deadline - (final ? 0 : 15_000) - Date.now()), final ? undefined : signal);
     }
-    const appSha256 = createHash('sha256').update(await readFile(join(input, 'client/resources/app.asar'))).digest('hex');
-    if (result.status === 'PASS' && result.appSha256 !== appSha256) throw new Error('Sandbox tested a different application artifact');
-    console.log(JSON.stringify({ ...result, pythonFixtureVersion: runtime.version,
-      uvLockSha256: createHash('sha256').update(await readFile(join(root, 'apps/api/uv.lock'))).digest('hex'), runDirectory }));
+    catch (error) {
+      if (error.category === 'TIMEOUT' || error.category === 'CANCELLED') throw error;
+      throw runnerError('EVIDENCE_IO');
+    }
+  };
+  const checkCancelled = () => { if (signal?.aborted) throw runnerError('CANCELLED'); };
+  const invoke = async (args, cleanupDeadline) => {
+    const timeout = Math.min(15_000, cliTimeoutMs, (cleanupDeadline ?? deadline - 15_000) - Date.now());
+    return withinSandboxDeadline((options) => execute(args, options), timeout, cleanupDeadline ? undefined : signal);
+  };
+  const parseInventory = (response) => {
+    const inventory = JSON.parse(response.stdout.trim());
+    if (!Array.isArray(inventory.WindowsSandboxEnvironments)
+      || inventory.WindowsSandboxEnvironments.some((item) => !item || typeof item.Id !== 'string'
+        || !/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(item.Id))) {
+      throw new SyntaxError('Invalid inventory');
+    }
+    return inventory.WindowsSandboxEnvironments.map((item) => item.Id.toLowerCase());
+  };
+  const failure = (error) => ({ status: error.category === 'CANCELLED' ? 'NOT_RUN' : 'FAIL', stage,
+    category: ['CANCELLED', 'TIMEOUT', 'EVIDENCE_IO', 'OWNERSHIP_UNVERIFIED'].includes(error.category) ? error.category
+      : error.killed ? 'TIMEOUT' : error instanceof SyntaxError ? 'INVALID_RESPONSE' : 'CLI_FAILED',
+    exitCode: Number.isInteger(error.code) ? error.code : null });
+  let stage = 'INVENTORY';
+  let baseline = [];
+  let owned = false;
+  let result;
+  /** @type {{status: string, unrelatedPreserved?: boolean, category?: string, exitCode?: number | null}} */
+  let cleanup = { status: 'NOT_OWNED' };
+  try {
+    baseline = parseInventory(await invoke(['list', '--raw']));
+    await record('host-inventory.json', { stage, requestedId, existingIds: baseline });
+    stage = 'CREATE';
+    if (baseline.includes(requestedId)) throw runnerError('OWNERSHIP_UNVERIFIED');
+    const created = JSON.parse((await invoke(['start', '--id', requestedId, '--config', configuration, '--raw'])).stdout.trim());
+    const returnedId = typeof created === 'string' ? created : created?.Id;
+    if (typeof returnedId !== 'string' || returnedId.toLowerCase() !== requestedId
+      || !parseInventory(await invoke(['list', '--raw'])).includes(requestedId)) {
+      result = { status: 'FAIL', stage, category: 'OWNERSHIP_UNVERIFIED' };
+    } else {
+      owned = true;
+      await record('host-created.json', { stage, instanceId: requestedId });
+      stage = 'USER_SESSION';
+      await invoke(['connect', '--id', requestedId, '--raw']);
+      await record('host-session.json', { stage, status: 'CONNECTED' });
+      checkCancelled();
+      stage = 'GUEST';
+      const guestDeadline = Math.min(Date.now() + Math.min(120_000, guestTimeoutMs), deadline - 15_000);
+      result = { status: 'NOT_RUN', stage, category: 'MISSING_RESULT' };
+      while (Date.now() < guestDeadline) {
+        checkCancelled();
+        try {
+          const readGuest = (filename) => withinSandboxDeadline(({ signal: readSignal }) => readFile(join(outputDirectory, filename),
+            { encoding: 'utf8', signal: readSignal }), Math.min(15_000, guestDeadline - Date.now()), signal);
+          const guest = JSON.parse(await readGuest('result.json'));
+          stage = 'RESULT';
+          const fields = ['nodeAbsent', 'npmAbsent', 'typescriptAbsent', 'viteAbsent', 'actualWindow', 'admissionControlsVisible'];
+          if (guest.status === 'FAIL') {
+            result = { status: 'FAIL', stage, category: 'GUEST_ASSERTION_FAILED',
+              guestStage: ['ENVIRONMENT', 'API', 'BROKER', 'CLIENT', 'WINDOW', 'CLOSE', 'DIAGNOSTICS'].includes(guest.stage) ? guest.stage : 'UNKNOWN' };
+          } else if (guest.status !== 'PASS' || guest.environment !== 'Windows Sandbox'
+            || fields.some((field) => guest[field] !== true) || guest.apiRequestsDuringStartup !== 0 || guest.clientExitCode !== 0
+            || !/^Microsoft Windows NT [0-9.]+$/.test(guest.os) || !/^[a-f0-9]{64}$/.test(guest.appSha256)) {
+            result = { status: 'FAIL', stage, category: 'INVALID_RESULT' };
+          } else if (guest.appSha256 !== appSha256) {
+            result = { status: 'FAIL', stage, category: 'ARTIFACT_MISMATCH' };
+          } else {
+            for (const [filename, expectedStage] of [['guest-started.json', 'ENVIRONMENT'], ['fixture-ready.json', 'API'], ['client-started.json', 'CLIENT']]) {
+              const proof = JSON.parse(await readGuest(filename).catch((error) => {
+                if (error.category === 'TIMEOUT' || error.category === 'CANCELLED') throw error;
+                return 'null';
+              }));
+              if (proof?.stage !== expectedStage || proof.interactiveUser !== true) throw new SyntaxError('Invalid guest phase');
+            }
+            checkCancelled();
+            result = { status: 'PASS', stage, guest: Object.fromEntries(['status', 'environment', 'os', ...fields,
+              'apiRequestsDuringStartup', 'clientExitCode', 'appSha256'].map((field) => [field, guest[field]])) };
+          }
+          break;
+        } catch (error) {
+          if (error.category === 'CANCELLED' || error.category === 'TIMEOUT') throw error;
+          if (error.code !== 'ENOENT') {
+            result = { status: 'FAIL', stage: 'RESULT', category: 'INVALID_RESULT' };
+            break;
+          }
+        }
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, Math.max(0, Math.min(250, guestDeadline - Date.now()))));
+      }
+    }
+  } catch (error) {
+    result = failure(error);
+  } finally {
+    if (owned) {
+      try {
+        const cleanupDeadline = Math.min(Date.now() + 15_000, deadline);
+        // Cancellation stops the test, but must not cancel release of its confirmed instance.
+        await invoke(['stop', '--id', requestedId, '--raw'], cleanupDeadline);
+        const remaining = parseInventory(await invoke(['list', '--raw'], cleanupDeadline));
+        cleanup = { status: remaining.includes(requestedId) ? 'NOT_RELEASED' : 'RELEASED',
+          unrelatedPreserved: baseline.every((id) => remaining.includes(id)) };
+        if (cleanup.status !== 'RELEASED' || !cleanup.unrelatedPreserved) result.status = 'FAIL';
+      } catch (error) {
+        result.status = 'FAIL';
+        cleanup = { status: 'NOT_RELEASED', category: failure(error).category, exitCode: Number.isInteger(error.code) ? error.code : null };
+      }
+    }
+  }
+  if (signal?.aborted && result.status === 'PASS') result = { status: 'NOT_RUN', stage: 'RESULT', category: 'CANCELLED' };
+  const summary = { ...result, cleanup };
+  try { await record('host-summary.json', summary, true); }
+  catch { return { ...summary, status: 'FAIL', stage: 'EVIDENCE', category: 'EVIDENCE_IO' }; }
+  return summary;
+}
+
+// Native copying can be terminated in the middle of a file; fs.cp's filter cannot.
+/**
+ * @param {string} source
+ * @param {string} target
+ * @param {{recursive?: boolean, deadline?: number, signal?: AbortSignal}} options
+ */
+export async function copySandboxInput(source, target, { recursive = false, deadline = Date.now() + 15_000, signal } = {}) {
+  const timeout = Math.min(15_000, deadline - Date.now());
+  if (timeout <= 0) throw Object.assign(new Error('Sandbox preparation timed out'), { category: 'TIMEOUT' });
+  if (!recursive && basename(source) !== basename(target)) throw new Error('Invalid Sandbox copy target');
+  try {
+    await withinSandboxDeadline((options) => promisify(execFile)('robocopy.exe', [recursive ? source : dirname(source), recursive ? target : dirname(target),
+      recursive ? '/E' : basename(source), '/R:0', '/W:0', '/NJH', '/NJS', '/NFL', '/NDL', '/NP'],
+    { ...options, encoding: 'utf8' }), timeout, signal);
+  } catch (error) {
+    // Robocopy reports successful copies with exit codes 1..7.
+    if (!Number.isInteger(error.code) || error.code < 0 || error.code > 7 || error.killed || signal?.aborted) throw error;
+  }
+}
+
+export async function runSandboxAcceptance() {
+  const deadline = Date.now() + 180_000;
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  process.once('SIGINT', cancel);
+  process.once('SIGTERM', cancel);
+  const copy = (source, target, options = {}) => copySandboxInput(source, target,
+    { ...options, deadline: deadline - 15_000, signal: controller.signal });
+  const prepare = (operation) => withinSandboxDeadline(operation, Math.min(15_000, deadline - 15_000 - Date.now()), controller.signal);
+  try {
+    const execute = promisify(execFile);
+    const runtime = JSON.parse((await prepare((options) => execute('uv', ['run', '--frozen', '--directory', join(root, 'apps/api'),
+      'python', '-c', 'import json,sys,platform; print(json.dumps({"base":sys.base_prefix,"version":platform.python_version()}))'],
+    { ...options, cwd: root, encoding: 'utf8' }))).stdout);
+    const runDirectory = await prepare(() => mkdtemp(join(desktop, 'build/sandbox-')));
+    const input = join(runDirectory, 'input');
+    const output = join(runDirectory, 'output');
+    await prepare(() => mkdir(output, { recursive: true }));
+    await copy(join(desktop, 'build/windows/win-unpacked'), join(input, 'client'), { recursive: true });
+    await copy(runtime.base, join(input, 'python'), { recursive: true });
+    await copy(join(root, 'apps/api/.venv/Lib/site-packages'), join(input, 'site-packages'), { recursive: true });
+    await copy(join(root, 'apps/api/app'), join(input, 'root/apps/api/app'), { recursive: true });
+    await prepare(() => mkdir(join(input, 'root/packages/contracts'), { recursive: true }));
+    for (const filename of ['admission.schema.json', 'token-claims.schema.json', 'permissions.schema.json']) {
+      await copy(join(root, 'packages/contracts', filename), join(input, 'root/packages/contracts', filename));
+    }
+    await prepare(() => mkdir(join(input, 'root/tests/tokens'), { recursive: true }));
+    await copy(join(root, 'tests/tokens/local_service.py'), join(input, 'root/tests/tokens/local_service.py'));
+    await prepare(({ signal }) => writeFile(join(input, 'guest.ps1'), sandboxGuestScript, { encoding: 'ascii', flag: 'wx', signal }));
+    const xml = (value) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    const configuration = '<Configuration><vGPU>Disable</vGPU><Networking>Disable</Networking>'
+      + '<AudioInput>Disable</AudioInput><VideoInput>Disable</VideoInput><ClipboardRedirection>Disable</ClipboardRedirection>'
+      + '<PrinterRedirection>Disable</PrinterRedirection><MappedFolders>'
+      + '<MappedFolder><HostFolder>' + xml(input) + '</HostFolder><SandboxFolder>C:\\T1Input</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>'
+      + '<MappedFolder><HostFolder>' + xml(output) + '</HostFolder><SandboxFolder>C:\\T1Output</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>'
+      + '</MappedFolders><LogonCommand><Command>powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\\T1Input\\guest.ps1</Command></LogonCommand></Configuration>';
+    await prepare(({ signal }) => writeFile(join(runDirectory, 'acceptance.wsb'), configuration, { flag: 'wx', signal }));
+    const appSha256 = createHash('sha256').update(await prepare(({ signal }) => readFile(join(input, 'client/resources/app.asar'), { signal }))).digest('hex');
+    const uvLockSha256 = createHash('sha256').update(await prepare(({ signal }) => readFile(join(root, 'apps/api/uv.lock'), { signal }))).digest('hex');
+    const result = await runSandboxInstance({ outputDirectory: output, configuration, appSha256, deadline, signal: controller.signal });
+    console.log(JSON.stringify({ ...result, pythonFixtureVersion: runtime.version, uvLockSha256, runDirectory }));
     process.exitCode = result.status === 'PASS' ? 0 : 1;
   } finally {
-    if (child.exitCode === null) child.kill();
+    process.removeListener('SIGINT', cancel);
+    process.removeListener('SIGTERM', cancel);
   }
 }
 
@@ -402,7 +590,9 @@ async function main() {
   if (process.argv.includes('--sandbox-acceptance')) {
     try { await runSandboxAcceptance(); }
     catch (error) {
-      console.error('Windows Sandbox setup failed (' + (error.code ?? 'UNKNOWN') + '; ' + (error.syscall ?? 'UNKNOWN') + ').');
+      console.error(JSON.stringify({ status: error.category === 'CANCELLED' ? 'NOT_RUN' : 'FAIL', stage: 'PREPARATION',
+        category: ['TIMEOUT', 'CANCELLED'].includes(error.category) ? error.category : error.killed ? 'TIMEOUT' : 'SETUP_FAILED',
+        exitCode: Number.isInteger(error.code) ? error.code : null }));
       process.exitCode = 1;
     }
     return;
