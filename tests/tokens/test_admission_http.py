@@ -1,10 +1,87 @@
 import logging
+import socket
 from datetime import datetime, timedelta
+from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import jwt
 import pytest
 from livekit.api import TokenVerifier
+from tokens import local_service
 from tokens.local_service import FixtureInputs, running_service
+
+
+@pytest.fixture
+def allocated_ports(monkeypatch):
+    def install(ports, bind_error=None):
+        created = []
+
+        class CandidateSocket(socket.socket):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.reported_port = ports[min(len(created), len(ports) - 1)]
+                created.append(self)
+
+            def getsockname(self):
+                host, port = super().getsockname()
+                return host, port if self.reported_port is None else self.reported_port
+
+            def bind(self, address):
+                if bind_error is not None:
+                    raise bind_error
+                return super().bind(address)
+
+        # Keep real sockets/server/HTTP; control only the OS-assigned port metadata.
+        monkeypatch.setattr(
+            local_service, "socket", SimpleNamespace(socket=CandidateSocket)
+        )
+        return created
+
+    return install
+
+
+@pytest.mark.parametrize("blocked_port", [21, 5060, 6000, 6666, 10080])
+def test_launcher_rejects_fetch_bad_ports_before_serving(allocated_ports, blocked_port):
+    sockets = allocated_ports([blocked_port, None])
+    with running_service() as service:
+        assert urlsplit(service.base_url).port != blocked_port
+        assert sockets[0].fileno() == -1
+        assert service.post().status_code == 200
+    assert all(sock.fileno() == -1 for sock in sockets)
+
+
+@pytest.mark.parametrize("allowed_port", [80, 8080, 49152])
+def test_launcher_keeps_fetch_compatible_ports(allocated_ports, allowed_port):
+    sockets = allocated_ports([allowed_port])
+    with running_service() as service:
+        assert urlsplit(service.base_url).port == allowed_port
+        assert sockets[0].fileno() != -1
+    assert all(sock.fileno() == -1 for sock in sockets)
+
+
+def test_launcher_fails_with_closed_sockets_when_port_selection_is_exhausted(
+    allocated_ports,
+):
+    sockets = allocated_ports([10080])
+    with pytest.raises(RuntimeError, match="Fetch-compatible loopback port"):
+        with running_service():
+            pass
+    assert 1 <= len(sockets) <= 16
+    assert all(sock.fileno() == -1 for sock in sockets)
+
+
+def test_launcher_closes_socket_and_propagates_bind_failure(allocated_ports):
+    failure = OSError("Controlled bind failure")
+    sockets = allocated_ports([None], bind_error=failure)
+    try:
+        with pytest.raises(OSError) as caught:
+            with running_service():
+                pass
+        assert caught.value is failure
+        assert all(sock.fileno() == -1 for sock in sockets)
+    finally:
+        for sock in sockets:
+            sock.close()
 
 
 def test_authenticated_member_prepares_normalized_name(http_service):
