@@ -576,9 +576,13 @@ export async function runSandboxInstance({ outputDirectory, configuration, appSh
   const checkCancelled = () => { if (signal?.aborted) throw runnerError('CANCELLED'); };
   const invoke = async (args, cleanupDeadline) => {
     const timeout = Math.min(15_000, cliTimeoutMs, (cleanupDeadline ?? deadline - 15_000) - Date.now());
-    return withinSandboxDeadline((options) => {
+    return withinSandboxDeadline(async (options) => {
       if (args[0] === 'start') creationRequested = true;
-      return execute(args, options);
+      try { return await execute(args, options); }
+      catch (error) {
+        if (args[0] === 'start' && error.code === 2147746294) throw Object.assign(runnerError('BUSY'), { code: error.code });
+        throw error;
+      }
     }, timeout, cleanupDeadline ? undefined : signal);
   };
   const parseInventory = (response) => {
@@ -592,8 +596,7 @@ export async function runSandboxInstance({ outputDirectory, configuration, appSh
   };
   const failure = (error) => ({ status: error.category === 'CANCELLED' ? 'NOT_RUN' : 'FAIL', stage,
     category: ['CANCELLED', 'TIMEOUT', 'EVIDENCE_IO', 'OWNERSHIP_UNVERIFIED', 'BUSY', 'ADMISSION_FAILED'].includes(error.category) ? error.category
-      : stage === 'CREATE' && error.code === 2147746294 ? 'BUSY'
-        : error.killed ? 'TIMEOUT' : error instanceof SyntaxError ? 'INVALID_RESPONSE' : 'CLI_FAILED',
+      : error.killed ? 'TIMEOUT' : error instanceof SyntaxError ? 'INVALID_RESPONSE' : 'CLI_FAILED',
     exitCode: Number.isInteger(error.code) ? error.code : null });
   let stage = 'ADMISSION';
   let baseline = [];

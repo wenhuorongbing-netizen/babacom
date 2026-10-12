@@ -706,6 +706,36 @@ test('Sandbox runner preserves a newly inserted foreign instance while stopping 
   expect(scenario.calls.filter((args) => args[0] === 'connect')).toEqual([['connect', '--id', requestedId, '--raw']]);
 });
 
+for (const fault of ['confirmation', 'owned-cleanup'] as const) {
+  test(`Sandbox runner does not infer CREATE contention from the ${fault} command exit code`, async () => {
+    const scenario = await sandboxScenario(null);
+    if (fault === 'owned-cleanup') await writeFile(join(scenario.outputDirectory, 'host-created.json'), '{}', { flag: 'wx' });
+    let created = false;
+    const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+      execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+        if ((fault === 'confirmation' && args[0] === 'list' && created) || (fault === 'owned-cleanup' && args[0] === 'stop')) {
+          scenario.calls.push(args);
+          throw Object.assign(new Error('private-session-sentinel'), { code: 2147746294 });
+        }
+        const response = await scenario.execute(args, options);
+        if (args[0] === 'start') created = true;
+        return response;
+      },
+    });
+    expect(result).toMatchObject({ status: 'FAIL', stage: 'CREATE', category: fault === 'confirmation' ? 'CLI_FAILED' : 'EVIDENCE_IO' });
+    if (fault === 'confirmation') {
+      expect(result).toMatchObject({ exitCode: 2147746294, cleanup: { status: 'UNKNOWN', category: 'OWNERSHIP_UNVERIFIED' } });
+      expect(scenario.calls.map((args) => args[0])).toEqual(['list', 'start', 'list']);
+    } else {
+      expect(result.cleanup).toMatchObject({ status: 'NOT_RELEASED', category: 'CLI_FAILED', exitCode: 2147746294 });
+      const requestedId = scenario.calls.find((args) => args[0] === 'start')?.[2];
+      expect(scenario.calls.filter((args) => args[0] === 'stop')).toEqual([['stop', '--id', requestedId, '--raw']]);
+    }
+    expect(scenario.isActive()).toBe(true);
+    expect(await readFile(join(scenario.outputDirectory, 'host-summary.json'), 'utf8')).not.toContain('private-session-sentinel');
+  });
+}
+
 test('Sandbox runner preserves both the original connection error and its owned cleanup error', async () => {
   const scenario = await sandboxScenario(null);
   const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
@@ -759,7 +789,7 @@ test('Sandbox runner shares admission across real processes and work directories
     const messages: { type: string; result?: Awaited<ReturnType<typeof desktopRunner.runSandboxInstance>>; calls?: string[][] }[] = [];
     createInterface({ input: child.stdout }).on('line', (line) => messages.push(JSON.parse(line)));
     const exited = new Promise<number | null>((resolve, reject) => {
-      child.once('exit', resolve);
+      child.once('close', resolve);
       child.once('error', reject);
     });
     return { child, messages, exited };
