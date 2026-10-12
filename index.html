@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Babacom — planning documents</title>
+<title>Babacom — project documents</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -71,15 +71,15 @@ footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--line);
 <div class="wrap">
 
 <header>
-  <p class="eyebrow">Planning documents</p>
+  <p class="eyebrow">Project documents</p>
   <h1>Babacom</h1>
-  <p class="lede">A self-hosted, Discord-style voice, video and screen-sharing app for a private group split between mainland China and Europe — invite-only, no ID collection, no per-seat fees.</p>
+  <p class="lede">A self-hosted desktop voice prototype for a private group split between mainland China and Europe. Video and screen sharing remain planned work; real-device and cross-border acceptance are still open.</p>
 </header>
 
 <div class="docs">
   <a class="doc" href="scope.html">
     <h2>Build Scope</h2>
-    <p>Every feature selected, everything deliberately ruled out, and a three-release order that reaches something playable in about four weeks.</p>
+    <p>The original feature selection, exclusions and proposed release order. Current implementation follows the signed T1/T2 contracts linked in the README.</p>
     <span class="meta">84 in · 3 optional · 34 out</span>
   </a>
   <a class="doc" href="teams.html">
@@ -90,16 +90,16 @@ footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--line);
 </div>
 
 <section>
-  <h3>Why it is shaped this way</h3>
+  <h3>Original planning assumptions</h3>
   <ol>
     <li><strong>The Great Firewall is not the main obstacle.</strong> It does not blanket-throttle UDP. Nearly all China-to-overseas packet loss is ordinary carrier congestion on the international backbone, worst between 20:00 and 23:00 China time.</li>
     <li><strong>No WebRTC media server implements working video error correction.</strong> Above roughly 6% sustained loss, video degrades regardless of software. Path quality is the load-bearing decision, not a tuning detail.</li>
     <li><strong>Audio is recoverable where video is not.</strong> Opus with redundancy and inband FEC holds to roughly 15–22% loss, so the design is audio-first with video as an explicit opt-in.</li>
   </ol>
-  <p style="margin-top:16px;color:var(--ink-2)">The result is two servers — one in East Asia on a China-optimised route, one in Europe — with each room pinned to a region, and the region shown in the interface so people can see why something is slow and move.</p>
+  <p style="margin-top:16px;color:var(--ink-2)">The intended deployment uses two servers — one in East Asia on a China-optimised route and one in Europe — with planned room-region selection and labels. These are deployment goals, not results established by the local prototype.</p>
 </section>
 
-<footer>Planning only — no application code in this repository yet.</footer>
+<footer>Desktop admission and voice code are implemented. Real-device and cross-border acceptance remain open. The scope and team pages record the original plan; see the <a href="README.md">README</a> and <a href="REPO_MAP.md">repository map</a> for current contracts and source entries.</footer>
 
 </div>
 </body>

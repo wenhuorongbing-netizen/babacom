@@ -1,86 +1,67 @@
-# REPO_MAP — 一页纸仓库地图
+# REPO_MAP — 一页仓库地图
 
-> **Agent 读这份地图，不要扫全库。** 需要细节时再按下面的指引打开具体文件。
-> 结构变化后用 `dev-map` skill 刷新本文件。
->
-> 最后更新：2026-08-29 · 状态：**规划阶段，尚无应用代码**
+> 先读地图，再按任务定位；不要扫全库。
+> 更新：2026-10-11。本 fork 已有桌面、准入 API 与语音实现；设备/跨境验收独立。
 
----
+## 当前入口与职责
 
-## 现在仓库里有什么
-
-```
-babacom/
-├─ index.html scope.html teams.html   规划文档（英文，静态站，可 GitHub Pages 发布）
-├─ README.md                          入口
-├─ REPO_MAP.md                        本文件
-├─ AGENTS.md                          ← 所有 agent 必读
-├─ docs/                              工程评审与修订（中文）
-├─ .agents/                           共享 harness：边界清单 + 检查器
-├─ .claude/settings.json              权限与 hooks
-├─ .github/                           CODEOWNERS · PR 模板 · workflows
-├─ apps/desktop/AGENTS.md             ← 目录规则（代码尚未落地）
-├─ apps/api/AGENTS.md                 ← 目录规则（代码尚未落地）
-└─ infra/AGENTS.md                    ← 目录规则（代码尚未落地）
-```
-
-## 计划中的完整结构
-
-```
-apps/desktop/     Electron + React + TypeScript + Vite
-apps/api/         FastAPI + SQLAlchemy + Alembic + PostgreSQL
-packages/contracts/   共享 schema 与常量 —— Tech Lead 所有
-packages/ui/          设计令牌与共享组件 —— 6.2 所有
-infra/            两节点部署、LiveKit、TURN、监控、备份
-```
-
----
-
-## 我该读哪份文件
-
-| 你要做的事 | 读这个 |
+| 路径 | 职责 |
 |---|---|
-| 第一次进这个仓库 | `AGENTS.md` → 本文件 → `docs/00-review-plan01.md` |
-| 认领一个模块 | `.agents/modules/<id>-*.md` |
-| 想知道某功能做不做、什么时候做 | `docs/01-scope-v2.md` |
-| 想知道某个待决归谁 | `docs/04-open-decisions.md` |
-| 想知道分支 / PR 怎么走 | `docs/05-collaboration.md` |
-| 想知道 harness 为什么要提交 | `docs/06-agent-harness.md` |
-| 算流量或成本 | `docs/03-cost-model.md` |
-| 平台支持什么 / 验收标准 | `docs/02-platform-nfr.md` |
-| 原始功能勾选与模块划分 | `scope.html` · `teams.html`（英文） |
+| `apps/desktop/src/main/` | 主窗口、受限 IPC、准入凭据与独立媒体上下文 |
+| `apps/desktop/src/shell/AdmissionPage.tsx` | 准入页面组合 |
+| `apps/desktop/src/features/voice/`、`src/features/audio/` | 房间、麦克风与播放状态；feature 不互相 import |
+| `apps/desktop/src/i18n/`、`src/styles/tokens.css` | 中文文案与设计令牌 |
+| `apps/desktop/scripts/build.mjs` | 类型检查、lint、构建、打包与桌面测试入口 |
+| `apps/desktop/scripts/dev.mjs` | 开发/测试启动与 Sandbox 验收入口；当前修复仍在待审 PR |
+| `apps/api/app/` | 认证主体、房间授权、准入路由、签发与限流；普通入口无 provider 拒绝启动 |
+| `packages/contracts/`、`packages/ui/` | 共享 schema 与 UI 原语 |
+| `tests/shell/`、`tests/voice/`、`tests/audio/` | 真实 Electron 旅程、SFU/合成 peer 与生命周期回归 |
+| `tests/accounts/`、`tests/permissions/`、`tests/tokens/`、`tests/ratelimit/` | HTTP/会话/权限/限流测试 |
+| `.agents/modules/`、`.github/`、`.claude/` | 文件边界、检查器、CODEOWNERS、CI 与共享 harness |
+| `infra/AGENTS.md` | 基础设施规则；存在规划不代表已部署 |
+| `scope.html`、`teams.html` | 原始范围/团队规划输入，不是产品完成证明 |
 
----
+## 按任务阅读
 
-## 24 个模块速查
+| 任务 | 入口 |
+|---|---|
+| 开工与改动边界 | [AGENTS.md](AGENTS.md) → 对应目录 AGENTS → `.agents/modules/<id>.md` |
+| T1 桌面与准入 | [T1 规格](docs/T1-spec.md)、[t1 清单](.agents/modules/t1.md) |
+| T2 语音与采集 | [T2 规格](docs/T2-spec.md)、[t2 清单](.agents/modules/t2.md) |
+| 启动/清理自动化 | [自动化规格](docs/testing-automation-spec.md)；实施票另列精确子集 |
+| 设备验收与测试方法 | [T2-03 研究](docs/T2-03-acceptance-research.md) |
+| 当前签认/阻塞 | [待决表](docs/04-open-decisions.md)、GitHub 对应 Issue/PR |
+| 长期范围/阶段 | [范围](docs/01-scope-v2.md)、[平台标准](docs/02-platform-nfr.md) |
+| 成本/协作/harness | [成本](docs/03-cost-model.md)、[协作](docs/05-collaboration.md)、[harness](docs/06-agent-harness.md) |
+| GitHub 操作 | [Issue tracker](docs/agents/issue-tracker.md)；只操作本 fork |
 
-| 域 | 模块 | 阶段 |
-|---|---|---|
-| 1 Platform | 1.1 基础设施 · 1.2 媒体运维 · 1.3 可观测性与发布 | R00 · R00 · R01 |
-| 2 Identity | 2.1 邀请 · 2.2 账号会话 · 2.3 角色权限 | R01 · R01 · R01/R03/R04 |
-| 3 Voice | 3.1 语音频道 · 3.2 音频设备 · 3.3 摄像头布局 | R01 · R01 · R03 |
-| 4 Streaming | 4.1 共享发布 · 4.2 共享观看 · 4.3 质量与连接 | R01 · R01 · R01/R02 |
-| 5 Messaging | 5.1 消息核心 · 5.2 文件媒体 · 5.3 线程搜索 | R01/R03/R04 · R03/R04 · **R04** |
-| 6 Experience | 6.1 外壳结构 · 6.2 外观语言 · 6.3 私信提醒 | R01 · **R00/R01**（后续 R03/R04） · R03 |
-| 7 Backend | 7.1 实时网关 · 7.2 令牌限流 · 7.3 任务邮件存储 | **R00** · R01 · R01/R03/R04 |
-| 8 Ops | 8.1 主机成本 · 8.2 韧性 · 8.3 安全数据政策 | R00 · **R02** · R03 |
+## 不要读或清理的地方
 
-**wave 0 只开这几个：1.1 · 1.2 · 6.2 · 7.1 · 8.1** —— 并行度上限见 D10。
+- 不遍历 `node_modules/`、`.venv/`、构建二进制和缓存来理解源代码。
+- `apps/desktop/build/` 含历史 Sandbox 验收目录、失败材料和当前 Windows 包，
+  **不是整目录垃圾**。证据只读 README/summary 与必要元数据，不读原始大日志；历史证据不删不改。
+- 不扫描 `.git/`、会话记录、个人凭据或其他任务的 worktree。
+- `.gitignore` 只定义版本控制忽略，不授予删除权限。临时生成副本须逐项验证用途、归属和恢复副本。
 
----
+## 当前工程状态（2026-10-11 快照）
 
-## 三条最容易踩的规则
+- T1 实现 PR8–13 已合并；T1 父规格 #1 仍打开，契约值与验收层级保持。
+- T2-C/C2/C3 文档及 T2-01/02 已合并（PR15/20/22/23/24）；
+  PR25 已合并 T2-03 代码，#18 真人双设备、人耳、物理释放及中德验收仍待完成。
+- 测试基础设施修复 PR34 → PR35 → PR37 → PR38 尚未合并；不能把候选分支结果写成 main 已验收。
+- Jack 已签认本 fork T1/T2；原规划全局 D9 与 24 模块并行安排仍独立。
+- 原规划 24 模块/八领域及 R00–R04 是长期计划；见 `teams.html` 和模块清单，不视为全部已实施。
 
-1. **`apps/api/migrations/versions/` 任何模块都不能改** —— 迁移写进 `_proposed/`。
-2. **`features/` 之间不得互相 import** —— 需要共享就提到 `packages/`，走 Tech Lead。
-3. **提 PR 前自查边界：**
-   ```bash
-    git diff --name-only --no-renames -z origin/main...HEAD | node .agents/scope_guard.mjs <模块id>
-   ```
+## 验证与红线
 
----
+桌面命令在 [package.json](apps/desktop/package.json)，API 环境在
+[pyproject.toml](apps/api/pyproject.toml)。各票执行对应模块 Validation；文档票使用：
 
-## 当前最大的阻塞
+```powershell
+node .agents/scope_guard.mjs docs --files <本票精确文件>
+git diff --check
+```
 
-**Tech Lead 尚未指派（D9）。** 七个冻结契约都需要一个最终所有者，
-在此之前不应该开始多模块并行开发。
+不得直接改 main；一次一 Issue、一模块。`apps/api/migrations/` 不得直接改，迁移写 `_proposed/`。
+公共接口变化同步契约；正常 T1 测试仅按已合并的狭窄例外修改。自动化、打包启动、
+合成媒体、真人听音和跨境证据分别判断；scope/secrets CI 不替代产品验证。
