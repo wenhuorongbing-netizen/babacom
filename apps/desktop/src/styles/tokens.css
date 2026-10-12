@@ -11,21 +11,52 @@
   --text-muted: #9da3ae;
   --text-header: #f2f3f5;
 
-  /* Layout tokens */
+  /* Shell layout tokens */
   --shell-rail-width: 72px;
   --shell-sidebar-width: 240px;
   --shell-header-height: 48px;
 
-  /* Preserved design tokens with high-contrast Discord values */
+  /* Pill & rail badge tokens */
+  --pill-color: #ffffff;
+  --pill-width: 4px;
+  --pill-height: 36px;
+  --pill-radius: 4px;
+  --rail-badge-size: 48px;
+  --rail-badge-radius: 16px;
+  --font-size-badge: 1.1rem;
+  --transition-standard: 0.15s ease;
+
+  /* Sidebar header & badge tokens */
+  --border-sidebar: rgba(0, 0, 0, 0.2);
+  --border-header: rgba(0, 0, 0, 0.24);
+  --font-size-title: 1.05rem;
+  --font-size-tiny: 0.75rem;
+  --bg-badge: rgba(0, 0, 0, 0.25);
+  --padding-badge: 2px 6px;
+  --radius-badge: 4px;
+
+  /* Channel list tokens */
+  --gap-channels: 2px;
+  --padding-category-bottom: 4px;
+  --letter-spacing-category: 0.02em;
+  --padding-channel-vertical: 6px;
+  --radius-channel: 4px;
+  --font-size-channel: 0.95rem;
+  --bg-channel-active: rgba(255, 255, 255, 0.08);
+  --color-channel-active: #ffffff;
+  --font-size-icon: 0.9rem;
+  --opacity-icon: 0.8;
+
+  /* Preserved design tokens with measured high-contrast values */
   --color-background: var(--bg-primary);
   --color-surface: var(--bg-secondary);
   --color-text: var(--text-normal);
   --color-muted: var(--text-muted);
-  --color-border: #4e5058;
+  --color-border: #8a8e95;
   --color-primary: var(--brand-primary);
   --color-primary-text: var(--brand-text);
   --color-success: #57f287;
-  --color-failure: #ed4245;
+  --color-failure: #ff7373;
   --font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
   --font-size-body: 1rem;
   --font-size-heading: 1.8rem;
@@ -84,25 +115,25 @@ body {
 .rail-pill {
   position: absolute;
   left: 0;
-  width: 4px;
-  height: 36px;
-  background: #ffffff;
-  border-radius: 0 4px 4px 0;
+  width: var(--pill-width);
+  height: var(--pill-height);
+  background: var(--pill-color);
+  border-radius: 0 var(--pill-radius) var(--pill-radius) 0;
 }
 
 .rail-server-badge {
-  width: 48px;
-  height: 48px;
-  border-radius: 16px;
+  width: var(--rail-badge-size);
+  height: var(--rail-badge-size);
+  border-radius: var(--rail-badge-radius);
   background: var(--brand-primary);
   color: var(--brand-text);
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  font-size: 1.1rem;
+  font-size: var(--font-size-badge);
   cursor: default;
-  transition: border-radius 0.15s ease, background 0.15s ease;
+  transition: border-radius var(--transition-standard), background var(--transition-standard);
 }
 
 .shell-sidebar {
@@ -113,7 +144,7 @@ body {
   display: flex;
   flex-direction: column;
   user-select: none;
-  border-right: 1px solid rgba(0, 0, 0, 0.2);
+  border-right: var(--border-width) solid var(--border-sidebar);
   flex-shrink: 0;
 }
 
@@ -123,13 +154,13 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.24);
+  border-bottom: var(--border-width) solid var(--border-header);
   background: var(--bg-secondary);
   flex-shrink: 0;
 }
 
 .sidebar-server-title {
-  font-size: 1.05rem;
+  font-size: var(--font-size-title);
   font-weight: 700;
   color: var(--text-header);
   margin: 0;
@@ -139,11 +170,11 @@ body {
 }
 
 .sidebar-badge {
-  font-size: 0.75rem;
+  font-size: var(--font-size-tiny);
   color: var(--text-muted);
-  background: rgba(0, 0, 0, 0.25);
-  padding: 2px 6px;
-  border-radius: 4px;
+  background: var(--bg-badge);
+  padding: var(--padding-badge);
+  border-radius: var(--radius-badge);
 }
 
 .sidebar-channels {
@@ -151,38 +182,38 @@ body {
   padding: var(--space-small);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--gap-channels);
   overflow-y: auto;
 }
 
 .channel-category {
-  padding: var(--space-small) var(--space-small) 4px;
-  font-size: 0.75rem;
+  padding: var(--space-small) var(--space-small) var(--padding-category-bottom);
+  font-size: var(--font-size-tiny);
   font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.02em;
+  letter-spacing: var(--letter-spacing-category);
 }
 
 .channel-item {
   display: flex;
   align-items: center;
   gap: var(--space-small);
-  padding: 6px var(--space-small);
-  border-radius: 4px;
+  padding: var(--padding-channel-vertical) var(--space-small);
+  border-radius: var(--radius-channel);
   color: var(--text-normal);
   background: transparent;
-  font-size: 0.95rem;
+  font-size: var(--font-size-channel);
 }
 
 .channel-item.connected {
-  background: rgba(255, 255, 255, 0.08);
-  color: #ffffff;
+  background: var(--bg-channel-active);
+  color: var(--color-channel-active);
 }
 
 .channel-icon {
-  font-size: 0.9rem;
-  opacity: 0.8;
+  font-size: var(--font-size-icon);
+  opacity: var(--opacity-icon);
 }
 
 .channel-name {
@@ -193,7 +224,7 @@ body {
 }
 
 .channel-status-label {
-  font-size: 0.75rem;
+  font-size: var(--font-size-tiny);
   color: var(--text-muted);
 }
 
@@ -209,6 +240,8 @@ body {
   overflow-x: hidden;
   padding: var(--space-large);
   background: var(--bg-primary);
+  overflow-wrap: anywhere;
+  scroll-padding-block: var(--space-small);
 }
 
 main { max-width: var(--form-width); width: 100%; margin: auto; }
@@ -221,12 +254,14 @@ p { margin: var(--space-medium) 0; }
   width: 100%; font: inherit; color: var(--color-text); background: var(--bg-canvas);
   border: var(--border-width) solid var(--color-border); border-radius: var(--radius);
   padding: var(--space-small) var(--space-medium);
+  scroll-margin-block: var(--space-small);
 }
 .actions { display: flex; flex-wrap: wrap; gap: var(--space-medium); margin-top: var(--space-large); }
 .button {
   font: inherit; border: 0; border-radius: var(--radius);
   padding: var(--space-small) var(--space-large); cursor: pointer;
   background: var(--color-primary); color: var(--color-primary-text); font-weight: 500;
+  scroll-margin-block: var(--space-small);
 }
 .button:disabled { opacity: .5; cursor: default; }
 
@@ -260,11 +295,8 @@ dd { margin: 0 0 var(--space-medium); }
     --shell-sidebar-width: 180px;
     --space-page: 1rem;
     --space-large: 1rem;
-  }
-  .rail-server-badge {
-    width: 40px;
-    height: 40px;
-    font-size: 0.95rem;
+    --rail-badge-size: 40px;
+    --font-size-badge: 0.95rem;
   }
 }
 

@@ -34,7 +34,7 @@ function Desktop() {
   const panel = <VoicePanel snapshot={snapshot} prepared={prepared} />;
   const active = ['connecting', 'connected', 'leaving', 'cleanup-failed'].includes(snapshot.status);
   return (
-    <DesktopShell active={active}>
+    <DesktopShell status={snapshot.status}>
       {active ? (
         <main className="call-stage">
           <p className="sr-only">{t('appName')}</p>
