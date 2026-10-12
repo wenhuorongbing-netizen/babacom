@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
+import { createServer as createIpcServer } from 'node:net';
 import { buildDesktop, desktop, root } from './build.mjs';
 
 let processOwner;
@@ -575,7 +576,10 @@ export async function runSandboxInstance({ outputDirectory, configuration, appSh
   const checkCancelled = () => { if (signal?.aborted) throw runnerError('CANCELLED'); };
   const invoke = async (args, cleanupDeadline) => {
     const timeout = Math.min(15_000, cliTimeoutMs, (cleanupDeadline ?? deadline - 15_000) - Date.now());
-    return withinSandboxDeadline((options) => execute(args, options), timeout, cleanupDeadline ? undefined : signal);
+    return withinSandboxDeadline((options) => {
+      if (args[0] === 'start') creationRequested = true;
+      return execute(args, options);
+    }, timeout, cleanupDeadline ? undefined : signal);
   };
   const parseInventory = (response) => {
     const inventory = JSON.parse(response.stdout.trim());
@@ -587,16 +591,30 @@ export async function runSandboxInstance({ outputDirectory, configuration, appSh
     return inventory.WindowsSandboxEnvironments.map((item) => item.Id.toLowerCase());
   };
   const failure = (error) => ({ status: error.category === 'CANCELLED' ? 'NOT_RUN' : 'FAIL', stage,
-    category: ['CANCELLED', 'TIMEOUT', 'EVIDENCE_IO', 'OWNERSHIP_UNVERIFIED'].includes(error.category) ? error.category
-      : error.killed ? 'TIMEOUT' : error instanceof SyntaxError ? 'INVALID_RESPONSE' : 'CLI_FAILED',
+    category: ['CANCELLED', 'TIMEOUT', 'EVIDENCE_IO', 'OWNERSHIP_UNVERIFIED', 'BUSY', 'ADMISSION_FAILED'].includes(error.category) ? error.category
+      : stage === 'CREATE' && error.code === 2147746294 ? 'BUSY'
+        : error.killed ? 'TIMEOUT' : error instanceof SyntaxError ? 'INVALID_RESPONSE' : 'CLI_FAILED',
     exitCode: Number.isInteger(error.code) ? error.code : null });
-  let stage = 'INVENTORY';
+  let stage = 'ADMISSION';
   let baseline = [];
+  let creationRequested = false;
   let owned = false;
   let result;
+  const admission = createIpcServer((connection) => connection.destroy());
+  let admissionHeld = false;
+  let admissionCleanup;
   /** @type {{status: string, unrelatedPreserved?: boolean, category?: string, exitCode?: number | null}} */
   let cleanup = { status: 'NOT_OWNED' };
   try {
+    await withinSandboxDeadline(({ signal: listenSignal }) => new Promise((resolveAdmission, reject) => {
+      admission.once('error', (error) => reject(runnerError(error.code === 'EADDRINUSE' ? 'BUSY' : 'ADMISSION_FAILED')));
+      // Fixed across worktrees. Never connect to an existing endpoint or carry credentials.
+      admission.listen({ path: '\\\\.\\pipe\\babacom-sandbox-admission-v1', signal: listenSignal }, () => {
+        admissionHeld = true;
+        resolveAdmission();
+      });
+    }), Math.min(15_000, deadline - 15_000 - Date.now()), signal);
+    stage = 'INVENTORY';
     baseline = parseInventory(await invoke(['list', '--raw']));
     await record('host-inventory.json', { stage, requestedId, existingIds: baseline });
     stage = 'CREATE';
@@ -659,6 +677,8 @@ export async function runSandboxInstance({ outputDirectory, configuration, appSh
   } catch (error) {
     result = failure(error);
   } finally {
+    // A failed response does not prove that the non-idempotent create had no effect.
+    if (creationRequested && !owned) cleanup = { status: 'UNKNOWN', category: 'OWNERSHIP_UNVERIFIED' };
     if (owned) {
       try {
         const cleanupDeadline = Math.min(Date.now() + 15_000, deadline);
@@ -673,9 +693,20 @@ export async function runSandboxInstance({ outputDirectory, configuration, appSh
         cleanup = { status: 'NOT_RELEASED', category: failure(error).category, exitCode: Number.isInteger(error.code) ? error.code : null };
       }
     }
+    if (admissionHeld) {
+      try {
+        // Initiate closing even if the remaining budget has already expired.
+        const closed = new Promise((resolveClosed, reject) => admission.close((error) => error ? reject(error) : resolveClosed()));
+        await withinSandboxDeadline(() => closed, Math.min(15_000, deadline - Date.now()));
+      } catch (error) {
+        admissionCleanup = { status: 'NOT_RELEASED', category: error.category === 'TIMEOUT' ? 'TIMEOUT' : 'ADMISSION_FAILED' };
+        if (result.status === 'PASS') result = { ...result, status: 'FAIL', stage: 'ADMISSION', category: 'ADMISSION_FAILED' };
+        else result.status = 'FAIL';
+      }
+    }
   }
   if (signal?.aborted && result.status === 'PASS') result = { status: 'NOT_RUN', stage: 'RESULT', category: 'CANCELLED' };
-  const summary = { ...result, cleanup };
+  const summary = { ...result, cleanup, ...(admissionCleanup ? { admissionCleanup } : {}) };
   try { await record('host-summary.json', summary, true); }
   catch { return { ...summary, status: 'FAIL', stage: 'EVIDENCE', category: 'EVIDENCE_IO' }; }
   return summary;

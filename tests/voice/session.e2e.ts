@@ -612,6 +612,190 @@ const sandboxPass = {
   appSha256: 'a'.repeat(64),
 };
 
+test('Sandbox runner reports unknown ownership after creation precedes a CLI error', async () => {
+  const scenario = await sandboxScenario(null);
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+      const response = await scenario.execute(args, options);
+      if (args[0] === 'start') throw Object.assign(new Error('private-session-sentinel'), { code: 29 });
+      return response;
+    },
+  });
+  expect(result).toMatchObject({ status: 'FAIL', stage: 'CREATE', category: 'CLI_FAILED', exitCode: 29,
+    cleanup: { status: 'UNKNOWN', category: 'OWNERSHIP_UNVERIFIED' } });
+  expect(scenario.isActive()).toBe(true);
+  expect(scenario.calls.map((args) => args[0])).toEqual(['list', 'start']);
+  expect(await readFile(join(scenario.outputDirectory, 'host-summary.json'), 'utf8')).not.toContain('private-session-sentinel');
+});
+
+for (const fault of ['output', 'returned-id', 'query-error', 'query-output', 'query-timeout', 'cancel'] as const) {
+  test(`Sandbox runner preserves unknown ownership after the create side effect and ${fault}`, async () => {
+    const scenario = await sandboxScenario(null);
+    const controller = new AbortController();
+    let created = false;
+    const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+      signal: controller.signal, cliTimeoutMs: 40,
+      execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+        const response = await scenario.execute(args, options);
+        if (args[0] === 'start') {
+          created = true;
+          if (fault === 'output') return { stdout: 'private-session-sentinel' };
+          if (fault === 'returned-id') return { stdout: JSON.stringify({ Id: scenario.unrelated }) };
+          if (fault === 'cancel') controller.abort();
+        } else if (args[0] === 'list' && created) {
+          if (fault === 'query-error') throw Object.assign(new Error('private-session-sentinel'), { code: 31 });
+          if (fault === 'query-output') return { stdout: 'private-session-sentinel' };
+          if (fault === 'query-timeout') return new Promise<{ stdout: string }>(() => {});
+        }
+        return response;
+      },
+    });
+    const categories = { output: 'INVALID_RESPONSE', 'returned-id': 'OWNERSHIP_UNVERIFIED', 'query-error': 'CLI_FAILED',
+      'query-output': 'INVALID_RESPONSE', 'query-timeout': 'TIMEOUT', cancel: 'CANCELLED' };
+    expect(result).toMatchObject({ status: fault === 'cancel' ? 'NOT_RUN' : 'FAIL', stage: 'CREATE', category: categories[fault],
+      cleanup: { status: 'UNKNOWN', category: 'OWNERSHIP_UNVERIFIED' } });
+    if (fault === 'query-error') expect(result).toMatchObject({ exitCode: 31 });
+    expect(scenario.isActive()).toBe(true);
+    expect(scenario.calls.filter((args) => args[0] === 'start')).toHaveLength(1);
+    expect(scenario.calls.every((args) => args[0] === 'list' || args[0] === 'start')).toBe(true);
+    expect(await readFile(join(scenario.outputDirectory, 'host-summary.json'), 'utf8')).not.toContain('private-session-sentinel');
+  });
+}
+
+test('Sandbox runner reports native contention after a foreign instance appears without retrying or stopping it', async () => {
+  const scenario = await sandboxScenario(null);
+  let foreignActive = false;
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+      if (args[0] === 'start') {
+        scenario.calls.push(args);
+        foreignActive = true;
+        throw Object.assign(new Error('private-session-sentinel'), { code: 2147746294 });
+      }
+      return scenario.execute(args, options);
+    },
+  });
+  expect(result).toMatchObject({ status: 'FAIL', stage: 'CREATE', category: 'BUSY', exitCode: 2147746294,
+    cleanup: { status: 'UNKNOWN', category: 'OWNERSHIP_UNVERIFIED' } });
+  expect(foreignActive).toBe(true);
+  expect(scenario.calls.map((args) => args[0])).toEqual(['list', 'start']);
+  expect(JSON.stringify(result)).not.toContain('private-session-sentinel');
+});
+
+test('Sandbox runner preserves a newly inserted foreign instance while stopping only its confirmed ID', async () => {
+  const scenario = await sandboxScenario(sandboxPass);
+  const inserted = '5024901e-85e7-4fd2-9c7a-a06b11b4b01f';
+  const instances = new Set([scenario.unrelated]);
+  let requestedId = '';
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+      const response = await scenario.execute(args, options);
+      if (args[0] === 'list') return { stdout: JSON.stringify({ WindowsSandboxEnvironments: [...instances].map((Id) => ({ Id })) }) };
+      if (args[0] === 'start') {
+        requestedId = args[args.indexOf('--id') + 1];
+        instances.add(inserted);
+        instances.add(requestedId);
+      }
+      if (args[0] === 'stop') instances.delete(args[args.indexOf('--id') + 1]);
+      return response;
+    },
+  });
+  expect(result).toMatchObject({ status: 'PASS', cleanup: { status: 'RELEASED', unrelatedPreserved: true } });
+  expect([...instances].sort()).toEqual([scenario.unrelated, inserted].sort());
+  expect(scenario.calls.filter((args) => args[0] === 'stop')).toEqual([['stop', '--id', requestedId, '--raw']]);
+  expect(scenario.calls.filter((args) => args[0] === 'connect')).toEqual([['connect', '--id', requestedId, '--raw']]);
+});
+
+test('Sandbox runner preserves both the original connection error and its owned cleanup error', async () => {
+  const scenario = await sandboxScenario(null);
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+      if (args[0] === 'connect' || args[0] === 'stop') {
+        scenario.calls.push(args);
+        throw Object.assign(new Error('private-session-sentinel'), { code: args[0] === 'connect' ? 29 : 23 });
+      }
+      return scenario.execute(args, options);
+    },
+  });
+  expect(result).toMatchObject({ status: 'FAIL', stage: 'USER_SESSION', category: 'CLI_FAILED', exitCode: 29,
+    cleanup: { status: 'NOT_RELEASED', category: 'CLI_FAILED', exitCode: 23 } });
+  expect(scenario.isActive()).toBe(true);
+  const requestedId = scenario.calls.find((args) => args[0] === 'start')?.[2];
+  expect(scenario.calls.filter((args) => args[0] === 'stop')).toEqual([['stop', '--id', requestedId, '--raw']]);
+  expect(await readFile(join(scenario.outputDirectory, 'host-summary.json'), 'utf8')).not.toContain('private-session-sentinel');
+});
+
+test('Sandbox runner shares admission across real processes and work directories and releases it on exit', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'babacom-sandbox-process-'));
+  const driver = join(directory, 'driver.mjs');
+  await writeFile(driver, `
+    const { runSandboxInstance } = await import(process.argv[2]);
+    const calls = [];
+    let held = false;
+    const result = await runSandboxInstance({ outputDirectory: process.argv[3], configuration: '<Configuration/>', appSha256: 'a'.repeat(64),
+      execute: async (args) => {
+        calls.push(args);
+        if (args[0] === 'list') {
+          if (process.argv[4] === 'hold' && !held) {
+            held = true;
+            console.log(JSON.stringify({ type: 'ready' }));
+            await new Promise((resolve) => process.stdin.once('data', resolve));
+            process.stdin.destroy();
+          }
+          return { stdout: JSON.stringify({ WindowsSandboxEnvironments: [] }) };
+        }
+        return { stdout: JSON.stringify({ Id: '2c4eaad5-2c98-486d-b515-00e3d555c8ad' }) };
+      },
+    });
+    console.log(JSON.stringify({ type: 'result', result, calls }));
+    process.exitCode = result.status === 'PASS' ? 0 : 1;
+  `, { flag: 'wx' });
+  const children: ReturnType<typeof spawn>[] = [];
+  const start = async (mode: 'hold' | 'probe') => {
+    const output = await mkdtemp(join(directory, 'worktree-'));
+    const child = spawn(process.execPath, [driver, pathToFileURL(join(desktop, 'scripts/dev.mjs')).href, output, mode],
+      { cwd: output, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    children.push(child);
+    const messages: { type: string; result?: Awaited<ReturnType<typeof desktopRunner.runSandboxInstance>>; calls?: string[][] }[] = [];
+    createInterface({ input: child.stdout }).on('line', (line) => messages.push(JSON.parse(line)));
+    const exited = new Promise<number | null>((resolve, reject) => {
+      child.once('exit', resolve);
+      child.once('error', reject);
+    });
+    return { child, messages, exited };
+  };
+  try {
+    const owner = await start('hold');
+    await expect.poll(() => owner.messages.some((message) => message.type === 'ready')).toBe(true);
+    const contender = await start('probe');
+    expect(await contender.exited).toBe(1);
+    expect(contender.messages.find((message) => message.type === 'result')).toMatchObject({
+      result: { status: 'FAIL', stage: 'ADMISSION', category: 'BUSY', cleanup: { status: 'NOT_OWNED' } }, calls: [],
+    });
+    owner.child.stdin?.end('release');
+    expect(await owner.exited).toBe(1);
+    const afterRelease = await start('probe');
+    expect(await afterRelease.exited).toBe(1);
+    expect(afterRelease.messages.find((message) => message.type === 'result')).toMatchObject({
+      result: { stage: 'CREATE', category: 'OWNERSHIP_UNVERIFIED' }, calls: [['list', '--raw'], expect.arrayContaining(['start'])],
+    });
+    const interrupted = await start('hold');
+    await expect.poll(() => interrupted.messages.some((message) => message.type === 'ready')).toBe(true);
+    interrupted.child.kill();
+    await interrupted.exited;
+    const afterExit = await start('probe');
+    expect(await afterExit.exited).toBe(1);
+    expect(afterExit.messages.find((message) => message.type === 'result')).toMatchObject({
+      result: { stage: 'CREATE', category: 'OWNERSHIP_UNVERIFIED' }, calls: [['list', '--raw'], expect.arrayContaining(['start'])],
+    });
+  } finally {
+    for (const child of children) {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+    }
+    await expect.poll(() => children.every((child) => child.exitCode !== null || child.signalCode !== null)).toBe(true);
+  }
+});
+
 test('Sandbox runner accepts guest proof only after releasing its owned instance', async () => {
   const scenario = await sandboxScenario(sandboxPass);
   const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256 });
@@ -725,7 +909,7 @@ for (const command of ['start', 'connect']) {
       },
     });
     expect(result).toMatchObject({ status: 'FAIL', stage: command === 'start' ? 'CREATE' : 'USER_SESSION', exitCode: 29 });
-    expect(result.cleanup.status).toBe(command === 'start' ? 'NOT_OWNED' : 'RELEASED');
+    expect(result.cleanup.status).toBe(command === 'start' ? 'UNKNOWN' : 'RELEASED');
     expect(JSON.stringify(result)).not.toContain('private-session-sentinel');
   });
 }
