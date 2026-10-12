@@ -17,6 +17,44 @@ import type { StartupConfiguration, MediaStartup, AdmissionSuccess, MediaRuntime
 import { MediaSession } from '../../apps/desktop/src/main/media-session';
 import { createAudioReceiver } from '../../apps/desktop/src/features/audio/playback';
 
+type ProcessIdentity = { ProcessId: number; ParentProcessId: number; CreationDate: string | null };
+
+function ownedProcessTree<T extends ProcessIdentity>(rows: T[], ownerPid: number | undefined): T[] {
+  const byPid = new Map(rows.map((row) => [row.ProcessId, row]));
+  const created = (row: ProcessIdentity) => {
+    const match = /^\/Date\((\d+)\)\/$/.exec(row.CreationDate ?? '');
+    if (!match || !Number.isSafeInteger(Number(match[1]))) throw new Error('A1 process creation identity unverified');
+    return Number(match[1]);
+  };
+  const owner = ownerPid === undefined ? undefined : byPid.get(ownerPid);
+  if (!owner) throw new Error('A1 process owner missing');
+  created(owner);
+  const ids = new Set([ownerPid]);
+  for (let depth = 0; depth < rows.length; depth++) {
+    const previous = ids.size;
+    for (const row of rows) {
+      const parent = byPid.get(row.ParentProcessId);
+      if (parent && ids.has(parent.ProcessId) && !ids.has(row.ProcessId)
+        && created(row) >= created(parent)) ids.add(row.ProcessId);
+    }
+    if (ids.size === previous) break;
+  }
+  const owned = rows.filter((row) => ids.has(row.ProcessId));
+  if (!owned.length || owned.some((row) => typeof row.CreationDate !== 'string')) throw new Error('A1 process ownership unverified');
+  return owned;
+}
+
+test('A1 startup ownership excludes preexisting descendants of a reused parent PID', () => {
+  const rows = [
+    { ProcessId: 10, ParentProcessId: 1, CreationDate: '/Date(200)/' },
+    { ProcessId: 20, ParentProcessId: 10, CreationDate: '/Date(100)/' },
+    { ProcessId: 30, ParentProcessId: 20, CreationDate: '/Date(150)/' },
+    { ProcessId: 40, ParentProcessId: 10, CreationDate: '/Date(201)/' },
+    { ProcessId: 50, ParentProcessId: 40, CreationDate: '/Date(202)/' },
+  ];
+  expect(ownedProcessTree(rows, 10).map((row) => row.ProcessId)).toEqual([10, 40, 50]);
+});
+
 test('A1 startup concurrently serves the complete renderer import graph', async () => {
   const renderer = await startRenderer();
   const seen = new Set<string>();
@@ -60,6 +98,145 @@ test('A1 startup renderer reports an abnormal owned process exit during release'
     });
   }
 });
+
+
+for (const outcome of ['normal close', 'renderer failure', 'client and renderer failure'] as const) {
+test('A1 startup direct development entry reports ' + outcome, async () => {
+  type ProcessIdentity = { ProcessId: number; ParentProcessId: number; CreationDate: string; Name: string; CommandLine: string };
+  const powershell = join(process.env.SystemRoot || 'C:/Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
+  const execute = async (command: string) => (await promisify(execFile)(powershell,
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
+    { windowsHide: true, timeout: 5_000, encoding: 'utf8' })).stdout.trim();
+  // windowsHide excludes the owned HWND from MainWindowHandle. Send its normal WM_CLOSE message by verified PID/title.
+  const windowApi = [
+    'Add-Type -TypeDefinition @"',
+    'using System; using System.Text; using System.Runtime.InteropServices;',
+    'public static class DirectDevelopmentWindow {',
+    '  delegate bool Visitor(IntPtr window, IntPtr state);',
+    '  [DllImport("user32.dll")] static extern bool EnumWindows(Visitor visit, IntPtr state);',
+    '  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);',
+    '  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder title, int size);',
+    '  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);',
+    '  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window, int command);',
+    '  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);',
+    '  [DllImport("kernel32.dll")] static extern bool TerminateProcess(IntPtr process, uint code);',
+    '  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);',
+    '  public static IntPtr Find(uint pid) {',
+    '    IntPtr found = IntPtr.Zero;',
+    '    EnumWindows((window, state) => { uint owner; GetWindowThreadProcessId(window, out owner);',
+    '      var title = new StringBuilder(256); GetWindowText(window, title, title.Capacity);',
+    '      if (owner == pid && title.ToString() == "BabaCom") found = window; return true;',
+    '    }, IntPtr.Zero); return found;',
+    '  }',
+    '  public static IntPtr Reveal(uint pid) { var window = Find(pid);',
+    '    if (window != IntPtr.Zero) ShowWindow(window, 5); return window; }',
+    '  public static bool Close(uint pid) { var window = Find(pid);',
+    '    return window != IntPtr.Zero && PostMessage(window, 0x0010, IntPtr.Zero, IntPtr.Zero); }',
+    '  public static bool Fail(uint pid, uint code) {',
+    '    var process = OpenProcess(1, false, pid); if (process == IntPtr.Zero) return false;',
+    '    try { return TerminateProcess(process, code); } finally { CloseHandle(process); }',
+    '  }',
+    '}',
+    '"@',
+  ].join('\n');
+  const inventory = async (): Promise<ProcessIdentity[]> => {
+    try {
+      const rows: ProcessIdentity[] = JSON.parse(await execute(
+        'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate,Name,CommandLine | ConvertTo-Json -Compress'));
+      if (!Array.isArray(rows) || rows.some((row) => !Number.isInteger(row.ProcessId) || !Number.isInteger(row.ParentProcessId))) throw new Error();
+      return rows;
+    } catch { throw new Error('Direct development process inventory unavailable'); }
+  };
+  await desktopRunner.ensureWindowsProcessOwner();
+  const entry = join(desktop, 'scripts/dev.mjs');
+  const worker = spawn(process.execPath, [entry, '--local-test'], { stdio: 'pipe', windowsHide: true });
+  let spawnFailed = false;
+  worker.once('error', () => { spawnFailed = true; });
+  worker.stdout.resume();
+  let diagnostics = '';
+  worker.stderr.on('data', (chunk) => { diagnostics = (diagnostics + String(chunk)).slice(-65_536); });
+  let owned: ProcessIdentity[] = [];
+  const capture = async () => {
+    const rows = await inventory();
+    owned = ownedProcessTree(rows, worker.pid);
+    if (!owned.length || owned.some((row) => typeof row.CreationDate !== 'string')) throw new Error('Direct development ownership unverified');
+  };
+  const remaining = async () => {
+    const rows = await inventory();
+    return owned.filter((item) => rows.some((row) => row.ProcessId === item.ProcessId && row.CreationDate === item.CreationDate));
+  };
+  const commandContains = (row: ProcessIdentity, path: string) =>
+    typeof row.CommandLine === 'string' && row.CommandLine.replaceAll('\\', '/').toLowerCase().includes(path.replaceAll('\\', '/').toLowerCase());
+  try {
+    let client: ProcessIdentity | undefined;
+    await expect.poll(async () => {
+      expect(spawnFailed, 'The direct entry must start').toBe(false);
+      await capture();
+      client = owned.find((row) => row.ParentProcessId === worker.pid && row.Name.toLowerCase() === 'electron.exe'
+        && commandContains(row, join(desktop, 'dist/main/main.cjs')));
+      if (!client) return false;
+      return await execute(windowApi + '\n' + [
+        'Add-Type -AssemblyName UIAutomationClient',
+        'Add-Type -AssemblyName UIAutomationTypes',
+        '$handle = [DirectDevelopmentWindow]::Reveal(' + client.ProcessId + ')',
+        'if ($handle -eq [IntPtr]::Zero) { Write-Output $false; exit }',
+        '$window = [Windows.Automation.AutomationElement]::FromHandle($handle)',
+        '$edit = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Edit)',
+        '$name = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("5YeG5aSH5YWl5oi/"))',
+        '$button = [Windows.Automation.AndCondition]::new(',
+        '  [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Button),',
+        '  [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $name))',
+        '($null -ne $window.FindFirst([Windows.Automation.TreeScope]::Descendants, $edit)) -and ($null -ne $window.FindFirst([Windows.Automation.TreeScope]::Descendants, $button))',
+      ].join('\n')) === 'True';
+    }, { timeout: 20_000, message: 'The direct development entry must create its real product window' }).toBe(true).catch(() => {
+      throw new Error('Direct development readiness failed: ' + JSON.stringify({ exitCode: worker.exitCode, spawnFailed,
+        ownedChildren: owned.filter((row) => row.ParentProcessId === worker.pid).map((row) => row.Name),
+        startupFailed: diagnostics.includes('Controlled desktop startup failed.') }));
+    });
+    const renderer = owned.find((row) => row.ParentProcessId === worker.pid && row.Name.toLowerCase() === 'node.exe'
+      && commandContains(row, entry) && row.CommandLine.includes('--renderer-only'));
+    expect(renderer, 'Only the verified renderer child may be terminated').toBeDefined();
+    if (outcome !== 'normal close') {
+      expect((await remaining()).some((row) => row.ProcessId === renderer!.ProcessId)).toBe(true);
+      process.kill(renderer!.ProcessId, 'SIGKILL');
+      await expect.poll(async () => (await remaining()).some((row) => row.ProcessId === renderer!.ProcessId),
+        { timeout: 5_000 }).toBe(false);
+    }
+    expect((await remaining()).some((row) => row.ProcessId === client!.ProcessId)).toBe(true);
+    if (outcome === 'client and renderer failure') expect(await execute(windowApi + '\n[DirectDevelopmentWindow]::Fail(' + client!.ProcessId + ', 47)')).toBe('True');
+    else expect(await execute(windowApi + '\n[DirectDevelopmentWindow]::Close(' + client!.ProcessId + ')')).toBe('True');
+    await expect.poll(() => worker.exitCode !== null || worker.signalCode !== null,
+      { timeout: 10_000, message: 'The direct entry must finish after client exit' }).toBe(true);
+    if (outcome === 'normal close') {
+      expect(worker.exitCode).toBe(0);
+      expect(diagnostics.includes('"cleanup":"FAILED"')).toBe(false);
+    } else {
+      expect(worker.exitCode, 'Release failure blocks success and preserves the primary client exit code').toBe(outcome === 'renderer failure' ? 1 : 47);
+      const diagnostic = diagnostics.split(/\r?\n/).filter((line) => line.startsWith('{"status":"FAIL"')).map((line) => {
+        let value;
+        try { value = JSON.parse(line); } catch { throw new Error('Invalid controlled development diagnostic'); }
+        expect(Object.keys(value).every((key) => ['status', 'stage', 'category', 'cleanup', 'exitCode'].includes(key))).toBe(true);
+        return { status: value.status === 'FAIL' ? 'FAIL' : 'UNKNOWN',
+          stage: ['RELEASE', 'DRIVER'].includes(value.stage) ? value.stage : 'UNKNOWN',
+          category: ['RELEASE_FAILED', 'START_FAILED'].includes(value.category) ? value.category : 'UNKNOWN',
+          cleanup: value.cleanup === 'FAILED' ? 'FAILED' : 'UNKNOWN',
+          exitCode: Number.isInteger(value.exitCode) ? value.exitCode : null };
+      });
+      expect(diagnostic).toContainEqual(outcome === 'renderer failure'
+        ? { status: 'FAIL', stage: 'RELEASE', category: 'RELEASE_FAILED', cleanup: 'FAILED', exitCode: 1 }
+        : { status: 'FAIL', stage: 'DRIVER', category: 'START_FAILED', cleanup: 'FAILED', exitCode: 47 });
+    }
+    await expect.poll(async () => (await remaining()).length, { timeout: 7_000 }).toBe(0);
+  } finally {
+    try {
+      if (!owned.length && worker.exitCode === null && worker.signalCode === null && !spawnFailed) await capture();
+    } catch { /* Inventory failure must not prevent closing the worker this test spawned. */ }
+    if (worker.exitCode === null && worker.signalCode === null && !spawnFailed) worker.kill('SIGKILL');
+    await expect.configure({ soft: true }).poll(async () => (await remaining()).length,
+      { timeout: 7_000, message: 'RELEASE_FAILED: the direct entry must release its owned tree' }).toBe(0);
+  }
+});
+}
 
 test('A1 startup development driver reaches a real window without a packaged fallback', async () => {
   const directory = await mkdtemp(join(desktop, 'build/a1-entry-'));
@@ -268,13 +445,7 @@ process.stdin.resume();
   let owned: ProcessIdentity[] = [];
   const capture = async () => {
     const rows = await inventory();
-    const ids = new Set([worker.pid]);
-    for (let depth = 0; depth < rows.length; depth++) {
-      const previous = ids.size;
-      for (const row of rows) if (ids.has(row.ParentProcessId)) ids.add(row.ProcessId);
-      if (ids.size === previous) break;
-    }
-    owned = rows.filter((row) => ids.has(row.ProcessId));
+    owned = ownedProcessTree(rows, worker.pid);
     if (!owned.length || owned.some((row) => typeof row.CreationDate !== 'string')) throw new Error('A1 process ownership could not be verified');
   };
   const remaining = async () => {

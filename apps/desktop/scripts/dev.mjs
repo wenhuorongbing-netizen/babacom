@@ -770,31 +770,55 @@ async function main() {
   let renderer;
   let startup;
   let mediaStartup;
+  const owner = createStartupCleanup();
+  let stage = 'DRIVER';
   try {
+    await ensureWindowsProcessOwner();
     await buildDesktop({ renderer: false });
+    stage = 'API';
     service = realProviders ? await startRealMediaService() : await startTestService();
+    await owner.own(stage, () => service.close());
+    stage = 'RENDERER';
     renderer = await startRenderer();
+    await owner.own(stage, () => renderer.close());
+    stage = 'PIPE';
     startup = await startStartupPipe(service.configuration);
-    if (realProviders) mediaStartup = await startStartupPipe(service.media);
+    await owner.own(stage, () => startup.close());
+    if (realProviders) {
+      mediaStartup = await startStartupPipe(service.media);
+      await owner.own(stage, () => mediaStartup.close());
+    }
+    stage = 'DRIVER';
     const electron = createRequire(import.meta.url)('electron');
     const child = spawn(electron, [join(desktop, 'dist/main/main.cjs'), '--babacom-startup-pipe=' + startup.path,
       ...(mediaStartup ? ['--babacom-media-pipe=' + mediaStartup.path] : [])], {
       env: { ...process.env, BABACOM_RENDERER_URL: renderer.url },
       stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true,
     });
-    const code = await new Promise((resolvePromise, reject) => {
+    const exited = new Promise((resolvePromise, reject) => {
       child.once('exit', resolvePromise);
       child.once('error', reject);
     });
-    process.exitCode = code ?? 1;
-  } finally {
-    await Promise.allSettled([renderer?.close(), startup?.close(), mediaStartup?.close(), service?.close()]);
+    await owner.own(stage, async () => {
+      if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
+      child.kill();
+      await exited;
+    });
+    const code = await exited;
+    if (code !== 0) throw Object.assign(new Error('Controlled client exited abnormally'), { exitCode: code ?? 1 });
+  } catch (error) {
+    await owner.fail(stage, error);
   }
+  await owner.close();
 }
 
 if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
-  (process.argv.includes('--renderer-only') ? rendererProcess() : main()).catch(() => {
-    console.error('Controlled desktop startup failed.');
-    process.exitCode = 1;
+  (process.argv.includes('--renderer-only') ? rendererProcess() : main()).catch((error) => {
+    const exitCode = Number.isInteger(error?.exitCode) && error.exitCode !== 0 ? error.exitCode : 1;
+    console.error(JSON.stringify({ status: 'FAIL',
+      stage: ['API', 'RENDERER', 'PIPE', 'DRIVER', 'WINDOW', 'UI', 'RELEASE'].includes(error?.stage) ? error.stage : 'UNKNOWN',
+      category: ['START_FAILED', 'START_TIMEOUT', 'RELEASE_FAILED', 'OWNER_CLOSED'].includes(error?.category) ? error.category : 'START_FAILED',
+      cleanup: error?.cleanup === 'FAILED' ? 'FAILED' : 'RELEASED', exitCode }));
+    process.exitCode = exitCode;
   });
 }
