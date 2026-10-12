@@ -117,6 +117,7 @@ Owner: 8.1
 | D12 | 本 fork T2 媒体执行与凭据边界 | **DECIDED：PR20已合并；实现PR23/24/25已合并** | T2 Owner：Jack（PR15已签认） | #18真人双设备/物理释放/中德验收未完成 |
 | D13 | T2打包资源断言的最小例外 | **DECIDED：PR22已合并，#21/#16已关闭** | T2 Owner：Jack | 原#16打包阻塞已解除；后续测试基础设施PR仍独立待审 |
 | D14 | #42 Sandbox共享准入与创建后归属 | **DECIDED方案（2026-10-12）；独立docs审查待完成** | T2 Owner：Jack | 审查后实施两文件修复；代码/合并/原生验收仍独立 |
+| D15 | Discord 熟悉布局的首个 UI 外壳片 | **DECIDED：Jack 已签认六文件范围（2026-10-12）** | Jack 签认；A 协调 | #46 独立 docs PR 合并后方可实施；产品合并仍由 Jack 裁定 |
 
 **本 fork 发布阶段校准：DECIDED（2026-10-04，用户授权修正并合并基线 PR）。**
 沿用 [01-scope-v2.md](01-scope-v2.md) 的既有 R04 范围：完整每频道权限、
@@ -238,3 +239,26 @@ Jack批准[#42](https://github.com/wenhuorongbing-netizen/babacom/issues/42)的�
 方案批准不代表文档已审查、PR已合并或修复已验证。PR34→35→37→38及#42的最终代码、
 完整development/packaged回归与一次获准串行原生验收仍待独立完成；#18真人双设备、
 物理设备释放和跨境验收继续NOT_RUN/HOLD。本变更不授予新的合并权限。
+
+### D15 单社区、单房间 UI 外壳 —— 范围已签认（2026-10-12）
+
+Jack 已要求采用 Discord 桌面布局和交互习惯，并由多个 Antigravity / Gemini 3.8 High
+代理进行美术设计与修改。实查模型为 `gemini-3.8-flash-high`，CLI 已更新至 1.3.3。
+原战略 PO 本轮补齐设计方向；这不是此前已经签认的完整 Discord 功能规格。
+
+拟定六文件上界、冻结行为、代理单 writer 分工、实际验证入口与完成条件，见
+[discord-ui 清单](../.agents/modules/discord-ui.md)。本轮仅准备该清单与本文件的文档草稿，
+不修改产品、既有模块清单、历史证据或其他工作副本；既有 T1/T2 授权不能用于该 UI 片。
+
+现有 6.1 / 6.2 未覆盖 renderer 接线和 Playwright 发现配置，因此需独立 docs PR。
+Jack 已明确回复“签认并授权上述流程”，授权建票、发布和审查合并独立范围文档 PR，
+再由单一 Gemini Builder 实施六文件并提交产品 PR；产品 PR 合并仍留给 Jack 裁定。
+范围文档票为 [#46](https://github.com/wenhuorongbing-netizen/babacom/issues/46)；
+审查合并后，才在另建的明确产品 Issue 下实施六文件。
+拟定跨模块范围和共享 token 变更只适用于本片，不表示完整 6.1 / 6.2 已冻结或完成。
+实现不更改准入/媒体契约，不新增聊天、共享、摄像头、说话电平或假遥测。
+
+本项从 PARKED 草稿更新为 DECIDED 范围，独立 docs PR 的审查合并前提仍未完成。
+PO 的设计 GO、代理报告、文档校验或 CLI 更新均不单独构成范围生效、代码合并或产品验收。
+#18、#31、#40、#41、#42 仍分别处理，
+真人听音、设备释放和跨境证据不得由视觉截图替代。
