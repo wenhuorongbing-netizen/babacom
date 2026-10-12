@@ -628,6 +628,40 @@ test('Sandbox runner reports unknown ownership after creation precedes a CLI err
   expect(await readFile(join(scenario.outputDirectory, 'host-summary.json'), 'utf8')).not.toContain('private-session-sentinel');
 });
 
+test('Sandbox runner preserves the creation failure when final evidence already exists', async () => {
+  const scenario = await sandboxScenario(null);
+  const original = '{"prior":"private-evidence-sentinel"}\n';
+  const summaryPath = join(scenario.outputDirectory, 'host-summary.json');
+  await writeFile(summaryPath, original, { flag: 'wx' });
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256,
+    execute: async (args: string[], options: { timeout: number; windowsHide: boolean }) => {
+      const response = await scenario.execute(args, options);
+      if (args[0] === 'start') throw Object.assign(new Error('private-session-sentinel'), { code: 29 });
+      return response;
+    },
+  });
+  expect(result).toMatchObject({ status: 'FAIL', stage: 'CREATE', category: 'CLI_FAILED', exitCode: 29,
+    cleanup: { status: 'UNKNOWN', category: 'OWNERSHIP_UNVERIFIED' }, evidenceFailure: { category: 'EVIDENCE_IO' } });
+  expect(scenario.isActive()).toBe(true);
+  expect(scenario.calls.map((args) => args[0])).toEqual(['list', 'start']);
+  expect(await readFile(summaryPath, 'utf8')).toBe(original);
+  expect(JSON.stringify(result)).not.toMatch(/private-session-sentinel|private-evidence-sentinel/);
+});
+
+test('Sandbox runner rejects guest success when final evidence already exists', async () => {
+  const scenario = await sandboxScenario(sandboxPass);
+  const original = '{"prior":"private-evidence-sentinel"}\n';
+  const summaryPath = join(scenario.outputDirectory, 'host-summary.json');
+  await writeFile(summaryPath, original, { flag: 'wx' });
+  const result = await desktopRunner.runSandboxInstance({ ...scenario, configuration: '<Configuration/>', appSha256: sandboxPass.appSha256 });
+  expect(result).toMatchObject({ status: 'FAIL', stage: 'EVIDENCE', category: 'EVIDENCE_IO',
+    cleanup: { status: 'RELEASED', unrelatedPreserved: true }, evidenceFailure: { category: 'EVIDENCE_IO' } });
+  expect(scenario.isActive()).toBe(false);
+  expect(scenario.calls.filter((args) => args[0] === 'stop')).toHaveLength(1);
+  expect(await readFile(summaryPath, 'utf8')).toBe(original);
+  expect(JSON.stringify(result)).not.toContain('private-evidence-sentinel');
+});
+
 for (const fault of ['output', 'returned-id', 'query-error', 'query-output', 'query-timeout', 'cancel'] as const) {
   test(`Sandbox runner preserves unknown ownership after the create side effect and ${fault}`, async () => {
     const scenario = await sandboxScenario(null);

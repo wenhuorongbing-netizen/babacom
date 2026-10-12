@@ -711,7 +711,11 @@ export async function runSandboxInstance({ outputDirectory, configuration, appSh
   if (signal?.aborted && result.status === 'PASS') result = { status: 'NOT_RUN', stage: 'RESULT', category: 'CANCELLED' };
   const summary = { ...result, cleanup, ...(admissionCleanup ? { admissionCleanup } : {}) };
   try { await record('host-summary.json', summary, true); }
-  catch { return { ...summary, status: 'FAIL', stage: 'EVIDENCE', category: 'EVIDENCE_IO' }; }
+  catch {
+    return { ...summary, status: 'FAIL',
+      ...(summary.status === 'PASS' ? { stage: 'EVIDENCE', category: 'EVIDENCE_IO' } : {}),
+      evidenceFailure: { category: 'EVIDENCE_IO' } };
+  }
   return summary;
 }
 
