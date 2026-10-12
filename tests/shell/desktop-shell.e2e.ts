@@ -336,6 +336,14 @@ test('persistent Discord shell renders server rail, channel sidebar, and main st
     // Trigger failure status via invalid nickname to verify failure text contrast (>= 4.5:1)
     const prepareBtn = page.getByRole('button', { name: '准备入房', exact: true });
     await nickname.fill('x'.repeat(33));
+    await expect(prepareBtn).toBeEnabled();
+    const buttonMetrics = await prepareBtn.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      const cardBg = getComputedStyle(el.closest('.card') || el.parentElement || el).backgroundColor;
+      return { color: cs.color, backgroundColor: cs.backgroundColor, cardBg };
+    });
+    expect(contrastRatio(buttonMetrics.backgroundColor, buttonMetrics.cardBg)).toBeGreaterThanOrEqual(3.0);
+    expect(contrastRatio(buttonMetrics.color, buttonMetrics.backgroundColor)).toBeGreaterThanOrEqual(4.5);
     await prepareBtn.click();
     const failureStatus = page.getByRole('status');
     await expect(failureStatus).toContainText('昵称须为 1–32 个字');
