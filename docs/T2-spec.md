@@ -578,12 +578,15 @@ A2及后续自动化、双端/物理/中德验收仍是独立任务；#18边界�
 使用Node标准库的临时Windows命名管道，在同机所有合作的BabaCom runner进程与工作区之间互斥。
 端点使用固定名称`\\.\pipe\babacom-sandbox-admission-v1`，不能包含工作区、运行目录或本次随机ID。
 它只用于准入，不传输凭据，也不连接或借用已经存在的端点。不得增加协调文件、helper或依赖。
-准入先于首次实例查询，保持到本次归属处理、实例清理和最终结果记录结束，在`finally`释放；
+准入先于首次实例查询，保持到本次归属处理和实例清理结束，在`finally`有界释放；
+先将准入释放结果纳入本次结果，再以`wx`写入唯一最终摘要，不能先落盘PASS再尝试释放。
 进程异常退出由操作系统释放管道，不引入持久服务、管理员服务或人工删除锁文件。
 
 准入占用立即返回`status=FAIL, stage=ADMISSION, category=BUSY`，不排队、不重试，不调用任何Sandbox CLI；
 此时`cleanup.status=NOT_OWNED`。其他准入错误为有限的`ADMISSION_FAILED`、`TIMEOUT`或`CANCELLED`，
 取消保持`NOT_RUN`，其余保持`FAIL`；不能泄漏异常正文。准入和释放也受原有整轮期限约束，释放失败阻止PASS。
+准入释放失败另记`admissionCleanup={status:NOT_RELEASED,category:TIMEOUT|ADMISSION_FAILED}`，
+保留已有主失败的阶段、类别及退出码；此前为PASS时改为`FAIL/ADMISSION/ADMISSION_FAILED`。
 该互斥只协调合作runner，不能阻止用户或其他程序在查询后创建Sandbox。
 原生CREATE返回`2147746294`（`0x800401F6`）时报告`FAIL/CREATE/BUSY`并保留实际退出码；
 不将其他未知退出码推断成争用，也不因争用终止陌生实例或重发创建请求。
