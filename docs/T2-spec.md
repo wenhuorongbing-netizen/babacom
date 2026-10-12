@@ -560,3 +560,76 @@ T1狭窄例外只涉及受控启动/关闭helper、调用接线及新生命周�
 本节不扩展T2-V1/#28；A1不得混入#28实现。验收包含原始超时RED→GREEN、完整development/packaged回归、
 启动失败/取消/worker退出清理及非本次资源保存、同产物真实SandboxPASS与实例释放。
 A2及后续自动化、双端/物理/中德验收仍是独立任务；#18边界不变。签认者仅为本fork的Jack，已于2026-10-08明确授权发布/合并本范围PR及继续实施A1。
+
+## T2-V2：Sandbox 跨进程准入与创建后归属（#42）
+
+2026-10-12，Jack批准本节的文档范围与方案，并授权独立审查通过后实施#42。
+文档变更仅限本文件和`docs/04-open-decisions.md`；与实现分开提交和审查。
+本节细化T2-V1的归属检查，并仅在#42中扩展下列有限结果；不追认此前运行或签收PR34→35→37→38。
+方案批准、文档审查、代码审查、具体PR合并及真实验收是不同状态，合并仍由Jack裁决。
+
+### 实现范围与共享准入
+
+实现Module为`t2`，Allowed Files恰为：
+
+- `apps/desktop/scripts/dev.mjs`
+- `tests/voice/session.e2e.ts`
+
+使用Node标准库的临时Windows命名管道，在同机所有合作的BabaCom runner进程与工作区之间互斥。
+端点使用固定名称`\\.\pipe\babacom-sandbox-admission-v1`，不能包含工作区、运行目录或本次随机ID。
+它只用于准入，不传输凭据，也不连接或借用已经存在的端点。不得增加协调文件、helper或依赖。
+准入先于首次实例查询，保持到本次归属处理、实例清理和最终结果记录结束，在`finally`释放；
+进程异常退出由操作系统释放管道，不引入持久服务、管理员服务或人工删除锁文件。
+
+准入占用立即返回`status=FAIL, stage=ADMISSION, category=BUSY`，不排队、不重试，不调用任何Sandbox CLI；
+此时`cleanup.status=NOT_OWNED`。其他准入错误为有限的`ADMISSION_FAILED`、`TIMEOUT`或`CANCELLED`，
+取消保持`NOT_RUN`，其余保持`FAIL`；不能泄漏异常正文。准入和释放也受原有整轮期限约束，释放失败阻止PASS。
+该互斥只协调合作runner，不能阻止用户或其他程序在查询后创建Sandbox。
+原生CREATE返回`2147746294`（`0x800401F6`）时报告`FAIL/CREATE/BUSY`并保留实际退出码；
+不将其他未知退出码推断成争用，也不因争用终止陌生实例或重发创建请求。
+
+### 创建归属与结果语义
+
+| 状态 | 可观察证据与行为 | `cleanup.status` |
+|---|---|---|
+| 未请求创建 | 尚未实际调用`start`；包括准入、基线查询失败及调用前取消 | `NOT_OWNED` |
+| 已请求、归属未知 | 已调用`start`，但返回失败/超时/取消、输出无效或后续查询未能确认归属 | `UNKNOWN` |
+| 已确认归属 | 请求ID不在基线、创建返回同一ID，且创建后实例查询包含该ID | 仅允许清理这一精确ID；未释放为`NOT_RELEASED` |
+| 已释放 | 已确认归属的ID经`stop`后在实例查询中不存在，且基线陌生实例保留 | `RELEASED` |
+
+`UNKNOWN`明确表示本次请求可能已创建实例，不能解释成不存在、已释放或已证明泄漏。
+此时清理分类为`OWNERSHIP_UNVERIFIED`；保留原始失败的阶段、有限类别和实际退出码，
+包括CREATE的`BUSY`、`CLI_FAILED`、`TIMEOUT`、`CANCELLED`或`INVALID_RESPONSE`。
+创建输出/确认查询成功但不能满足归属证据时，主结果为`FAIL/CREATE/OWNERSHIP_UNVERIFIED`。
+不得单凭新出现的ID、请求ID、进程名、退出码或现存管道推断归属；
+归属未知时不执行connect、exec、share或stop，也不自动重试或另建实例掩盖结果。
+已确认归属后发生错误或取消，仍仅清理本次ID；清理失败单独报告，不覆盖原失败原因。
+
+本节只替换“已调用start但归属未确认”情况下原`NOT_OWNED`的结果含义；
+保留调用前失败、guest断言、实际用户桌面、产物摘要、脱敏和已确认实例释放的原有要求。
+CLI每步最多15秒、guest最多120秒、实例清理最多15秒、整轮最多180秒、重试0次均不改变。
+网络、AudioInput、VideoInput、剪贴板和打印机转接仍Disable；不安装软件、不改变UAC或产品安全配置。
+
+### 回归与完成条件
+
+通过既有`Sandbox runner`入口验证：
+
+1. 两个真实Node进程、不同工作目录争用同一准入端点；占用者持有时第二个立即BUSY且零CLI调用，
+   正常释放和进程异常退出后均可重新取得准入。不得用单进程两个Promise代替。
+2. CLI替身先实际增加实例，再分别抛错、返回无效/错误ID、使确认查询失败/超时或触发取消；
+   断言`UNKNOWN`、原始失败信息与零connect/exec/share/stop，不能只模拟创建前抛错。
+3. 查询与创建之间插入陌生实例，包括原生忙退出；断言陌生实例保留、无创建重试，
+   以及成功路径只停止已确认的本次ID。
+4. 保留既有创建前失败用例及其退出码、脱敏和安全断言；其清理结果仅按本节的新语义更新。
+   已确认归属后的取消、停止失败、停止超时、最终仍列出实例均不得报告PASS。
+
+先执行`node --check apps/desktop/scripts/dev.mjs`、既有development项目的`Sandbox runner`回归、
+`node .agents/scope_guard.mjs t2 --files apps/desktop/scripts/dev.mjs tests/voice/session.e2e.ts`和`git diff --check`。
+最终集成树仍须完成T2-V1列出的类型、lint、完整development、build、Windows打包、packaged回归，
+并在获准且资源可用的条件下串行执行一次真实Sandbox验收，验证相同产物、实际guest与本次实例释放。
+替身通过、`UNKNOWN`分支通过或原生用例skip不构成真实释放证据；真实运行缺条件时保持NOT_RUN/HOLD。
+#42与#18的双设备、人耳、物理设备释放和跨境验收独立，不据此关闭#18或签收M0。
+
+机制依据：[Node IPC](https://nodejs.org/docs/latest-v24.x/api/net.html#ipc-support)说明Windows命名管道随拥有进程退出移除；
+[libuv Windows pipe实现](https://github.com/libuv/libuv/blob/v1.x/src/win/pipe.c)以首实例标志拒绝重复绑定。
+这些平台资料只支持方案选择，两个实际进程的回归与原生验收仍必须执行。
