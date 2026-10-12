@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { MediaSnapshot } from '@babacom/contracts';
 import { AdmissionPage } from './shell/AdmissionPage';
+import { DesktopShell } from './shell/DesktopShell';
 import { VoicePanel } from './features/voice/VoicePanel';
 import { AudioControls } from './features/audio/AudioControls';
 import { t } from './i18n';
@@ -32,8 +33,19 @@ function Desktop() {
   }, []);
   const panel = <VoicePanel snapshot={snapshot} prepared={prepared} />;
   const active = ['connecting', 'connected', 'leaving', 'cleanup-failed'].includes(snapshot.status);
-  return active ? <main><p>{t('appName')}</p>{panel}<AudioControls snapshot={snapshot} /></main>
-    : <AdmissionPage onPreparedChange={setPrepared}>{panel}</AdmissionPage>;
+  return (
+    <DesktopShell active={active}>
+      {active ? (
+        <main className="call-stage">
+          <p className="sr-only">{t('appName')}</p>
+          {panel}
+          <AudioControls snapshot={snapshot} />
+        </main>
+      ) : (
+        <AdmissionPage onPreparedChange={setPrepared}>{panel}</AdmissionPage>
+      )}
+    </DesktopShell>
+  );
 }
 
 const root = document.getElementById('root');
