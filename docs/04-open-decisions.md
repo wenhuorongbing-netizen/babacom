@@ -225,6 +225,7 @@ Jack批准[#42](https://github.com/wenhuorongbing-netizen/babacom/issues/42)的�
 人工或陌生Sandbox仍可能在查询后出现，必须保留实际CLI结果且不终止它。
 实际发出创建请求但归属未确认时，清理报告`UNKNOWN/OWNERSHIP_UNVERIFIED`并保留原失败原因；
 只有基线、创建返回ID和后续查询共同确认归属后才可连接和清理精确ID。
+最终摘要写入失败单独报告，保留已有主失败；既有摘要字节不得覆盖，guest成功也不能掩盖证据缺失。
 准入未取得或创建调用前失败保留`NOT_OWNED`，已确认但未释放保留`NOT_RELEASED`。
 新增回归包含两个真实进程和先产生创建副作用再报错的顺序；期限、安全和旧验收均保留。
 
