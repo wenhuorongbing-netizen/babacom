@@ -82,7 +82,7 @@ Owner: 5.3
 **这是当前最大的项目风险，且和技术无关。**
 必须有且只有一个人：拥有架构与接口、决定合并、阻止不兼容实现进入 main、保证 main 随时可构建。
 这个人不必是代码能力最强的，但必须愿意读每一个 PR，并且**敢说「不合」**。
-状态：原规划的全局 D9 **未指派**；本 fork T1 已固定 Jack，T2 提议沿用 Jack、待书面规格与范围 PR 明确审阅 · 阻塞：原规划全局并行及未签认的 T2 实现
+状态：原规划的全局 D9 **未指派**；本 fork T1 已固定 Jack，T2 Owner 已由 PR15 签认 Jack · 阻塞：原规划全局并行；本 fork 各票仍按已签认契约与精确范围执行
 
 ### D10 并行度上限
 `teams.html` 假设 24 模块 / 105 agents，但契约与 review 全部收敛到 1 个人。
@@ -111,11 +111,11 @@ Owner: 8.1
 | D6 | 一个房间还是两个 | **SPIKE (R00)** | 1.2 | 3.1 / 4.x |
 | D7 | 回声消除 | 待 PO 确认 | 3.2 | — |
 | D8 | 域名 | 待 PO 确认 | 1.1 | TLS 部署 |
-| D9 | **Tech Lead 人选** | 全局未指派；T1固定；T2 Owner已由PR15签认 | 全局：PO；T1/T2：Jack | 全局并行；T2-C3具体docs范围PR待审阅合并 |
+| D9 | **Tech Lead 人选** | 全局未指派；本fork T1/T2固定Jack | 全局：PO；T1/T2：Jack | 原规划全局并行；本fork不因此扩范围 |
 | D10 | 并行度上限 | 待 Tech Lead 确认 | TL | wave 规划 |
 | D11 | 韩国服务器定位 | 待 PO 确认 | 8.1 | — |
-| D12 | 本 fork T2 媒体执行与凭据边界 | **DECIDED：PR20已合并；本地兼容有证据** | T2 Owner：Jack（PR15已签认） | 整体验收未完成，#16当前打包清单阻塞见D13 |
-| D13 | T2打包资源断言的最小例外 | **DECIDED方案；具体docs PR待审阅合并** | T2 Owner：Jack | #16保持BLOCKED；合并后同步27路径与狭窄测试修复 |
+| D12 | 本 fork T2 媒体执行与凭据边界 | **DECIDED：PR20已合并；实现PR23/24/25已合并** | T2 Owner：Jack（PR15已签认） | #18真人双设备/物理释放/中德验收未完成 |
+| D13 | T2打包资源断言的最小例外 | **DECIDED：PR22已合并，#21/#16已关闭** | T2 Owner：Jack | 原#16打包阻塞已解除；后续测试基础设施PR仍独立待审 |
 | D14 | #42 Sandbox共享准入与创建后归属 | **DECIDED方案（2026-10-12）；独立docs审查待完成** | T2 Owner：Jack | 审查后实施两文件修复；代码/合并/原生验收仍独立 |
 
 **本 fork 发布阶段校准：DECIDED（2026-10-04，用户授权修正并合并基线 PR）。**
@@ -150,7 +150,7 @@ Owner: 8.1
 T2-01诊断使同窗口执行、零设备枚举与JWT信令URL例外受阻；本节修订为T2-C2，
 完整规格见[T2-spec.md](T2-spec.md)，逐文件范围见[t2清单](../.agents/modules/t2.md)。
 Jack已批准并合并具体T2-C2修订[PR20](https://github.com/wenhuorongbing-netizen/babacom/pull/20)，该契约前置已完成。
-#16当前因T1打包资源清单冲突保持BLOCKED，T2-C3例外与解除条件见D13。
+#16的T1打包资源清单阻塞已由T2-C3/PR22及实现PR23解除；历史冲突与例外见D13。
 不关闭T1父票、不扩展全局D9；方案签认、具体文档PR合并和产品/设备验收分别判断。
 
 ### D12 媒体执行与凭据边界 —— PR20已签认，本地兼容有证据
@@ -193,7 +193,13 @@ T1已在[PR13](https://github.com/wenhuorongbing-netizen/babacom/pull/13)合并�
 本修订基线为PR15的cb0fd0c71c4a4b99796fc1e37370b6b91fe4fd25，T1最终真人/产品签认仍独立。
 T2不签收完整R01或Alpha，10语音/1共享/9观看/至少2小时目标保持原样。
 
-### D13 打包资源断言例外 —— 最小方案已签认，具体范围PR待合并（2026-10-07）
+### D13 打包资源断言例外 —— PR22已合并，原#16阻塞已解除
+
+当前状态核对（2026-10-11）：[PR22](https://github.com/wenhuorongbing-netizen/babacom/pull/22)
+已合并本节三文件范围；[PR23](https://github.com/wenhuorongbing-netizen/babacom/pull/23)
+已合并#16实现，#21/#16已关闭。PR24/#17与PR25代码也已合并；#18仍独立等待真人/物理/中德验收。
+PR34/35/37/38是未合并的测试基础设施候选，其结果不能代替main或设备验收。
+以下保留2026-10-07签认时的生效条件及修订前实验记录，不作为当前BLOCKED状态。
 
 用户已签认独立契约/测试修订票[#21](https://github.com/wenhuorongbing-netizen/babacom/issues/21)的最小方案。
 权威测试边界见[T2规格的T2-C3打包资源断言例外](T2-spec.md)，文件上界见[t2清单](../.agents/modules/t2.md)。

@@ -1,5 +1,8 @@
 # T2 — 从受控准入走向真实桌面语音
 
+> 当前状态（2026-10-11）：T2-C3范围PR22与#16实现PR23已合并，#16/#17已关闭；PR25代码已合并，#18真人/物理/中德验收仍打开。PR34/35/37/38未合并，候选结果不替代main验收。
+> 下段保留2026-10-07的C3签认条件；其中“此前BLOCKED”是历史检查点。
+
 > T2-C3 打包资源断言修订 · 2026-10-07 · 本 fork T2 唯一契约签认与集成裁决者为 Jack。
 > T2-C / T2-C2 已分别在 PR15 / PR20 合并；Jack 已签认本次最小测试修订方案。
 > 本次具体 Module: docs 范围 PR 经 Jack 审阅合并并同步 #16 子集后生效；此前 #16 保持 BLOCKED。
@@ -551,11 +554,11 @@ T2-V1不扩展为沙盒双客户端、非回环HTTPS/WSS启动、跨设备会话
 具体契约见[testing-automation-spec.md](testing-automation-spec.md)。该独立Module: docs范围PR经Jack审阅合并前，
 正常T1测试及其辅助函数的零改动继续有效；本地草稿或研究报告不解除限制。
 
-该PR生效后，仅T2-A1独立实施票允许修改以下三条的必要子集：
-`apps/desktop/scripts/dev.mjs`、`tests/shell/admission.e2e.ts`、`tests/voice/session.e2e.ts`。
+原三路径范围PR30与2026-10-09第四路径补充签认PR33均已合并；仅T2-A1独立实施票允许修改以下四条的必要子集：
+`apps/desktop/scripts/dev.mjs`、`tests/shell/admission.e2e.ts`、`tests/voice/session.e2e.ts`、`apps/desktop/scripts/windows-process-owner.ps1`。
 T1狭窄例外只涉及受控启动/关闭helper、调用接线及新生命周期回归；既有测试主体、全部断言、
 原始期限、昵称/凭据/限流语义与打包资源白名单保持。产品main/preload、旧schema、媒体fixture、infra和依赖零diff。
-第四条必要文件、Job Object新脚本、框架/运行时/fuse/系统配置变更先另签范围。
+已签认的Windows脚本只负责本次测试/dev进程树的原生Job Object所有权与worker退出清理；四路径之外的必要文件及框架/运行时/fuse/系统配置变更仍先另签范围。
 
 本节不扩展T2-V1/#28；A1不得混入#28实现。验收包含原始超时RED→GREEN、完整development/packaged回归、
 启动失败/取消/worker退出清理及非本次资源保存、同产物真实SandboxPASS与实例释放。

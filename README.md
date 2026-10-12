@@ -1,13 +1,56 @@
-# Babacom — planning documents
+# Babacom — desktop voice prototype
 
-Design and scope documents for a self-hosted, Discord-style voice, video and
-screen-sharing app for a small private group split between mainland China and
-Europe.
+An invite-only, self-hosted desktop voice project for a small private group
+split between mainland China and Europe. The repository contains an Electron
+client, a FastAPI admission service, shared contracts and automated tests.
+Video, screen sharing and the wider release plan remain separate work.
 
 The problem it solves: Discord is blocked in mainland China, and the available
 alternatives either charge for video streaming or require every user to upload
-government ID. This is an invite-only replacement, self-hosted on two rented
-servers, with no ID collection and no per-seat fees.
+government ID. The intended deployment uses two rented servers, with no ID
+collection and no per-seat fees; that deployment is not accepted by the local
+prototype tests.
+
+## Implementation and acceptance
+
+As of 2026-10-11 on this fork, T1 desktop admission and T2-01/02 voice/admission
+code are merged. T2-03 microphone and exit code is also merged in
+[PR25](https://github.com/wenhuorongbing-netizen/babacom/pull/25), while
+[#18](https://github.com/wenhuorongbing-netizen/babacom/issues/18) remains open
+for real two-device listening, physical device release and China–Germany
+acceptance. These are not established by synthetic media or Sandbox tests.
+
+Startup/Sandbox/test-fixture fixes in PR34 → PR35 → PR37 → PR38 are pending
+review and are not part of `main`. Their validation belongs to those exact PR
+revisions. Passing scope/secrets CI is not product acceptance.
+
+| Entry | Purpose |
+|---|---|
+| [`apps/desktop/package.json`](apps/desktop/package.json) | Desktop development, build, Windows package and test commands |
+| [`apps/api/pyproject.toml`](apps/api/pyproject.toml) | Python environment and admission API tests |
+| [`docs/T1-spec.md`](docs/T1-spec.md) | Signed desktop/admission contract |
+| [`docs/T2-spec.md`](docs/T2-spec.md) | Signed voice/media contract and acceptance boundaries |
+| [`docs/testing-automation-spec.md`](docs/testing-automation-spec.md) | Startup/cleanup automation contract |
+| [`REPO_MAP.md`](REPO_MAP.md) | Source, test and governance navigation |
+
+## Local checks
+
+Use Node >=22.12.0 and Python >=3.12,<3.14. From the repository root:
+
+```powershell
+npm ci
+npm run typecheck --workspace apps/desktop
+npm run lint --workspace apps/desktop
+npm run build --workspace apps/desktop
+npm run package:win --workspace apps/desktop
+```
+
+From `apps/api`, use `uv sync`, then `uv run python -m pytest ../../tests -q`.
+Desktop journeys use `npm run test --workspace apps/desktop` (development) and
+`npm run test:e2e --workspace apps/desktop` (packaged); media/Sandbox prerequisites
+and the evidence required for completion are defined in the relevant specs.
+The ordinary API requires approved authentication/authorization providers;
+isolated test fixtures are not a production login or deployment configuration.
 
 ## Documents
 
@@ -67,4 +110,7 @@ Settings → Pages → Source: *Deploy from a branch* → `main` / `/ (root)`.
 
 ## Status
 
-Planning only. No application code in this repository yet.
+Implemented local prototype with independent acceptance still open. The HTML
+scope/team pages are historical planning inputs; signed T1/T2 specifications
+and current issue/PR evidence govern implementation. Do not infer full
+R01, M0, Alpha or cross-border readiness from merged code.
