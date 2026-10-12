@@ -44,7 +44,8 @@ tests/shell/desktop-shell.e2e.ts
 前述六条是完整上界，不使用目录通配。`DesktopShell.tsx` 与测试文件为拟建路径。
 `renderer.tsx` 只接入布局外壳；不改变媒体订阅、准入准备、会话切换或清理行为。
 `tokens.css` 保留既有 token 名称和功能样式；只增加必要布局 token、调整视觉值与焦点/缩放适配。
-新文案使用现有 `t()`。公共组件接口保持不变，不新建未消费的 Modal、Avatar 或图标依赖。
+沿用系统中文字体栈，复用现有 UI 原语；新文案使用现有 `t()`。
+公共组件接口保持不变，不新建未消费的 Modal、Avatar 或图标依赖。
 
 `playwright.config.ts` 只向既有 testMatch 增加 `**/shell/desktop-shell.e2e.ts`；
 保留 admission、voice、audio 全部既有匹配、两项目、单 worker、零重试与原期限。
