@@ -116,6 +116,7 @@ Owner: 8.1
 | D11 | 韩国服务器定位 | 待 PO 确认 | 8.1 | — |
 | D12 | 本 fork T2 媒体执行与凭据边界 | **DECIDED：PR20已合并；实现PR23/24/25已合并** | T2 Owner：Jack（PR15已签认） | #18真人双设备/物理释放/中德验收未完成 |
 | D13 | T2打包资源断言的最小例外 | **DECIDED：PR22已合并，#21/#16已关闭** | T2 Owner：Jack | 原#16打包阻塞已解除；后续测试基础设施PR仍独立待审 |
+| D14 | #42 Sandbox共享准入与创建后归属 | **DECIDED方案（2026-10-12）；独立docs审查待完成** | T2 Owner：Jack | 审查后实施两文件修复；代码/合并/原生验收仍独立 |
 
 **本 fork 发布阶段校准：DECIDED（2026-10-04，用户授权修正并合并基线 PR）。**
 沿用 [01-scope-v2.md](01-scope-v2.md) 的既有 R04 范围：完整每频道权限、
@@ -218,3 +219,22 @@ EXE54 passed / 1 failed (9.7m)，exit 1，32条T2媒体用例全部通过。
 ASAR实际新增`dist/main/media-preload.cjs`与`dist/media/media.html`，
 该用例后续分发资源秘密扫描NOT_RUN。本轮docs未重跑产品，不签收#16；
 后续必须完整开发/EXE回归0 failed且秘密扫描实际执行。物理设备、人耳与中德仍NOT_RUN/HOLD。
+
+### D14 Sandbox共享准入与创建后归属 —— 方案已批准，独立审查待完成（2026-10-12）
+
+Jack批准[#42](https://github.com/wenhuorongbing-netizen/babacom/issues/42)的具体方案与两文件文档范围，
+授权独立审查通过后实施。权威行为、状态与验收见[T2-V2](T2-spec.md#t2-v2sandbox-跨进程准入与创建后归属42)。
+本docs变更仅修改本文件和`docs/T2-spec.md`，不夹带实现或扩大`t2`模块清单。
+后续实现仅修改`apps/desktop/scripts/dev.mjs`和`tests/voice/session.e2e.ts`。
+
+采用同机跨进程/工作区的临时命名管道准入，占用立即非成功BUSY，不排队、不重试；
+人工或陌生Sandbox仍可能在查询后出现，必须保留实际CLI结果且不终止它。
+实际发出创建请求但归属未确认时，清理报告`UNKNOWN/OWNERSHIP_UNVERIFIED`并保留原失败原因；
+只有基线、创建返回ID和后续查询共同确认归属后才可连接和清理精确ID。
+最终摘要写入失败单独报告，保留已有主失败；既有摘要字节不得覆盖，guest成功也不能掩盖证据缺失。
+准入未取得或创建调用前失败保留`NOT_OWNED`，已确认但未释放保留`NOT_RELEASED`。
+新增回归包含两个真实进程和先产生创建副作用再报错的顺序；期限、安全和旧验收均保留。
+
+方案批准不代表文档已审查、PR已合并或修复已验证。PR34→35→37→38及#42的最终代码、
+完整development/packaged回归与一次获准串行原生验收仍待独立完成；#18真人双设备、
+物理设备释放和跨境验收继续NOT_RUN/HOLD。本变更不授予新的合并权限。
