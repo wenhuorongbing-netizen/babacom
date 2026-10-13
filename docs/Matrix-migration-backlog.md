@@ -637,7 +637,7 @@ GitHub：[#95](https://github.com/wenhuorongbing-netizen/babacom/issues/95)；Pa
 | [#40](https://github.com/wenhuorongbing-netizen/babacom/issues/40) | M25/M27/M34；暂停无关旧构建器投资，活动泄漏仍按原范围修复；确认退出后退役，历史临时目录不自动授权清理 |
 | [#41](https://github.com/wenhuorongbing-netizen/babacom/issues/41) | M25/M27/M34；merge-main的playback.ts与microphone.e2e.ts两文件dirty保留；delta部分通过，不等于freshness≤1000ms/挂起到期已修。退役前可恢复保存 |
 | [#48](https://github.com/wenhuorongbing-netizen/babacom/issues/48) / [PR49](https://github.com/wenhuorongbing-netizen/babacom/pull/49) | CLOSED/MERGED c9ec3cf；M06/M07继承设计目标，不重开或逐行移植旧六文件 |
-| [#50](https://github.com/wenhuorongbing-netizen/babacom/issues/50) | 本八文件规划票；产品/安装/部署/删除不属于本票 |
+| [#50](https://github.com/wenhuorongbing-netizen/babacom/issues/50) | 本规划票；产品/安装/部署/删除不属于本票 |
 
 七个旧open票加迁移标签/里程碑并追加关系说明，保持打开；移除过时Ready标签不抹掉原验收。未来关闭必须记录resolved / superseded / not-planned及owner/证据，不能把“已计划迁移”写成“已修复”。
 
