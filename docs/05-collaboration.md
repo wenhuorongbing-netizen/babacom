@@ -3,6 +3,12 @@
 > 针对一个「几乎没有协作开发经验、会大量使用 AI Agent、业余时间开发」的小团队。
 > 目标不是模仿大公司，是**避免三座石山最后粘不到一起**。
 
+> 2026-10-13：本轮主线为 [Matrix迁移PRD](PRD-matrix-migration.md) →
+> [技术规格](Matrix-migration-spec.md) → [迁移Backlog](Matrix-migration-backlog.md)。
+> 用户要求的9个Epic是并行领域容器，36张票是DRAFT，不是36个同时开工的授权。
+> 一个Release拆多个有Gate的Sprint；不新增Feature/Subtask层或重复状态看板。
+> 原全局D9不因此自动任命，原T1/T2与模块权限不因此扩张。
+
 ---
 
 ## 1. 角色（一个人可以兼多个）
@@ -105,7 +111,9 @@ Issue 类型只需要五种：**Story · Spike · Bug · Task · Chore**
 - 附截图或日志证明功能真的跑通了
 - 合并后删除分支
 
-CI 对每个 PR 执行：格式检查 · 类型检查 · 单元测试 · 后端测试 · Windows 构建 · **密钥扫描** · 依赖安全检查。
+当前仓库workflow提供scope与secrets检查；不能宣称现有CI已跑全套产品验证。
+产品票按其Validation实际执行并报告。迁移M25/M26规划补齐：类型/lint/行为测试、
+真实服务、Windows包、安全与依赖检查；新fork采用其固定版本实际scripts，未建立前不虚构命令。
 
 **Agent 写的代码和人写的代码走完全相同的检查。**
 
@@ -123,6 +131,12 @@ Backlog → Ready → In Progress → Review → Done
 （最后所有人都在维护 Jira 名词而不是写软件）。
 
 「Feature」当作**标签**用，不是层级中的一级。
+
+本轮迁移执行规则：每票一个DRI/一个module/一个短分支，Ready前固定精确Allowed Files、
+可执行Validation和前置资源；新增模块或扩allowed-files单独docs PR，产品PR不夹带扩权。
+共享契约、lockfile、部署配置与真实设备串行；独立盘点、研究和review可以并行。
+债务/旧消费者/继任测试与功能同票核对，删除在G5切换观察通过后逐文件实施。
+范围/审查/CI/打包/真人/跨境分别报告；PO页面失联不写成PO批准。最终以G6及旧票真实处置收口。
 
 ---
 

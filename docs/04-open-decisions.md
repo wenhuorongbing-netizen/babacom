@@ -3,6 +3,10 @@
 > 合并 `scope.html` 的 2 项、`teams.html` 的 6 项、`plan01.md` 新提出的 3 项。
 > 规则：每一项必须落入 **DECIDED / SPIKE / PARKED** 三类之一。**不允许留「大家之后再看看」。**
 
+> 当前校准（2026-10-13）：Matrix方向见D16；本文件后续T1/T2与旧PR的NOT_RUN/待审文字是各历史检查点。
+> 当前main为c9ec3cf，测试基础设施PR34/35/37/38与PR45均已合并，UI PR49已合并；未结票和实际验收见迁移Backlog。
+> 不以迁移规划追认历史PASS，也不在继任契约签认前解除活动旧代码义务。
+
 ---
 
 ## 已建议裁决（等 PO 确认即可关闭）
@@ -116,13 +120,34 @@ Owner: 8.1
 | D11 | 韩国服务器定位 | 待 PO 确认 | 8.1 | — |
 | D12 | 本 fork T2 媒体执行与凭据边界 | **DECIDED：PR20已合并；实现PR23/24/25已合并** | T2 Owner：Jack（PR15已签认） | #18真人双设备/物理释放/中德验收未完成 |
 | D13 | T2打包资源断言的最小例外 | **DECIDED：PR22已合并，#21/#16已关闭** | T2 Owner：Jack | 原#16打包阻塞已解除；后续测试基础设施PR仍独立待审 |
-| D14 | #42 Sandbox共享准入与创建后归属 | **DECIDED方案（2026-10-12）；独立docs审查待完成** | T2 Owner：Jack | 审查后实施两文件修复；代码/合并/原生验收仍独立 |
-| D15 | Discord 熟悉布局的首个 UI 外壳片 | **DECIDED：Jack 已签认六文件范围（2026-10-12）** | Jack 签认；A 协调 | #46 独立 docs PR 合并后方可实施；产品合并仍由 Jack 裁定 |
+| D14 | #42 Sandbox共享准入与创建后归属 | **DECIDED：独立docs PR44与实现PR45已合并** | T2 Owner：Jack | #42剩余验收与M25/M27/M34退役处置独立，不追认全PASS |
+| D15 | Discord 熟悉布局的首个 UI 外壳片 | **DECIDED：范围PR47与产品PR49已合并，#48已关闭** | Jack 签认；A 协调 | 新客户端设计映射M06/M07，旧六文件授权不迁移为新范围 |
+| D16 | 标准Matrix迁移Release | **DECIDED方向/规划；客户端与部署组合SPIKE** | Jack最终裁定；A协调；原战略PO顾问 | G0契约、G1Windows关键证明、本轮PO复审待完成；新范围/部署/退役另签 |
 
 **本 fork 发布阶段校准：DECIDED（2026-10-04，用户授权修正并合并基线 PR）。**
 沿用 [01-scope-v2.md](01-scope-v2.md) 的既有 R04 范围：完整每频道权限、
 自定义表情、链接预览、每用户强调色、投票与斜杠命令。对应模块和仓库地图
 已同步阶段，所有 allowed-files 块保持原样；本次不提前任何功能。
+
+## D16 Matrix迁移（2026-10-13）
+
+用户授权为项目建立全面迁移PRD、spec、9 Epics/36候选票与Sprint计划，包含化解技术债、
+无用/冗余代码退役、测试转换、数据/密钥恢复、升级、运行与切换回退。规划票为
+[#50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)。
+
+- **DECIDED：** 标准Matrix方向，复用成熟生态；不继续无关的旧自建核心扩展。当前产品仍为旧原型。
+- **SPIKE：** stock Synapse + Element Web/Desktop最小定制是首选候选，实际版本兼容、
+  Windows系统音频/独立音量/无回授与退出释放、上游升级和许可实验通过才采纳；不fork协议/加密核心。
+- **保留：** 产品Must/Won't、真人/物理/中德和负载验收；历史证据只追加。旧T1/T2活动路径
+  在逐项继任契约独立审查签认与切换前仍履约；不照搬短会话/一次性密钥库假设。
+- **PARKED：** 未知新依赖、生产部署、公开联邦/注册、数据转换工具、实际删除与发布；
+  仅在对应票Ready且所需授权具备后执行。不能一票授权整个目录或整个Epic。
+- **本轮PO复审：PENDING/BLOCKED。** 已有历史两轮Matrix建议；本轮原对话Edge附着两次超时，
+  未发送新包。独立Standards/Spec审查与PO审查是不同结果。
+
+文档入口：[PRD](PRD-matrix-migration.md)、[规格](Matrix-migration-spec.md)、
+[Backlog及旧票映射](Matrix-migration-backlog.md)。本次仅八文件docs范围；不扩大模块allowed-files。
+原全局D9保持未指派，Jack是本fork迁移最终裁定者。现有UI六文件授权不自动迁入新客户端。
 
 ## 本 fork 的 T1 契约决策（2026-10-04）
 
