@@ -24,6 +24,20 @@ docs/**
 *.html
 .gitignore
 **/AGENTS.md
+Source/README.md
+Source/Doc_Link_List.txt
+Source/00-overview.md
+Source/01-client-server-api.md
+Source/02-server-server-api.md
+Source/03-application-service-api.md
+Source/04-identity-service-api.md
+Source/05-push-gateway-api.md
+Source/06-room-versions.md
+Source/07-olm.md
+Source/08-megolm.md
+Source/09-appendices.md
+Source/10-proposals.md
+Source/11-changelog.md
 <!-- allowed-files:end -->
 
 ## 明确不允许
