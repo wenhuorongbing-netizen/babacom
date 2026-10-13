@@ -1,0 +1,106 @@
+# #98: stock, linux/amd64 control-plane proof. Pull these before timed `up`.
+# Synapse v1.162.0 / 63dc0cbfe514f60743212566374ffeb5e9e295c2
+# Source: https://github.com/element-hq/synapse/tree/v1.162.0
+# License: AGPL-3.0-or-later OR LicenseRef-Element-Commercial
+# Element v1.12.30 / f19cfd9030429240a4209bf5175b372175cf0464
+# Source: https://github.com/element-hq/element-web/tree/v1.12.30
+# License: AGPLv3+/GPLv3+/commercial; shipped image label AGPL-3.0
+# PostgreSQL 17.11-bookworm, Official Images source 2603e26e245e558218728ee14e0a42dcb020dc7f
+# PostgreSQL License; container build scripts MIT; Debian components retain their licenses.
+name: babacom-matrix-proof
+services:
+  postgres:
+    image: docker.io/library/postgres@sha256:66aafa11cf15800a3c94763f7e11d1e7b2e37e5e84bc4ce027cb6e1e4bfaf4df
+    platform: linux/amd64
+    env_file: /mnt/d/Code/babacom/.matrix-runtime/secrets/postgres.env
+    environment:
+      POSTGRES_DB: synapse
+      POSTGRES_USER: synapse
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --lc-collate=C --lc-ctype=C
+    volumes:
+      - database:/var/lib/postgresql/data
+    networks: [isolated]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U synapse -d synapse']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    restart: 'no'
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: '2'}
+  synapse:
+    image: ghcr.io/element-hq/synapse@sha256:43fd704aedef503a6fba2e5696439ef7bac24479a3472e364561973f550e4aad
+    platform: linux/amd64
+    user: '991:991'
+    # Config is 0400 UID 991 on DrvFS with metadata; Windows ACLs are checked separately.
+    environment:
+      SYNAPSE_CONFIG_PATH: /run/secrets/homeserver.yaml
+    volumes:
+      - data:/data
+      - type: bind
+        source: /mnt/d/Code/babacom/.matrix-runtime/secrets/homeserver.yaml
+        target: /run/secrets/homeserver.yaml
+        read_only: true
+        bind: {create_host_path: false}
+    networks: [isolated]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: 'no'
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: '2'}
+  element:
+    image: ghcr.io/element-hq/element-web@sha256:9189d2871ecc9ba8a79a1a94c29c4696648fbaa7a6979092919d9b18d0f1ae09
+    platform: linux/amd64
+    volumes:
+      - type: bind
+        source: ./element-config.json
+        target: /app/config.json
+        read_only: true
+        bind: {create_host_path: false}
+    # Internal-only bridge endpoints are not published by Docker. Reuse stock
+    # Element nginx for ingress; Synapse/PostgreSQL retain no outbound route.
+    # https://docs.docker.com/engine/network/#connecting-to-multiple-networks
+    ports: ['127.0.0.1:18080:80', '127.0.0.1:18008:8008']
+    networks: [isolated, ingress]
+    configs:
+      - source: matrix-ingress
+        target: /etc/nginx/conf.d/matrix-proof.conf
+        mode: 0444
+    depends_on:
+      synapse: {condition: service_healthy}
+    restart: 'no'
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: '2'}
+networks:
+  isolated:
+    internal: true
+  ingress:
+    internal: false
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: 127.0.0.1
+configs:
+  matrix-ingress:
+    content: |
+      server {
+        listen 8008;
+        server_name _;
+        access_log off;
+        client_max_body_size 1m;
+        location /_matrix/ {
+          proxy_pass http://synapse:8008;
+          proxy_set_header Host $$http_host;
+          proxy_http_version 1.1;
+          proxy_buffering off;
+          proxy_read_timeout 60s;
+        }
+        location /.well-known/matrix/client {
+          proxy_pass http://synapse:8008;
+        }
+        location / { return 403; }
+      }
+volumes:
+  database: {}
+  data: {}
