@@ -281,6 +281,42 @@ async function login(name, users) {
   return { name, token: response.access_token, userId: response.user_id };
 }
 
+function uiSessionQuery(name, device) {
+  check(['proof-a', 'proof-b'].includes(name) && typeof device === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(device), 'UI session selector is outside this synthetic proof');
+  return `SELECT t.token FROM access_tokens t JOIN devices d ON d.user_id=t.user_id AND d.device_id=t.device_id WHERE t.user_id='@${name}:proof.babacom.test' AND t.device_id='${device}' AND d.display_name='127.0.0.1:18080: Edge on Windows'`;
+}
+
+// Observe the actual stock UI session; never export its token to the coordinator, files or argv.
+// Start this command with the public device id shown in Element's Sessions panel, then log out in UI.
+async function verifyUiSession() {
+  deadline = Date.now() + 120000;
+  const [name, device] = process.argv.slice(3);
+  const query = uiSessionQuery(name, device);
+  await configuration();
+  await runtimeIsolation();
+  let token;
+  try {
+    token = await compose(['exec', '-T', 'postgres', 'psql', '-U', 'synapse', '-d', 'synapse', '-Atc', query], 'Read-only synthetic UI session observation', 5000);
+    check(/^[A-Za-z0-9_-]{32,4096}$/.test(token), 'UI session is missing or ambiguous; private query output withheld');
+    const identity = await request('/_matrix/client/v3/account/whoami', { token });
+    check(identity.user_id === `@${name}:proof.babacom.test` && identity.device_id === device, 'UI account/device identity mismatch');
+    pass(`stock UI session ${name}/${device} is valid; waiting for UI logout`);
+    while (true) {
+      const response = await fetch('http://127.0.0.1:18008/_matrix/client/v3/account/whoami', {
+        headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(remaining(2000)), redirect: 'error',
+      });
+      const data = privateJson(await response.text());
+      if (response.status === 401) {
+        check(data.errcode === 'M_UNKNOWN_TOKEN', 'UI logout returned an unexpected rejection code');
+        pass(`stock UI session ${name}/${device}: same old token rejected with 401/M_UNKNOWN_TOKEN`);
+        return;
+      }
+      check(response.status === 200 && data.user_id === identity.user_id && data.device_id === device, 'UI session observation failed before revocation');
+      await delay(Math.min(500, remaining(500)));
+    }
+  } finally { token = undefined; }
+}
+
 function accountTimeouts(budget) {
   check(budget >= 4000, 'DEADLINE: insufficient budget to start account writes');
   // Leave one second for the container kill and another for the outer WSL timeout.
@@ -434,6 +470,12 @@ function validateAcl(entries, currentSid) {
 }
 
 if (process.argv[2] === 'self-test') {
+  test('UI session observation accepts only the two synthetic accounts and a bounded device id', () => {
+    assert.match(uiSessionQuery('proof-a', 'DEVICE1234'), /127\.0\.0\.1:18080: Edge on Windows/);
+    for (const [name, device] of [['proof-outsider', 'DEVICE1234'], ['real-user', 'DEVICE1234'], ['proof-a', "bad' OR 1=1"], ['proof-b', '']]) {
+      assert.throws(() => uiSessionQuery(name, device), /UI session selector/);
+    }
+  });
   test('startup failure releases owned resources and preserves the original error', async () => {
     const failure = new Error('injected startup failure');
     let active = false;
@@ -521,8 +563,8 @@ if (process.argv[2] === 'self-test') {
 
 if (process.argv[2] !== 'self-test') {
   try {
-    const command = { config: configuration, up, verify, stop }[process.argv[2]];
-    check(command, 'Use config, up, verify, stop or self-test');
+    const command = { config: configuration, up, verify, stop, 'verify-ui-session': verifyUiSession }[process.argv[2]];
+    check(command, 'Use config, up, verify, stop, verify-ui-session or self-test');
     await command();
   } catch (error) {
     console.error(`FAIL ${error.message}`);
