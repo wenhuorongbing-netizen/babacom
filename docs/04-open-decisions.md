@@ -124,6 +124,7 @@ Owner: 8.1
 | D15 | Discord 熟悉布局的首个 UI 外壳片 | **DECIDED：范围PR47与产品PR49已合并，#48已关闭** | Jack 签认；A 协调 | 新客户端设计映射M06/M07，旧六文件授权不迁移为新范围 |
 | D16 | 标准Matrix迁移Release | **DECIDED方向/规划；客户端与部署组合SPIKE** | Jack最终裁定；A协调；原战略PO顾问 | PO对464f71a两项依赖修正限范围GO；用户授权隔离部署准备，PR99/#97合同待签认；G1/生产/退役独立 |
 | D17 | Digo 资料整合与多人工作入口 | **DECIDED 文档整合；运行/组织/许可独立** | Jack 授权本轮；A 串行集成；独立 Reviewer | #102 精确 24 路径；原提交保全、05 唯一指南、逐票 AC 归 GitHub；不变更权限/契约/产品 |
+| D16-E | 原版 Matrix 隔离实验执行 | **DECIDED 签认；PR99 审查合并后生效** | Jack 授权；A 实施；独立 Reviewer | 更新 D16/下文历史待签认状态；#98 四文件、本机回环、合成数据；运行结果待实测 |
 
 **本 fork 发布阶段校准：DECIDED（2026-10-04，用户授权修正并合并基线 PR）。**
 沿用 [01-scope-v2.md](01-scope-v2.md) 的既有 R04 范围：完整每频道权限、
@@ -150,6 +151,10 @@ Owner: 8.1
 文档入口：[PRD](PRD-matrix-migration.md)、[规格](Matrix-migration-spec.md)、
 [Backlog及旧票映射](Matrix-migration-backlog.md)、[协议资料](Matrix-protocol-research.md)。规划/协议资料仍属docs；#97独立docs PR审查实验合同/模块边界，不混入部署产品PR。
 原全局D9保持未指派，Jack是本fork迁移最终裁定者。现有UI六文件授权不自动迁入新客户端。
+
+### D16-E 受限原版实验合同（#97）
+
+精确合同见[四文件matrix-proof模块](../.agents/modules/matrix-proof.md)，本PR只新增该清单并追加本段，独立于PR96规划修订与后续#98产品PR。状态：**PROPOSED，待独立审查/Jack签认**。仅专用WSL与官方容器、本机loopback、合成账号/数据；不运行媒体、不开放生产、不动旧原型与dirty。签认后供M03/M04运行及M29-P引用，不把M02全票提前Done。生产TTL/额度/撤销/联邦政策仍待实验后另签。
 
 ## 本 fork 的 T1 契约决策（2026-10-04）
 
@@ -306,3 +311,7 @@ Digo 原提交 `c7a29ea7` 作为祖先接入；初始接收提交 `7e29d45` 的 
 
 当前 fork 已有 Jack ADMIN、DigoYu WRITE；main 未启用 branch protection。本轮不改变权限或规则，原全局 D9 不冒充已指派；仓库 LICENSE 仍未选定。
 产品、测试、T1/T2、NFR、历史证据、用户数据/密钥及其他工作副本保持；PR99/#97 的具体实验合同待签认，隔离服务、真人/物理与中德验收仍 NOT_RUN。
+
+### D16-E 隔离部署执行授权（2026-10-13）
+
+Jack明确要求“继续推进 Matrix 迁移，先把隔离部署和测试跑通”，授权按PR99/#97既有四文件实验合同实施#98。独立范围审查合并后执行；专用WSL、固定digest、loopback、合成数据与留存边界保持。此记录更新前述待签认状态，不授予生产切换、真实数据导入、设备采集或旧代码删除权限；运行与UI结果仍以实际验证为准。
