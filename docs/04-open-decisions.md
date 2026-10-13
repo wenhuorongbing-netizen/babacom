@@ -150,6 +150,10 @@ Owner: 8.1
 [Backlog及旧票映射](Matrix-migration-backlog.md)、[协议资料](Matrix-protocol-research.md)。规划/协议资料仍属docs；#97独立docs PR审查实验合同/模块边界，不混入部署产品PR。
 原全局D9保持未指派，Jack是本fork迁移最终裁定者。现有UI六文件授权不自动迁入新客户端。
 
+### D16-E 受限原版实验合同（#97）
+
+精确合同见[四文件matrix-proof模块](../.agents/modules/matrix-proof.md)，本PR只新增该清单并追加本段，独立于PR96规划修订与后续#98产品PR。状态：**PROPOSED，待独立审查/Jack签认**。仅专用WSL与官方容器、本机loopback、合成账号/数据；不运行媒体、不开放生产、不动旧原型与dirty。签认后供M03/M04运行及M29-P引用，不把M02全票提前Done。生产TTL/额度/撤销/联邦政策仍待实验后另签。
+
 ## 本 fork 的 T1 契约决策（2026-10-04）
 
 适用范围仅为 wenhuorongbing-netizen/babacom 的 T1；原仓库、T2/T3 以及全局并行开发不由此获得签认或实施授权。完整契约与逐文件范围见 [T1-spec.md](T1-spec.md)。
