@@ -2,7 +2,12 @@
 
 本目录是 Matrix 开放协议的**自学笔记**,逐篇对应官方规范 [spec.matrix.org](https://spec.matrix.org/) 的文档结构(基准版本 **v1.19**)。每篇 `.md` 均为中文,英文术语保留原名,严格基于规范原文整理,抓取不到的内容一律标注「未覆盖」而非臆测。
 
-> 用途:为 Babacom(自托管 Discord 替代品)评估「是否用 Matrix 内核替换自研通信层」提供协议层面的参考。详见 `../communication-layer-notes.md` 与根目录 PRD。
+> 用途:为 Babacom 选型提供协议学习参考。保留 DigoYu 的原提交 `c7a29ea7` 与笔记；原引用 `communication-layer-notes.md` 和当时的根 PRD 未随该提交提供，不补造内容。
+>
+> 2026-10-13 合入后的当前入口：[迁移 PRD](../docs/PRD-matrix-migration.md)、[固定栈研究与适用差异](../docs/Matrix-protocol-research.md#版本与部署差异)。这些是后续整合入口，不冒充原作者当时引用。规范 v1.19、房间版本、组件版本和 MSC 支持分别核对；笔记不是已测试部署合同。
+
+开发时按 Issue 只读相关章节；面向 homeserver/SDK 实现者的 sync/crypto 建议用于理解和核验上游，不要求本项目自研这些核心。下述顺序是自学路径，不是开工前必须读完整目录。
+`Doc_Link_List.txt` 是动态查询入口；本目录研究基准为 [固定 v1.19](https://spec.matrix.org/v1.19/)，实际候选组合见上述固定栈研究。
 
 ## 文件清单
 
@@ -11,7 +16,7 @@
 | [00-overview.md](00-overview.md) | 规范总览 | Matrix 是什么、架构、CAP 取舍、核心概念(用户/设备/事件/DAG/房间/状态解析)、版本号规则 |
 | [01-client-server-api.md](01-client-server-api.md) | Client-Server API | **最大一篇**。客户端如何用 homeserver:认证、sync、发事件、房间成员、typing/已读、媒体、E2EE、VoIP |
 | [02-server-server-api.md](02-server-server-api.md) | Server-Server API | 联邦:PDU/EDU、请求与事件签名、接收校验 7 步、join/leave 握手、回补、信任模型 |
-| [03-application-service-api.md](03-application-service-api.md) | Application Service API | 受信的桥接服务 API(25 人封闭圈大概率用不到) |
+| [03-application-service-api.md](03-application-service-api.md) | Application Service API | 经典受信桥接 API；本项目 MatrixRTC 的 AS 接线例外见固定栈研究 |
 | [04-identity-service-api.md](04-identity-service-api.md) | Identity Service API | 3PID(邮箱/手机)→ Matrix ID 的查找(可选组件) |
 | [05-push-gateway-api.md](05-push-gateway-api.md) | Push Gateway API | 移动端离线推送(仅做移动端才有意义) |
 | [06-room-versions.md](06-room-versions.md) | Room Versions v1–v12 | **房间版本演进**(每版一节 + 对比表):状态解析算法、auth rules、knock、restricted join、redaction 语义 |

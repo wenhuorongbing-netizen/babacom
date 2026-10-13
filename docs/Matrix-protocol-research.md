@@ -6,18 +6,25 @@
 
 ## 1. 必须掌握的协议边界
 
-| 概念 | 实施要点 |
-|---|---|
-| 身份 | `@localpart:server_name` 是用户 ID；display name 可重复，不能用于授权或迁移匹配。[标识符](https://spec.matrix.org/v1.17/appendices/#identifier-grammar) |
-| Room / Event | 房间 ID 与别名分开；消息是事件，状态由事件类型与 `state_key` 标识；成员资格也是状态。[概念](https://matrix.org/docs/matrix-concepts/elements-of-matrix/)、[事件](https://spec.matrix.org/v1.17/client-server-api/#events) |
-| Sync | `/sync` 增量游标由客户端持有；断线补同步必须处理有限时间线和分页，不能另建消息权威。[同步](https://spec.matrix.org/v1.17/client-server-api/#syncing) |
-| Spaces | Space 是特殊房间，父子事件组织导航；加入 Space 不自动赋予每个子房间成员权限。[Spaces](https://spec.matrix.org/v1.17/client-server-api/#spaces) |
-| 权限 | 以成员状态、join rules、history visibility 和 power levels 共同判断；UI 隐藏不能代替服务端拒绝。[权限](https://spec.matrix.org/v1.17/client-server-api/#permissions) |
-| Room version | 房间规则按版本变化；v12 创建者权限与早期版本不同，不能统一硬编码“管理员=100”。[房间版本](https://spec.matrix.org/v1.17/rooms/)、[power levels](https://spec.matrix.org/v1.17/client-server-api/#mroompower_levels) |
-| 设备与会话 | access token、device ID 与设备密钥关联，但凭据撤销和房间离开是不同动作。[设备关系](https://spec.matrix.org/v1.17/client-server-api/#relationship-between-access-tokens-and-devices) |
-| E2EE | 房间消息密钥、设备验证、cross-signing 与加密备份各有生命周期；服务器 DB 恢复不能代替用户解密密钥恢复。[E2EE](https://spec.matrix.org/v1.17/client-server-api/#end-to-end-encryption) |
+通用协议解释复用 [Digo 的 v1.19 学习索引](../Source/README.md)：账号/设备、sync gap、成员权限及密钥见 [Client-Server](../Source/01-client-server-api.md)，房间演进见 [Room Versions](../Source/06-room-versions.md)。显示名不作身份；Space 导航不授予子房权限；客户端应复用 SDK 而不是另写同步/加密核心。
+
+原核查和下文 API 示例以 **v1.17** 为基准；Digo 笔记以 **v1.19** 为基准。两者均保留固定来源，不把链接全部替换为 latest，也不将规范版本等同于某个 SDK 或组件的全部兼容能力。当前产品仍未迁移。
 
 架构约束沿用迁移规格：单一长期 MatrixClient/crypto owner；每次通话独立短期媒体 session；离开语音房不能销毁账号密钥库。上述是本项目设计选择，不冒称协议自动保证。
+
+### 版本与部署差异
+
+本轮核对 Digo 固定提交的索引、Client-Server、Application Service 与 Changelog 的关键条款；未声称逐条审核全部 12 章。原笔记保留，实施时以下列固定来源与实际候选实验校准历史选型用语。
+
+| 差异 | 本项目适用规则与证据 |
+|---|---|
+| 规范、房间与组件版本 | v1.19 已发布；房间版本与协议版本分别演进。[v12 格式](https://spec.matrix.org/v1.19/rooms/v12/#event-format) 的 room ID 不再要求旧式域名部分，不能套用统一旧正则。组件/MSC 支持按 M04 的固定版本和实际行为验证，不由“支持 v1.19”推定。 |
+| 邀请与注册 | registration token 限制创建账号，room invite 授予入房机会，两者不同。当前 proof 候选由管理员预建账号并关闭公开注册；若另选 token 注册，固定 Synapse 要同时配置 `enable_registration: true` 与 `registration_requires_token: true`，另验有效期/次数/撤销/限流。[固定配置](https://github.com/element-hq/synapse/blob/v1.162.0/docs/usage/configuration/config_documentation.md#registration_requires_token) |
+| 联邦“留空” | `federation_domain_whitelist: []` 拒绝全部；不设置或 `null` 允许全部，不能混称留空即关闭。另验 listener、代理、出站网络及房间 `m.federate`；只关 8448 不能证明无出站联邦。[固定配置](https://github.com/element-hq/synapse/blob/v1.162.0/docs/usage/configuration/config_documentation.md#federation_domain_whitelist) |
+| E2EE 与恢复 | 客户端管理加解密、设备验证和私钥；homeserver 存密文、公开设备密钥及加密备份。数据库恢复不等于设备私钥恢复或旧历史可解密，M09/M31 分开验证。[协议](https://spec.matrix.org/v1.19/client-server-api/#end-to-end-encryption) |
+| Application Service | Source 第 03 章的经典桥接语境保留；本候选 lk-jwt-service v0.8.0 的 homeserver-mediated 模式使用 AS 接线，旧 standalone 已 deprecated，详见 §4。25 人规模不构成省略 AS 的依据。 |
+| 轻量 homeserver | 首个 proof 使用 Synapse。[Dendrite 官方说明](https://github.com/element-hq/dendrite#readme) 标为维护模式且未实现 MSC4186/MSC3861；[Conduit](https://conduit.rs/) 的本候选 RTC 支持仍 UNKNOWN，不据此宣称已废弃。替代优先级须有版本、升级、恢复和 Call 兼容证据。 |
+| 工作量与媒体规模 | “近零工作量”和“4–6 人全互联”是历史选型判断，未构成本项目兼容、成本或负载实测。保留 NFR 的 10 语音/1 共享/9 观看/≥2 小时与 G1；1440p60 仍属后续目标，不以笔记降低当前验收。 |
 
 ## 2. Matrix 不是一套可直接替代全部服务的“内核”
 

@@ -1,8 +1,10 @@
 # 原自研通信层方案 vs Matrix 方案 对比
 
 > 日期:2026-09-27
-> 用途:Babacom 通信层选型的决策参考。对照 `../communication-layer-notes.md`(原三平面方案)与 `Source/` 下的 Matrix 学习笔记,落到一个明确建议。
+> 用途:Babacom 通信层选型的历史决策参考。原引用 `communication-layer-notes.md` 未随固定提交提供；下文保留原三平面方案和 Matrix 学习笔记的比较。
 > 结论先行,细节在后。
+>
+> 2026-10-13 整合注：原稿和作者历史保留，以下仍是 2026-09-27 的选型判断。合入后的当前 [PRD](docs/PRD-matrix-migration.md) 与 [版本/部署差异](docs/Matrix-protocol-research.md#版本与部署差异) 为新增入口。邀请注册、联邦“留空”、E2EE/AS 责任、候选维护状态、近零工作量和 4–6 人说法按差异段核对，不直接复制为运行配置、排期或验收阈值；实际 10 语音/1 共享/9 观看/≥2 小时与 G1 要求保持。
 
 ---
 
