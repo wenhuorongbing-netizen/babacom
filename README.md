@@ -1,4 +1,4 @@
-# Babacom — desktop voice prototype
+# Babacom — private gaming community / Matrix migration
 
 An invite-only, self-hosted desktop voice project for a small private group
 split between mainland China and Europe. The repository contains an Electron
@@ -11,18 +11,41 @@ government ID. The intended deployment uses two rented servers, with no ID
 collection and no per-seat fees; that deployment is not accepted by the local
 prototype tests.
 
+## Matrix migration planning
+
+As of 2026-10-13, the user has authorized a comprehensive migration plan to
+standard Matrix. The current code is still the custom prototype described
+below; Element/Synapse adoption is conditional on Windows game audio, security,
+recovery, maintenance and real-network evidence.
+
+- [Migration PRD](docs/PRD-matrix-migration.md): product outcomes and debt retirement.
+- [Migration specification](docs/Matrix-migration-spec.md): architecture, contracts, tests, data and gates.
+- [Migration backlog](docs/Matrix-migration-backlog.md): 9 Epics, 36 DRAFT tickets, dependencies and legacy issue mapping.
+- [Matrix protocol materials](docs/Matrix-protocol-research.md): first-party semantics, fixed component candidates and proof boundaries.
+- [Planning issue #50](https://github.com/wenhuorongbing-netizen/babacom/issues/50): this documentation scope only.
+
+Planning does not approve production deployment, delete old code or establish
+product acceptance. The original PO has reviewed the fixed planning revision
+and returned FIX on experiment-policy and retirement dependencies, then reviewed
+464f71a and gave GO to both logic corrections. This limited review is not approval
+of the whole PR, experiment contract or deployment. The earlier Edge attachment failure
+was recovered. The next sprint targets an isolated stock baseline with two
+synthetic accounts and persistent history; production migration remains gated.
+
 ## Implementation and acceptance
 
-As of 2026-10-11 on this fork, T1 desktop admission and T2-01/02 voice/admission
+At the current `c9ec3cf` baseline, T1 desktop admission and T2-01/02 voice/admission
 code are merged. T2-03 microphone and exit code is also merged in
 [PR25](https://github.com/wenhuorongbing-netizen/babacom/pull/25), while
 [#18](https://github.com/wenhuorongbing-netizen/babacom/issues/18) remains open
 for real two-device listening, physical device release and China–Germany
 acceptance. These are not established by synthetic media or Sandbox tests.
 
-Startup/Sandbox/test-fixture fixes in PR34 → PR35 → PR37 → PR38 are pending
-review and are not part of `main`. Their validation belongs to those exact PR
-revisions. Passing scope/secrets CI is not product acceptance.
+Startup/Sandbox/test-fixture PR34 → PR35 → PR37 → PR38 and the later PR45 are
+merged. PR49 merged the first familiar community UI shell. Those merges do not
+settles the remaining #31/#40/#41/#42 acceptance and maintenance decisions.
+Passing scope/secrets CI is not product acceptance. Migration replaces the old
+implementation order; signed T1/T2 contracts still govern any active old path.
 
 | Entry | Purpose |
 |---|---|
@@ -85,7 +108,9 @@ them directly in a browser, or serve the folder with any static file server.
 
 ## Design constraints behind these documents
 
-The architecture is shaped by three findings from measurement and research:
+The original planning used three network hypotheses. They remain historical
+inputs requiring current primary-source research and deployment measurements;
+the loss percentages below are not universal guarantees or acceptance results:
 
 1. **The Great Firewall is not the main obstacle.** It does not blanket-throttle
    UDP. Nearly all China-to-overseas packet loss is ordinary carrier congestion
@@ -110,7 +135,8 @@ Settings → Pages → Source: *Deploy from a branch* → `main` / `/ (root)`.
 
 ## Status
 
-Implemented local prototype with independent acceptance still open. The HTML
-scope/team pages are historical planning inputs; signed T1/T2 specifications
-and current issue/PR evidence govern implementation. Do not infer full
-R01, M0, Alpha or cross-border readiness from merged code.
+Implemented custom local prototype with independent acceptance still open.
+The Matrix PRD/spec/backlog govern migration planning; signed T1/T2 still govern
+active old code until explicitly superseded. HTML scope/team pages are historical
+requirements inputs. Do not infer R01, M0, Alpha, Matrix adoption or cross-border
+readiness from merged code or a published migration plan.

@@ -3,6 +3,14 @@
 > 在 `scope.html` 基础上，按 [`00-review-plan01.md`](00-review-plan01.md) 的裁决重新切分。
 > **本文档取代 `scope.html` 底部的三段 build order。**
 
+> **2026-10-13 Matrix迁移校准：** 产品定位、Must与Won't、R02两周稳定期保持。
+> 新实施顺序以 [迁移PRD](PRD-matrix-migration.md)、[迁移规格Gate](Matrix-migration-spec.md)、
+> [Sprint Backlog](Matrix-migration-backlog.md) 为准：先固定契约/数据，再证明Windows系统音频与独立音量，
+> 再补产品宽度、运行与恢复、真实中德验收，切换观察后逐文件退役。下文旧工期仅为历史估计，
+> 不是本次排期；旧昵称→token纵切片不作为Matrix新架构。新链为邀请→稳定账号→房间/消息→
+> 闭麦通话→明确开麦→安全离开/恢复。原T1/T2对活动旧代码仍生效，替代契约另行签认。
+> 上游现成功能可验证复用；R03/R04不因按钮存在提前签收。Matrix不自动证明媒体、权限或网络质量。
+
 ---
 
 ## 产品定位（Alpha）

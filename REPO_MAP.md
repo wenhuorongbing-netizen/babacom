@@ -1,7 +1,7 @@
 # REPO_MAP — 一页仓库地图
 
 > 先读地图，再按任务定位；不要扫全库。
-> 更新：2026-10-11。本 fork 已有桌面、准入 API 与语音实现；设备/跨境验收独立。
+> 更新：2026-10-13，基线 c9ec3cf。本 fork 仍为自建原型；Matrix 迁移正在规划，设备/跨境验收独立。
 
 ## 当前入口与职责
 
@@ -12,7 +12,7 @@
 | `apps/desktop/src/features/voice/`、`src/features/audio/` | 房间、麦克风与播放状态；feature 不互相 import |
 | `apps/desktop/src/i18n/`、`src/styles/tokens.css` | 中文文案与设计令牌 |
 | `apps/desktop/scripts/build.mjs` | 类型检查、lint、构建、打包与桌面测试入口 |
-| `apps/desktop/scripts/dev.mjs` | 开发/测试启动与 Sandbox 验收入口；当前修复仍在待审 PR |
+| `apps/desktop/scripts/dev.mjs` | 旧开发/测试启动与 Sandbox 验收入口；历史修复已集成，未结问题看对应票 |
 | `apps/api/app/` | 认证主体、房间授权、准入路由、签发与限流；普通入口无 provider 拒绝启动 |
 | `packages/contracts/`、`packages/ui/` | 共享 schema 与 UI 原语 |
 | `tests/shell/`、`tests/voice/`、`tests/audio/` | 真实 Electron 旅程、SFU/合成 peer 与生命周期回归 |
@@ -26,6 +26,7 @@
 | 任务 | 入口 |
 |---|---|
 | 开工与改动边界 | [AGENTS.md](AGENTS.md) → 对应目录 AGENTS → `.agents/modules/<id>.md` |
+| Matrix迁移主线 | [PRD](docs/PRD-matrix-migration.md) → [规格](docs/Matrix-migration-spec.md) → [9 Epics/36父票及实验子票](docs/Matrix-migration-backlog.md)；[协议资料](docs/Matrix-protocol-research.md)；未来票DRAFT，#97范围合同/#98隔离proof独立 |
 | T1 桌面与准入 | [T1 规格](docs/T1-spec.md)、[t1 清单](.agents/modules/t1.md) |
 | T2 语音与采集 | [T2 规格](docs/T2-spec.md)、[t2 清单](.agents/modules/t2.md) |
 | 启动/清理自动化 | [自动化规格](docs/testing-automation-spec.md)；实施票另列精确子集 |
@@ -43,12 +44,15 @@
 - 不扫描 `.git/`、会话记录、个人凭据或其他任务的 worktree。
 - `.gitignore` 只定义版本控制忽略，不授予删除权限。临时生成副本须逐项验证用途、归属和恢复副本。
 
-## 当前工程状态（2026-10-11 快照）
+## 当前工程状态（2026-10-13 快照）
 
 - T1 实现 PR8–13 已合并；T1 父规格 #1 仍打开，契约值与验收层级保持。
 - T2-C/C2/C3 文档及 T2-01/02 已合并（PR15/20/22/23/24）；
   PR25 已合并 T2-03 代码，#18 真人双设备、人耳、物理释放及中德验收仍待完成。
-- 测试基础设施修复 PR34 → PR35 → PR37 → PR38 尚未合并；不能把候选分支结果写成 main 已验收。
+- 测试基础设施修复 PR34 → PR35 → PR37 → PR38 与后续PR45均已合并；运行证据仍按具体revision判断。
+- PR49已合并六文件UI外壳（c9ec3cf）；#48已关闭，不重开或逐行移植旧UI。
+- #1/#14/#18/#31/#40/#41/#42映射迁移Backlog，尚未以迁移为由关闭；#41两文件dirty保持原样。
+- #50只建立迁移文档/Backlog；标准Matrix方向与具体Element技术GO、契约签认、部署、退役分别判断。
 - Jack 已签认本 fork T1/T2；原规划全局 D9 与 24 模块并行安排仍独立。
 - 原规划 24 模块/八领域及 R00–R04 是长期计划；见 `teams.html` 和模块清单，不视为全部已实施。
 
