@@ -8,7 +8,7 @@
 ├─ README.md            本文件
 ├─ scope_guard.mjs       边界检查器，CI 和本地自查都用它
 ├─ scope_guard.test.mjs  检查器的 CLI 回归测试，使用真实 Git 文件列表
-└─ modules/             24 个模块 + docs 伪模块的边界清单
+└─ modules/             24 个编号模块 + t1/t2/discord-ui/docs；待签认 matrix-proof 单列
 ```
 
 ## 模块清单格式

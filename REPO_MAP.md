@@ -26,14 +26,15 @@
 | 任务 | 入口 |
 |---|---|
 | 开工与改动边界 | [AGENTS.md](AGENTS.md) → 对应目录 AGENTS → `.agents/modules/<id>.md` |
-| Matrix迁移主线 | [PRD](docs/PRD-matrix-migration.md) → [规格](docs/Matrix-migration-spec.md) → [9 Epics/36父票及实验子票](docs/Matrix-migration-backlog.md)；[协议资料](docs/Matrix-protocol-research.md)；未来票DRAFT，#97范围合同/#98隔离proof独立 |
+| Matrix迁移主线 | [PRD](docs/PRD-matrix-migration.md) → [规格](docs/Matrix-migration-spec.md) → [9 Epics/36父票索引](docs/Matrix-migration-backlog.md)；实时 AC/范围/状态归 GitHub Issue，未来票 DRAFT；#97合同/#98隔离proof独立 |
+| 协议选版/学习 | [研究](docs/Matrix-protocol-research.md) 固定候选与差异 → [Digo 学习索引](Source/README.md) 按需查 v1.19；保留原提交，学习笔记不作部署合同 |
 | T1 桌面与准入 | [T1 规格](docs/T1-spec.md)、[t1 清单](.agents/modules/t1.md) |
 | T2 语音与采集 | [T2 规格](docs/T2-spec.md)、[t2 清单](.agents/modules/t2.md) |
 | 启动/清理自动化 | [自动化规格](docs/testing-automation-spec.md)；实施票另列精确子集 |
 | 设备验收与测试方法 | [T2-03 研究](docs/T2-03-acceptance-research.md) |
 | 当前签认/阻塞 | [待决表](docs/04-open-decisions.md)、GitHub 对应 Issue/PR |
 | 长期范围/阶段 | [范围](docs/01-scope-v2.md)、[平台标准](docs/02-platform-nfr.md) |
-| 成本/协作/harness | [成本](docs/03-cost-model.md)、[协作](docs/05-collaboration.md)、[harness](docs/06-agent-harness.md) |
+| 多人工作与守卫维护 | [05 唯一协作指南](docs/05-collaboration.md)、[06 守卫机制](docs/06-agent-harness.md)；[成本](docs/03-cost-model.md) 按需查，不重复工作流程 |
 | GitHub 操作 | [Issue tracker](docs/agents/issue-tracker.md)；只操作本 fork |
 
 ## 不要读或清理的地方

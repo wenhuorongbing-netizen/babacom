@@ -1,202 +1,161 @@
 # 协作流程
 
-> 针对一个「几乎没有协作开发经验、会大量使用 AI Agent、业余时间开发」的小团队。
-> 目标不是模仿大公司，是**避免三座石山最后粘不到一起**。
-
-> 2026-10-13：本轮主线为 [Matrix迁移PRD](PRD-matrix-migration.md) →
-> [技术规格](Matrix-migration-spec.md) → [迁移Backlog](Matrix-migration-backlog.md)。
-> 用户要求的9个Epic是并行领域容器，36张票是DRAFT，不是36个同时开工的授权。
-> 一个Release拆多个有Gate的Sprint；不新增Feature/Subtask层或重复状态看板。
-> 原全局D9不因此自动任命，原T1/T2与模块权限不因此扩张。
-
----
+本文件是 BabaCom 唯一的多人日常开发与跨 fork 合并指南。产出规则见
+[AGENTS](../AGENTS.md)，代码定位见[地图](../REPO_MAP.md)，产品方向见
+[Matrix PRD](PRD-matrix-migration.md)，契约与 Gate 见[迁移规格](Matrix-migration-spec.md)。
+人和 Agent 使用相同交付边界；编辑器、模型和开发方法由各自选择。
 
 ## 1. 角色（一个人可以兼多个）
 
-| 角色 | 职责 | 数量 |
-|---|---|---|
-| PO | 决定做什么、不做什么；验收体验；**阻止范围膨胀**；排优先级 | 1 |
-| Tech Lead / Integrator | 架构、接口、数据模型、合并决策、发布；保证 main 随时可构建 | **必须恰好 1 个** |
-| DRI | 每个 Issue 的直接责任人 | 每 Issue 1 个 |
-| Reviewer | 每个 PR 至少 1 人审查 | 每 PR ≥ 1 |
+| 角色 | 每次交付负责什么 |
+|---|---|
+| Jack | 当前 fork 的最终裁定与已授权集成；实验、继任契约和生产条件分别签认 |
+| PO | 优先级、范围和方向复审；建议不直接授予运行、权限或合并授权 |
+| Integrator | 本次集成基线、共享改动顺序、最终 head、合并与恢复边界；当前 A 执行 Jack 已授权事项 |
+| DRI | 每票恰好一人，对实现、实际 Validation 和限制负责 |
+| Reviewer | 每 PR 至少一位非作者，检查规范及需求；独立审查不冒充 GitHub 人工批准 |
 
-**为什么 DRI 不能省：** 没有 DRI 就会出现——三个人都以为对方在做、所有人都能否决、没有人决定。
-
-**Tech Lead 不是写最多代码的人。** 他的工作是：维护架构边界、审查公共接口、阻止不兼容修改、
-判断何时该重构、处理跨模块依赖。他必须敢对一个能跑但不合架构的 PR 说「不合」。
-
----
+全局 D9 和团队扩大后的 Integrator 尚未任命，不因本指南自动指派。
+认领 Issue 时写 DRI、Reviewer 和可用资源；不替未认领的人承诺工时。
+Gemini 的既有美术分工不要求队友使用同一模型，也不自动扩大新客户端的修改范围。
 
 ## 2. 分支策略
 
-### 不要做的事
+### 集成仓库与权限
 
-> 「每人开一个 branch，一个人写语音、一个人写文字、一个人写 UI，各写一个月。」
+- 本次沿用 [wenhuorongbing-netizen/babacom](https://github.com/wenhuorongbing-netizen/babacom) 的 main 和 Issues；贡献者可从个人 fork 提 PR。共同组织归属仍由参与者确认。
+- 2026-10-13 实查：Jack 为 ADMIN，DigoYu 已有 WRITE；本轮没有授予新权限。
+- main **尚未启用分支保护**。required reviews、scope/secrets checks、禁止直接 push 是待负责人落实的设置；目前按同样规则人工把关，不声称已有技术拦截。
+- CODEOWNERS 含原上游负责人及部分 Jack 路径。是否具备审查权限、保护规则是否启用须实际核对；不把文件里的账号当已接受的团队任命。
+- 仓库未见 LICENSE。保留来源和作者，不擅自改许可或宣称可任意商业分发；许可清单按 M04/M32 核对。
 
-这适合几天的任务，不适合一个月的模块。长期个人分支的结局是固定的：
-三套用户对象定义 · 前后端接口对不上 · 语音房间 ID 和文字频道 ID 不是同一套模型 ·
-所有人都改公共配置 · 最后一次性产生巨大合并冲突 · 为了合并被迫重写。
+### 日常短分支
 
-### 正确形式
+一个分支解决一个小 Issue、一个 module。合并目标是上述集成仓 main，个人 fork 的 main 不成为第二个交付权威。
+开工先确认工作树干净、票已 Ready；从最新 origin/main 新建短分支，固定 base SHA。
+有无关 dirty 时换隔离工作副本，不自动 stash、reset 或 clean。worktree 是可选工具，已有 checkout 不被其他 Agent 共同写入。
 
-```
-main                     受保护，只能通过 PR 合并
-├─ feat/voice-room-join
-├─ feat/text-message-send
-├─ feat/screen-source-picker
-├─ fix/audio-device-reconnect
-└─ chore/windows-build
-```
+操作顺序（分支名、模块和具体文件由 Ready 票提供）：
 
-- 每个分支对应一个**很小的 Issue**，通常几天内完成
-- 合并后立即删除分支
-- main 开启分支保护：required reviews、required status checks、禁止直接 push
+~~~powershell
+git status --short
+git fetch origin
+git rev-parse origin/main
+# 新建本票分支后实现；只暂存本票明确路径。
+git diff --check
+git diff --name-status
+git diff --cached --name-status
+~~~
 
----
+确认整个暂存区属于本票后才 commit、push 自己的分支和提 PR。
+共享分支不擅自 rebase/force-push。个人短分支同步主线后，重新验证受冲突影响的部分。
+只有确认提交已被 main 保留、无未提交/未推送内容、worktree 归本任务后，才清理已合并分支；证据和数据不随分支删除。
+
+### 本次 Digo 来源接收
+
+双方共同祖先为 01a747d，Digo 固定 c7a29ea7 的独有变化是15份资料，没有第二套应用实现。
+PR101先独立允许14个 Source 精确路径；#102在干净分支用真实 merge 接收原提交，第一提交15个 blob保持原样，后续注解单独提交。
+合并保留作者和父提交，不用对方旧 README 覆盖当前应用入口，不通过搬目录绕过守卫。
+最终 PR 使用保留提交历史的 merge 方式；若仓库策略不允许，先确定保全方案，不关闭保护规则。
 
 ## 3. 纵向切片优先于横向模块
 
-先让一条最小链路贯穿整个系统：
+Matrix 首批链路：两个合成账号 → 私房邀请/越权拒绝 → 收发消息 → 重启后历史仍在。
+它只证明控制面。之后尽早证明真实 Windows 包的游戏画面、系统音频、独立麦克风与停采，G1未过不扩大 UI 重做。
+跨模块切片仍须独立冻结精确范围，不能用“小 Issue”跨越模块清单。
+首 Sprint 最多三条流，认领和工时明确后再承诺：
 
-```
-客户端启动 → 取 token → 加入房间 → 发布麦克风 → 另一台电脑听见
-```
+| 工作流 | 现有票 | 出口与停止条件 |
+|---|---|---|
+| 需求与资料 | #60；资料整合另为 #102 | 原条款/锚点挂到唯一继任 Issue，汇总例外；未知资产不写零，不再新建139行映射副本 |
+| 原版兼容研究 | #63 | 固定组件/MSC/许可/镜像候选，给出 G1反证；只读可并行，不因有 flag 就报兼容 PASS |
+| 实验合同 → proof | #97/PR99 → #98 | Jack 具体签认后才安装/运行；两个合成账号、私房权限与持久历史；不采集设备 |
 
-**而不是：** A 写完整前端 / B 写完整后端 / C 写完整媒体层 / 三个月后第一次连接。
-
-第一条纵向链路跑通之后，多人并行才成立。
-
----
+共享文档由 A 串行集成，其他人给差异或 review；不重建9 Epics/36票，不把所有父票标 Ready。
 
 ## 4. Issue 模板
 
-```
-标题：
-[Voice] 用户可以加入语音房间
+每票必须写清：用户结果与非目标、固定基线/版本、一个 module、DRI/Reviewer、逐文件 Allowed Files、
+完整 Validation 命令/cwd/环境/退出与通过条件、依赖、资源归属、停止条件及可勾完成标准。
+目录候选、UNKNOWN 和上级 Epic 不是写权限。新增依赖或换框架先在票中裁定。
+扩模块 allowed-files 先独立 docs PR；产品 PR 不夹带扩范围。
 
-用户故事：
-作为已加入社区的成员，
-我希望点击语音频道后加入房间，
-以便听到房间中的其他成员。
-
-验收标准：
-- 点击频道后进入对应 LiveKit 房间
-- 成员列表显示当前参与者
-- 麦克风默认关闭
-- 重复点击不会创建重复连接
-- 连接失败时显示错误
-- 有自动化测试或可重复的手动验证步骤
-
-非目标：
-- 暂不做自动重连
-- 暂不做全局快捷键
-- 暂不做屏幕共享
-```
-
-**「非目标」这一段是模板里最重要的部分。** 它是范围膨胀唯一的刹车。
-
-Issue 类型只需要五种：**Story · Spike · Bug · Task · Chore**
-
-> **Spike** 特别重要：它表示「先做实验回答一个技术未知」，
-> **不承诺这段代码进入正式产品**。R00 的全部工作都是 Spike。
-
----
+类型按需用 Story、Spike、Bug、Task、Chore，不强制每个 Story 再拆前端/API/测试/日志四层。
+Spike回答未知，不承诺其代码进入正式产品。已明确授权的范围无需反复索取同一批准；具体实验、数据或设备条件仍须成立。
 
 ## 5. PR 要求
 
-- 关联一个 Issue
-- 尽量只解决一个问题
-- 构建通过 / 测试通过
-- 至少一人审查
-- 附截图或日志证明功能真的跑通了
-- 合并后删除分支
+- 使用[仓库模板](../.github/pull_request_template.md)，写机器读取的 Module 与一个 Issue；简述变化、实际证据、失败/NOT_RUN、风险和回退。
+- 逐文件暂存并检查全暂存区；不混入无关 dirty、批量格式化、依赖或秘密。共享契约变化同步合同，不删断言换绿灯。
+- 一个非作者 Reviewer 按固定 base…head 审查 Standards 与 Spec；修复后结论绑定新 head。获准的 Integrator 才合并。
+- 当前 GitHub CI 只有 scope/secrets，不能当完整产品验证。文档检查范围、链接、出处和语义；产品票按实际影响运行类型/lint/行为测试、真实服务或 Windows 包。
+- 合成媒体、人耳、物理释放和中德负载是不同证据。保留原始失败，修复后重验相关部分；未变版本不无理由重跑全套。
 
-当前仓库workflow提供scope与secrets检查；不能宣称现有CI已跑全套产品验证。
-产品票按其Validation实际执行并报告。迁移M25/M26规划补齐：类型/lint/行为测试、
-真实服务、Windows包、安全与依赖检查；新fork采用其固定版本实际scripts，未建立前不虚构命令。
-
-**Agent 写的代码和人写的代码走完全相同的检查。**
-
----
+已有旧桌面命令在 [package.json](../apps/desktop/package.json)，API环境在 [pyproject.toml](../apps/api/pyproject.toml)；
+新 Element fork 的命令须从其固定版本读取，不能照搬旧 scripts 或虚构 CI。
 
 ## 6. 看板
 
-GitHub Projects，五列足够：
+只使用现有 Issues 的 Backlog → Ready → In Progress → Review → Done 语义，不再建第二份状态表。
+Ready/Done完整条件见[迁移 Backlog](Matrix-migration-backlog.md#2-ready--done)。
+Ready前固定范围、可执行验证、前置和资源；Done需要本票全部 AC 与相应证据、独立 review。
+受阻写具体原因和责任人；规划发布不等于迁移完成，公开资料存在不等于部署可运行。
 
-```
-Backlog → Ready → In Progress → Review → Done
-```
+### 串行共享改动与冲突
 
-不需要每日站会，不需要十层审批，不需要 Epic → Feature → Story → Task → Subtask 五层结构
-（最后所有人都在维护 Jira 名词而不是写软件）。
+schema/公共接口、lockfile、部署配置、数据库迁移、共享文档和同一真实设备，每次只有一个 writer；
+独立模块实现、只读研究和审查可并行。变更这些共享资产前，由 Integrator 排顺序并通知依赖票。
+数据库提案只写 `apps/api/migrations/_proposed/`，正式序列按仓库规则由负责人审查编号。
 
-「Feature」当作**标签**用，不是层级中的一级。
-
-本轮迁移执行规则：每票一个DRI/一个module/一个短分支，Ready前固定精确Allowed Files、
-可执行Validation和前置资源；新增模块或扩allowed-files单独docs PR，产品PR不夹带扩权。
-共享契约、lockfile、部署配置与真实设备串行；独立盘点、研究和review可以并行。
-债务/旧消费者/继任测试与功能同票核对；M25准备覆盖清单，M36在G5通过后执行获准消费者断接并保留恢复基线，再由M33/M34逐文件删除。
-M02-E实验合同与M02最终生产政策分别验收，不把实验全部卡在未验证参数上。首Sprint仅原版基线可验证，合成隔离实验不等待未知远端资产变为零；真实导入/切换仍被资产缺口阻断。
-范围/审查/CI/打包/真人/跨境分别报告；原PO先对e14d7e9给FIX，再对464f71a两项依赖修正限范围GO，不能外推为全PR/实验/部署批准。最终以G6及旧票真实处置收口。
-
----
+冲突先读双方差异及签认意图，检查是否影响范围、权限、数据和测试；不整文件选 ours/theirs。
+超出本票范围或需要改签认契约时暂停该合并，单独处理必要范围/契约，其他独立工作继续。
+解决后确认无 unmerged 状态、diff与暂存区准确，再运行受影响检查；共享分支不强推。
+无法安全完成时保留可恢复状态并说明原因，不因工具或技能催促而暂存全部文件。
 
 ## 7. 文档层级
 
-```
-Vision / MRD          为什么做、给谁做           一页足够
-      ↓
-     PRD              产品要做成什么             不放技术栈、表结构、端口号
-      ↓
-Milestone / Release   docs/01-scope-v2.md
-      ↓
-    Epic              语音 / 文字 / 屏幕共享 / 账号
-      ↓
-User Story / Spike / Bug
-      ↓
-    Task              前端 / API / 测试 / 日志
-      ↓
-Branch → Pull Request → Merge
-```
+| 唯一职责 | 当前入口 |
+|---|---|
+| 开始使用、现状 | README；代码定位与禁扫区域在 REPO_MAP |
+| 产出边界与验证 | AGENTS、目录规则、对应 .agents/modules 清单 |
+| 产品结果 | Matrix PRD；Must/阶段及数值基准在 Scope/NFR |
+| 架构、Gate、继任契约 | Matrix spec；决定与签认历史在04 |
+| 排程和依赖导航 | Matrix Backlog；实时 AC/范围/依赖/状态仅在对应 GitHub Issue |
+| 多人日常流程 | 本05；06只解释守卫维护，不复制流程 |
+| 固定栈差异与 proof | Matrix protocol research；协议学习按需读 Source |
+| 历史来源 | 00-review、07-proposal、scope.html、teams.html；退出默认新人阅读链，独有要求仍保留 |
 
-另外两类：
-
-- **技术 RFC / Architecture**：架构、后端、LiveKit、数据模型、API、部署、重连、安全、监控
-- **ADR**：为什么作出某个关键技术决定，例如
-  `ADR-0001 采用 Electron 而非 Tauri` ·
-  `ADR-0002 采用 LiveKit 而非自建 SFU` ·
-  `ADR-0003 Alpha 用房间级区域选择，不做跨区级联`
-
----
+不要把票正文、PO长回复或旧文档复制进新 archive/handoff。正常 Git 历史保存旧全文；当前入口链接唯一权威。
+需求映射的最终落点是继任 Issue 的出处/锚点，#60汇总遗漏和例外；临时核对不是永久交付。
 
 ## 8. Epic 拆分示例
 
-**Epic：语音频道** —— 不要分配给一个人「负责完整语音模块三个月」，拆成纵向 Story：
+Epic只是领域容器；选择可独立验收的小切片，例如控制面 proof、固定 Windows 包或一项系统音频反证。
+每个切片包含完成其验收所需实现和测试，按模块合同决定是否必须先拆范围票；不为凑层级创建四类子任务。
+同一真实场景可能跨多个 Sprint，但提前部分必须单独有 AC/依赖，不把父票提前 Done。
 
-1. 加入固定测试房间（输入昵称 → 看见参与者）
-2. 发布麦克风（其他成员能听见）
-3. 静音自己（其他人看到静音状态）
-4. 选择输入/输出设备
-5. 断线恢复（恢复连接或明确提示失败）
+### 多轮审查和退役
 
-每个 Story 再拆成前端、API、测试、日志四类 Task。
+1. 来源/语义：作者、15文件、版本注解、链接、范围及精简前后去向；方向分歧交 PO。
+2. 实现：唯一 Matrix 权威、权限负向、长期 crypto/短期媒体、真实 Windows/G1和一次相邻升级；DB恢复与设备密钥恢复分验。
+3. G5/G6：保全切换后新写入并观察，M25覆盖交接 → M36在G5后断接 → M33/M34逐文件删除。源码 revert不等于数据库或新消息无损回滚。
 
-**这就是大型项目能多人并行的基础：做的是边界清楚的小交付，不是各自闭门造一个大模块。**
-
----
+七张旧票按证据标 resolved/superseded/not-planned及责任人，不以“迁移了”冒充修复。
+旧失败证据、#41 dirty、真实数据和密钥不在文档清理范围内。
 
 ## 9. 七个必须先冻结的契约
 
-`teams.html` 已列出，此处只补一条修正：**不要让一个人拥有全部七个。**
+下表保留原规划的七项接口类别，**不是 Matrix 新票的默认自研模板或自动签认**。
+旧活动链仍按各自已签认 T1/T2及公共 schema 履约；新继任逐项按[规格§4](Matrix-migration-spec.md#4-契约转换与签认)和 M02独立签认。
 
-| 契约 | 建议 Owner | 阻塞 |
-|---|---|---|
-| 数据库 schema（单一迁移序列） | Tech Lead | 所有 |
-| 仓库布局与 CODEOWNERS | Tech Lead | 所有 |
-| HTTP API 形状（每模块一个路由命名空间） | 后端 DRI | 所有后端 |
-| WebSocket 事件（presence / typing / unread / message） | 7.1 DRI | 5.x、6.3 |
-| 设计令牌与组件库 | 6.2 DRI | 所有 UI |
-| 权限原语 `can(user, action, channel)` | 2.3 DRI | 3.1、5.1、6.1 |
-| LiveKit token claims | 7.2 DRI | 3.x、4.x |
+| 原契约类别 | 当前边界 / Matrix继任方向 |
+|---|---|
+| DB schema / 单一迁移序列 | 原产品迁移守卫保留；不自行改 Synapse 内部 schema |
+| 仓库布局 / CODEOWNERS | 独立 docs 范围 PR；角色与实际权限另核 |
+| HTTP API | 旧准入合同有效；新身份/事件复用 Client-Server API，缺口才窄扩展 |
+| WebSocket事件 | 原规划事件契约不等于已实现；Matrix同步/事件为新权威，不再建平行消息总线 |
+| 设计令牌 / 组件库 | 保留体验目标；新 fork 最小补丁，不逐行迁移旧六文件 |
+| can(user, action, channel) | 旧授权继续履约；新成员/power levels/join/history语义逐项验收 |
+| LiveKit token claims | 旧T1/T2短期媒体合同继续有效；新RTC auth复用Matrix成员权威，撤销窗口须实测 |
 
-规则不变：**团队提出变更，不自行修改契约。** Tech Lead 保留最终否决权。
+团队提出变更，由相应合同签认者裁定；本表不替代具体值、模块 Allowed Files或正式验收。
