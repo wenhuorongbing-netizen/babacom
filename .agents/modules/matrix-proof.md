@@ -1,7 +1,7 @@
 # matrix-proof — 受限原版 Matrix 控制面实验
 
 Issue: [#97 M02-E/M03-E](https://github.com/wenhuorongbing-netizen/babacom/issues/97)；实施票 [#98 M29-P](https://github.com/wenhuorongbing-netizen/babacom/issues/98)。
-状态：**拟签认实验合同；本PR不实施部署**。DRI：Codex协调者；独立Reviewer：与Builder不同的代理；本fork最终签认者：Jack。父M02/M03/M04/M05/M29不因子交付通过而全部Done。
+状态：**Jack已于2026-10-13授权继续隔离部署和测试；独立范围PR审查合并后生效，本PR不实施部署**。DRI：Codex协调者；独立Reviewer：与Builder不同的代理；本fork最终签认者：Jack。父M02/M03/M04/M05/M29不因子交付通过而全部Done。
 
 ## 目标与前置
 
