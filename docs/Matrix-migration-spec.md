@@ -1,6 +1,6 @@
 # Matrix 迁移技术规格
 
-关联 [PRD](PRD-matrix-migration.md)、[#50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)、[Backlog](Matrix-migration-backlog.md)。2026-10-13，基线 `c9ec3cf`。状态：**架构迁移提案；当前未实现 Matrix，技术 GO / 新契约签认未完成。原战略 PO 已审，结论 FIX；本修订落实两处依赖修正，尚未复审为 GO。** 本文可用于分票和审查，不自动覆盖已签认 T1/T2。用户后续已授权隔离部署准备；具体实验范围与新依赖仍单独冻结，不构成生产切换或删除授权。
+关联 [PRD](PRD-matrix-migration.md)、[#50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)、[Backlog](Matrix-migration-backlog.md)。2026-10-13，基线 `c9ec3cf`。状态：**架构迁移提案；当前未实现 Matrix，技术 GO / 新契约签认未完成。原战略 PO 先对e14d7e9给FIX，再实际读取464f71a复核两处依赖修正，均GO，无该范围遗留阻断；不等于全PR/实验/部署批准。** 本文可用于分票和审查，不自动覆盖已签认 T1/T2。用户后续已授权隔离部署准备；具体实验范围与新依赖仍单独冻结，不构成生产切换或删除授权。
 
 ## 1. 决策与实验分开
 
