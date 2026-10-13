@@ -1,6 +1,6 @@
 # Matrix 迁移 Sprint Backlog
 
-关联 [PRD](PRD-matrix-migration.md) / [技术规格](Matrix-migration-spec.md) / [规划票 #50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)。2026-10-13，基线 `c9ec3cf`。用户授权发布计划；**9 Epics / 36票全部DRAFT**，未来实施不由本规划自动获得代码、依赖、部署或删除授权。当前PO复审PENDING/BLOCKED；独立review结果见本次PR。
+关联 [PRD](PRD-matrix-migration.md) / [技术规格](Matrix-migration-spec.md) / [规划票 #50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)。2026-10-13，基线 `c9ec3cf`。用户授权发布计划，后续授权准备资料与隔离部署；**9 Epics / 36父候选票仍DRAFT**，另拆两张首Sprint实验票。当前原战略PO已审固定e14d7e9，结论FIX；本修订处理依赖，待复核为GO。具体代码/依赖/实验契约仍独立冻结，不以大计划授权生产或删除。
 
 GitHub里程碑：[Matrix Migration](https://github.com/wenhuorongbing-netizen/babacom/milestone/1)。规划根票[#50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)链接下列Epic。
 
@@ -10,7 +10,7 @@ GitHub里程碑：[Matrix Migration](https://github.com/wenhuorongbing-netizen/b
 
 | 迭代候选 | 内容 | 出口 |
 |---|---|---|
-| S0 契约与盘点 | M01–M04；只读资产/许可/需求盘点可并行 | G0；继任政策和精确实施范围签认 |
+| S0 原版基线可验证 | M01与M04只读版本/许可并行；M02-E/M03-E #97；固定M04最小组合后M29-P #98与M05必要子集 | 需求出处/UNKNOWN影响、受限实验范围；两个合成账号标准客户端互通、私房权限、重启历史；不把最终生产政策作为实验前置 |
 | S1 Windows关键证明 | M05；最小M29/M08/M09/M10/M12/M17/M18；M21/M22 | G1真实包游戏音频/独立音量/无回授/停采；未过停止扩大UI |
 | S2 单一权威与Alpha宽度 | M06/M07/M11/M13/M19/M23/M24，M25/M26持续 | G2；私域权限、消息、设备恢复完整，不留双权威 |
 | S3 运行与恢复 | M29–M32、M27、M35；必要附件留存M14 | G3；数据/备份/新写入回退、许可、升级、真实包 |
@@ -18,7 +18,11 @@ GitHub里程碑：[Matrix Migration](https://github.com/wenhuorongbing-netizen/b
 | S5 逐文件退役 | M33/M34 | G6；消费者零、继任覆盖、恢复基线、旧票处置 |
 | 后续产品宽度 | M14/M15/M20为R03，M16为R04；已有上游能力优先验证 | 不挤掉R02稳定期；M14涉及迁移/备份的必要子集提前验证，社交扩展仍后置 |
 
-上述是顺序/出口，不是固定6个Sprint工期；同票跨阶段只提前实验必需子集，拆分实施票时保留父AC与依赖。执行次序由有向依赖和Gate共同决定。**M35→M36→M33→M34**，先切换观察后删除；最终项目关闭必须M33/M34完成。若R03/R04项明确延期，需Jack逐项接受并记录，不能把仍未验收的全部票勾Done。
+上述是顺序/出口，不是固定6个Sprint工期；同票跨阶段只提前实验必需子集，拆分实施票时保留父AC与依赖。执行次序由有向依赖和Gate共同决定。**M35→M36（G5后消费者断接与M25覆盖交接）→M33→M34**，先切换观察、断接再删除；最终项目关闭必须M33/M34完成。若R03/R04项明确延期，需Jack逐项接受并记录，不能把仍未验收的全部票勾Done。
+
+首Sprint只承诺“原版基线可验证”。[#97](https://github.com/wenhuorongbing-netizen/babacom/issues/97)是M02-E/M03-E独立docs范围合同，签认后才释放受限运行；[#98](https://github.com/wenhuorongbing-netizen/babacom/issues/98)是M29-P独立控制面proof，依赖#97与M04最小固定组合，不依赖M02全部生产政策。M05必要Windows包子集在运行前另拆有独立AC/依赖/精确范围的票。M01未访问到的远端资产记录UNKNOWN及影响，阻断真实导入/切换，不阻断纯合成隔离实验。#50只验收规划，不等待九Epic完成才释放盘点。
+
+当前环境核实：WSL2.6.3/内核6.6.87.2已安装，但没有Linux发行版；未发现Docker/Podman。#98拟使用专用Ubuntu WSL+Docker Engine，仅loopback控制面，不采购或改其他服务器。运行前核实端口、镜像摘要、临时秘密与资源归属；当前尚未部署。RTC与可信TLS、两台Windows及采集同意在后续独立交付，不用HTTP本机proof冒充G1。
 
 ## 2. Ready / Done
 
@@ -51,7 +55,7 @@ GitHub：[#60](https://github.com/wenhuorongbing-netizen/babacom/issues/60)；Pa
 - Epic：E1；类型：task；阶段：G0；依赖：#50。
 - 用户故事：作为Jack，我希望每个旧需求与数据有明确去向，避免迁移遗漏或重复建设。
 - 验收：
-  - [ ] 24模块、139项未勾验收逐条映射复用/配置/扩展/验收/明确不做，保存出处
+  - [ ] 24模块、139项未勾验收及Scope v2正文Must逐条映射复用/配置/扩展/验收/明确不做，保存出处；密码登录→M09，入房前成员/电平/本地静音→M17/M19，网络诊断面板→M23逐项核对，标题不计覆盖
   - [ ] 7旧open票、PR49和#41 dirty记录真实状态
   - [ ] 账号/房间/消息/附件/密钥按归属统计，未知不写零
 - 范围候选：B：本次PRD/spec/backlog、docs/01-scope-v2.md；资产只读盘点入口待核定。
@@ -66,18 +70,19 @@ GitHub：[#61](https://github.com/wenhuorongbing-netizen/babacom/issues/61)；Pa
 - 用户故事：作为维护者，我希望只有一套身份、房间和权限事实。
 - 验收：
   - [ ] 冻结身份/设备/密钥/房间/RTC语义与存储owner
-  - [ ] 填实邀请/昵称/TTL/额度/撤销窗口/联邦/共享仲裁政策表
+  - [ ] M02-E/M03-E #97独立冻结受限实验契约与精确范围，作为下一批原版运行前置，不把M02全票标Done
+  - [ ] 兼容性实验后、G2/G3及生产使用前逐项填实并签认邀请/昵称/TTL/额度/撤销窗口/联邦/共享仲裁政策表；实验临时值不自动成为生产政策
   - [ ] T1/T2逐项保留或替代并独立签认
   - [ ] 保留真人验收
 - 范围候选：B：docs/Matrix-migration-spec.md、docs/04-open-decisions.md；必要T1/T2/NFR修改另立精确范围。
 - Validation：DRAFT未冻结；Ready前从固定HEAD录入实际完整命令、环境和通过条件，并满足规格中的相应证据层级。
-- 停止/非目标：签认者Jack；原PO本轮未审如实记录；不默认改协议。
+- 停止/非目标：签认者Jack；原PO固定e14d7e9已审FIX与后续复核分别记录；不默认改协议。
 
 ### M03 分票与精确文件边界
 
 GitHub：[#62](https://github.com/wenhuorongbing-netizen/babacom/issues/62)；Parent：[E1 #51](https://github.com/wenhuorongbing-netizen/babacom/issues/51)。
 
-- Epic：E1；类型：task；阶段：G0；依赖：M02。
+- Epic：E1；类型：task；阶段：G0；依赖：M02-E #97；后续生产票另依赖M02最终政策。
 - 用户故事：作为Builder，我希望每票有明确范围与成功条件。
 - 验收：
   - [ ] 建立36票逐票DoR机制并仅冻结下一批实验票的module/DRI/reviewer、精确文件、可执行Validation、资源/授权与停止条件
@@ -91,7 +96,7 @@ GitHub：[#62](https://github.com/wenhuorongbing-netizen/babacom/issues/62)；Pa
 
 GitHub：[#63](https://github.com/wenhuorongbing-netizen/babacom/issues/63)；Parent：[E2 #52](https://github.com/wenhuorongbing-netizen/babacom/issues/52)。
 
-- Epic：E2；类型：spike；阶段：G0；依赖：M03。
+- Epic：E2；类型：spike；阶段：G0；依赖：只读源码/许可与M01并行；运行子交付依赖M02-E/M03-E #97与已冻结下一批范围。
 - 用户故事：作为维护者，我希望构建可重现并可追溯到上游。
 - 验收：
   - [ ] 记录client/Call/SDK/homeserver/auth/SFU/TURN兼容版本与提交/镜像摘要/锁文件
@@ -433,6 +438,7 @@ GitHub：[#84](https://github.com/wenhuorongbing-netizen/babacom/issues/84)；Pa
   - [ ] CI实际命令冻结执行
   - [ ] 失败不改skip/期限
   - [ ] 旧工具仍活动则保持契约
+  - [ ] G5前完成旧运行/构建/配置/CI消费者清单和逐断言继任覆盖，交M36在G5后执行获准断接；移交M33零消费者证据，保留旧文件/恢复基线，不skip换绿
   - [ ] Chrome与Edge Web访客实际邀请/登录/消息/闭麦语音/收听与观看/授权拒绝/关页退出旅程，明示快捷键和系统音频等平台限制，不冒充Windows完整体验
 - 范围候选：U：固定版本现有CI/测试精确子集；B：旧测试退役另签。
 - Validation：DRAFT未冻结；Ready前从固定HEAD录入实际完整命令、环境和通过条件，并满足规格中的相应证据层级。
@@ -493,7 +499,7 @@ GitHub：[#87](https://github.com/wenhuorongbing-netizen/babacom/issues/87)；Pa
 
 GitHub：[#88](https://github.com/wenhuorongbing-netizen/babacom/issues/88)；Parent：[E8 #58](https://github.com/wenhuorongbing-netizen/babacom/issues/58)。
 
-- Epic：E8；类型：task；阶段：G1最小/G3；依赖：M04 / M02。
+- Epic：E8；类型：task；阶段：G1最小/G3；依赖：完整环境依赖M04 / M02最终政策；独立M29-P #98仅依赖#97与M04最小固定组合。
 - 用户故事：作为运营者，我希望以明确配置运行完整私有链路。
 - 验收：
   - [ ] staging homeserver/DB/媒体/RTC auth/SFU/TURN/TLS/发现兼容
@@ -501,6 +507,7 @@ GitHub：[#88](https://github.com/wenhuorongbing-netizen/babacom/issues/88)；Pa
   - [ ] 测试秘密隔离
   - [ ] 获准资源与退出/费用边界
   - [ ] 固定版本组合联调
+  - [ ] M29-P #98独立交付本机控制面互通/私房拒绝/重启历史，不当完整RTC/TLS/运行环境通过；父票其余AC保持打开
 - 范围候选：独立部署配置位置及逐文件范围先裁决；不自动改现有infra。
 - Validation：DRAFT未冻结；Ready前从固定HEAD录入实际完整命令、环境和通过条件，并满足规格中的相应证据层级。
 - 停止/非目标：配置存在不等于已部署；无资源时HOLD。
@@ -563,7 +570,7 @@ GitHub：[#92](https://github.com/wenhuorongbing-netizen/babacom/issues/92)；Pa
 - 验收：
   - [ ] G5切换观察通过
   - [ ] 新链不调用旧FastAPI/session/provider/can/token
-  - [ ] 运行/构建/动态配置/CI消费者为零
+  - [ ] 接收M25覆盖交接和M36在G5后获准断接的运行/构建/动态配置/CI消费者零证据；先保留文件/恢复基线再删除，不等待M34反向提供断接
   - [ ] 精确删除名单/owner/恢复基线审查
   - [ ] 旧票如实superseded，历史证据保留
 - 范围候选：B候选：apps/api/app/main.py、factory.py、auth/session.py、permissions和tokens具体文件另签。
@@ -613,6 +620,7 @@ GitHub：[#95](https://github.com/wenhuorongbing-netizen/babacom/issues/95)；Pa
   - [ ] 实际切换与新写入保护回退演练
   - [ ] 两周真实游戏夜无人因质量回退
   - [ ] owner签收/阻断项逐条处置
+  - [ ] G5通过后按独立精确范围断接旧运行入口/构建/配置/CI消费者，核对M25继任覆盖并将零消费者证据交M33；保留旧文件与可恢复基线，此交付不删除旧桌面/测试
   - [ ] 然后才允许M33/M34，整个项目仍待G6退役后关闭
 - 范围候选：发布/路由配置及既有Issue验收字段精确冻结；实际资源/发布另有适用授权。
 - Validation：DRAFT未冻结；Ready前从固定HEAD录入实际完整命令、环境和通过条件，并满足规格中的相应证据层级。
@@ -666,4 +674,4 @@ GitHub：[#95](https://github.com/wenhuorongbing-netizen/babacom/issues/95)；Pa
 
 ## 7. 本轮验证与审查边界
 
-本轮验证仅docs scope_guard、diff whitespace、计划数量/依赖DAG/模块覆盖/链接一致性及独立Standards/Spec审查。产品、安装包、数据迁移、部署、物理设备和中德测试NOT_RUN。原战略PO新复审PENDING/BLOCKED：同一对话存在，Edge附着两次超时，未发送新包。首次实施从M01–M05与G1所需最小链开始，不批量开工36票。
+本轮验证仅docs scope_guard、diff whitespace、计划数量/依赖DAG/模块覆盖/链接一致性及独立Standards/Spec审查。产品、安装包、数据迁移、部署、物理设备和中德测试NOT_RUN。原战略PO已审固定e14d7e9给FIX；此前附着两次超时后已恢复并完整回收，新依赖修订待复核。首批为M01/M04只读、#97受限实验合同及#98控制面proof；Windows包必要子集另立范围，不批量开工36父票。

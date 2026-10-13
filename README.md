@@ -21,11 +21,15 @@ recovery, maintenance and real-network evidence.
 - [Migration PRD](docs/PRD-matrix-migration.md): product outcomes and debt retirement.
 - [Migration specification](docs/Matrix-migration-spec.md): architecture, contracts, tests, data and gates.
 - [Migration backlog](docs/Matrix-migration-backlog.md): 9 Epics, 36 DRAFT tickets, dependencies and legacy issue mapping.
+- [Matrix protocol materials](docs/Matrix-protocol-research.md): first-party semantics, fixed component candidates and proof boundaries.
 - [Planning issue #50](https://github.com/wenhuorongbing-netizen/babacom/issues/50): this documentation scope only.
 
 Planning does not approve production deployment, delete old code or establish
-product acceptance. The original PO's current review is pending because its
-Edge connection could not attach; independent review is recorded separately.
+product acceptance. The original PO has reviewed the fixed planning revision
+and returned FIX on experiment-policy and retirement dependencies; this revision
+addresses those findings and awaits recheck. The earlier Edge attachment failure
+was recovered. The next sprint targets an isolated stock baseline with two
+synthetic accounts and persistent history; production migration remains gated.
 
 ## Implementation and acceptance
 

@@ -26,7 +26,7 @@
 | 任务 | 入口 |
 |---|---|
 | 开工与改动边界 | [AGENTS.md](AGENTS.md) → 对应目录 AGENTS → `.agents/modules/<id>.md` |
-| Matrix迁移主线 | [PRD](docs/PRD-matrix-migration.md) → [规格](docs/Matrix-migration-spec.md) → [9 Epics/36票](docs/Matrix-migration-backlog.md)；未来票DRAFT，无产品范围授权 |
+| Matrix迁移主线 | [PRD](docs/PRD-matrix-migration.md) → [规格](docs/Matrix-migration-spec.md) → [9 Epics/36父票及实验子票](docs/Matrix-migration-backlog.md)；[协议资料](docs/Matrix-protocol-research.md)；未来票DRAFT，#97范围合同/#98隔离proof独立 |
 | T1 桌面与准入 | [T1 规格](docs/T1-spec.md)、[t1 清单](.agents/modules/t1.md) |
 | T2 语音与采集 | [T2 规格](docs/T2-spec.md)、[t2 清单](.agents/modules/t2.md) |
 | 启动/清理自动化 | [自动化规格](docs/testing-automation-spec.md)；实施票另列精确子集 |
