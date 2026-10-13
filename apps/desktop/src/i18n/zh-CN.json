@@ -69,5 +69,17 @@
   "CONNECT_FAILED": "语音连接已断开，请重新准备并手动加入。",
   "CONNECT_TIMEOUT": "语音连接超时，请重新准备并手动加入。",
   "CLEANUP_FAILED": "媒体资源未能清理，请关闭应用后重开。",
-  "INVALID_COMMAND": "媒体操作无效，请重新打开受控应用。"
+  "INVALID_COMMAND": "媒体操作无效，请重新打开受控应用。",
+  "serverRailLabel": "服务器列表",
+  "channelSidebarLabel": "频道导航",
+  "serverBadge": "当前社区",
+  "voiceChannelsCategory": "语音频道",
+  "defaultRoomName": "当前房间",
+  "brandInitials": "BC",
+  "channelStatusIdle": "未加入",
+  "channelStatusConnecting": "正在连接…",
+  "channelStatusConnected": "已连接",
+  "channelStatusLeaving": "正在退出…",
+  "channelStatusFailed": "连接失败",
+  "channelStatusCleanupFailed": "清理失败"
 }
