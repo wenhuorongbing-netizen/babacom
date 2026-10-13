@@ -176,11 +176,12 @@ async function portsAvailable() {
   check(!(await wsl(['ss', '-H', '-ltn', '( sport = :18008 or sport = :18080 )'], 'WSL port availability')), 'BUSY: WSL proof port occupied');
 }
 
-async function startKeepalive() {
+async function startKeepalive(onLaunch = () => {}) {
   // systemd services alone do not keep WSL alive. This bounded, marked WSL client does.
   await wsl(['sh', '-c', `test ! -e ${keepalivePid}`], 'BUSY: owned WSL keepalive already exists');
   const child = spawn('wsl.exe', ['-d', distro, '-u', 'root', '--cd', '/', '--exec', 'sh', '-c', `set -eu; umask 077; set -C; echo $$ > ${keepalivePid}; exec env BABACOM_MATRIX_PROOF_KEEPALIVE=${project} sleep 3600`], { detached: true, windowsHide: true, stdio: 'ignore' });
   await new Promise((accept, reject) => { child.once('spawn', accept); child.once('error', () => reject(new Error('WSL keepalive launch failed'))); });
+  onLaunch();
   child.unref();
   for (let attempt = 0; attempt < 10; attempt++) {
     try { await checkKeepalive(); return; } catch { await delay(100); }
@@ -189,8 +190,30 @@ async function startKeepalive() {
 }
 
 async function checkKeepalive(stop = false) {
-  const script = `set -eu; test "$(stat -c '%a:%u' ${keepalivePid})" = '600:0'; pid=$(cat ${keepalivePid}); case "$pid" in ''|*[!0-9]*) exit 8;; esac; test "$(cat /proc/$pid/comm)" = sleep; tr '\\0' '\\n' < /proc/$pid/environ | grep -qx 'BABACOM_MATRIX_PROOF_KEEPALIVE=${project}'; ${stop ? `kill "$pid"; rm -- ${keepalivePid}` : 'true'}`;
+  const script = `set -eu; test "$(stat -c '%a:%u' ${keepalivePid})" = '600:0'; pid=$(cat ${keepalivePid}); case "$pid" in ''|*[!0-9]*) exit 8;; esac; if test ! -d /proc/$pid; then ${stop ? `rm -- ${keepalivePid}; exit 0` : 'exit 8'}; fi; test "$(cat /proc/$pid/comm)" = sleep; tr '\\0' '\\n' < /proc/$pid/environ | grep -qx 'BABACOM_MATRIX_PROOF_KEEPALIVE=${project}'; ${stop ? `kill "$pid"; rm -- ${keepalivePid}` : 'true'}`;
   await wsl(['sh', '-c', script], 'WSL keepalive ownership check');
+}
+
+async function withStartupCleanup(start, cleanup) {
+  try { return await start(); }
+  catch (error) {
+    try { await cleanup(); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], `${error.message}; startup cleanup failed: ${cleanupError.message}`); }
+    throw error;
+  }
+}
+
+async function stopOwnedRuntime() {
+  await checkOwner();
+  const failures = [];
+  try {
+    await containers(); // No stop request is sent for an unknown owner.
+    await compose(['stop', '--timeout', '10'], 'Owned project stop', 40000);
+    check((await containers()).every(item => !item.State.Running), 'STOP: owned service remains running');
+  } catch (error) { failures.push(error); }
+  // A container failure must not skip independently verified, owned keepalive cleanup.
+  try { await checkKeepalive(true); } catch (error) { failures.push(error); }
+  if (failures.length) throw new AggregateError(failures, failures.map(error => error.message).join('; '));
 }
 
 async function runtimeIsolation() {
@@ -258,13 +281,21 @@ async function login(name, users) {
   return { name, token: response.access_token, userId: response.user_id };
 }
 
+function accountTimeouts(budget) {
+  check(budget >= 4000, 'DEADLINE: insufficient budget to start account writes');
+  // Leave one second for the container kill and another for the outer WSL timeout.
+  const innerSeconds = Math.floor((budget - 2000) / 1000);
+  return { innerSeconds, outerSeconds: innerSeconds + 1, hostMs: budget };
+}
+
 async function createUsers(users) {
+  const limits = accountTimeouts(remaining(37000));
   // Uses the stock local administration command. Passwords are supplied on stdin, never argv.
   const code = 'import json,sys,subprocess\nu=json.load(sys.stdin)\nfor name,item in u.items():\n p=subprocess.run(["register_new_matrix_user","-c","/run/secrets/homeserver.yaml","-u",name,"--no-admin","http://127.0.0.1:8008"],input=item["password"]+"\\n"+item["password"]+"\\n",text=True,capture_output=True,timeout=10)\n if p.returncode and "User ID already taken" not in p.stdout+p.stderr:\n  raise SystemExit(8)\nprint("ACCOUNT_COMMANDS_OK")';
   // execFile has no stdin option, so explicitly bound this one child and retain all output privately.
   await new Promise((accept, reject) => {
-    const child = spawn('wsl.exe', ['-d', distro, '-u', 'root', '--cd', '/', '--exec', 'timeout', '-k', '1', '35', 'docker', 'compose', '--project-name', project, '--file', linuxPath(`${directory}/compose.yaml`), 'exec', '-T', 'synapse', 'python', '-c', code], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
-    const timer = setTimeout(() => { child.kill(); reject(new Error('DEADLINE: local account creation')); }, remaining(37000));
+    const child = spawn('wsl.exe', ['-d', distro, '-u', 'root', '--cd', '/', '--exec', 'timeout', '-k', '1', String(limits.outerSeconds), 'docker', 'compose', '--project-name', project, '--file', linuxPath(`${directory}/compose.yaml`), 'exec', '-T', 'synapse', 'timeout', '-k', '1', String(limits.innerSeconds), 'python', '-c', code], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
+    const timer = setTimeout(() => { child.kill(); reject(new Error('DEADLINE: local account creation')); }, limits.hostMs);
     child.once('error', () => { clearTimeout(timer); reject(new Error('Local account command failed')); });
     child.once('exit', code => { clearTimeout(timer); code === 0 ? accept() : reject(new Error(`Local account command exit=${code}; output withheld`)); });
     child.stdin.on('error', () => {});
@@ -278,14 +309,31 @@ async function up() {
   deadline = Date.now() + 120000;
   const users = await configuration();
   await portsAvailable();
-  await startKeepalive();
-  await compose(['run', '--rm', '--no-deps', '--user', '0:0', '--entrypoint', 'sh', 'synapse', '-c', 'chown 991:991 /data'], 'Owned data directory initialization');
-  await compose(['run', '--rm', '--no-deps', '--entrypoint', 'python', 'synapse', '-m', 'synapse.app.homeserver', '--config-path', '/run/secrets/homeserver.yaml', '--generate-keys'], 'Stock signing-key initialization');
-  await compose(['up', '-d', '--wait', '--wait-timeout', '60'], 'Owned services readiness', 65000);
-  await ready();
-  await runtimeIsolation();
-  await createUsers(users);
+  let launched = false;
+  await withStartupCleanup(async () => {
+    await startKeepalive(() => { launched = true; });
+    await compose(['run', '--rm', '--no-deps', '--user', '0:0', '--entrypoint', 'sh', 'synapse', '-c', 'chown 991:991 /data'], 'Owned data directory initialization');
+    await compose(['run', '--rm', '--no-deps', '--entrypoint', 'python', 'synapse', '-m', 'synapse.app.homeserver', '--config-path', '/run/secrets/homeserver.yaml', '--generate-keys'], 'Stock signing-key initialization');
+    await compose(['up', '-d', '--wait', '--wait-timeout', '60'], 'Owned services readiness', 65000);
+    await ready();
+    await runtimeIsolation();
+    await createUsers(users);
+  }, async () => {
+    if (!launched) return;
+    deadline = Date.now() + 60000; // A failed startup gets a separate, bounded stop budget.
+    await stopOwnedRuntime();
+    pass('failed startup stopped owned services and keepalive; volumes and secrets retained');
+  });
   pass('up completed inside 120-second budget');
+}
+
+async function logoutSessions(sessions, client = request) {
+  const outcomes = await Promise.allSettled(sessions.map(async session => {
+    await client('/_matrix/client/v3/logout', { method: 'POST', token: session.token, body: {} });
+    await client('/_matrix/client/v3/account/whoami', { token: session.token, status: 401, errcode: 'M_UNKNOWN_TOKEN' });
+    session.token = undefined;
+  }));
+  return outcomes.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
 }
 
 async function verify() {
@@ -346,13 +394,8 @@ async function verify() {
   } catch (error) { failure = error; }
   finally {
     deadline = finishBy;
-    for (const session of sessions) {
-      try {
-        await request('/_matrix/client/v3/logout', { method: 'POST', token: session.token, body: {} });
-        await request('/_matrix/client/v3/account/whoami', { token: session.token, status: 401, errcode: 'M_UNKNOWN_TOKEN' });
-        session.token = undefined;
-      } catch (error) { failure ??= error; }
-    }
+    const cleanupErrors = await logoutSessions(sessions);
+    if (cleanupErrors.length) failure = new AggregateError([...(failure ? [failure] : []), ...cleanupErrors], `${failure ? `${failure.message}; ` : ''}session cleanup failed: ${cleanupErrors.map(error => error.message).join('; ')}`);
     if (!failure) pass('all script sessions logged out and old tokens rejected inside 120 seconds');
   }
   if (failure) throw failure;
@@ -361,14 +404,10 @@ async function verify() {
 
 async function stop() {
   deadline = Date.now() + 60000;
-  await checkOwner();
-  await containers();
-  await compose(['stop', '--timeout', '10'], 'Owned project stop', 40000);
-  check((await containers()).every(item => !item.State.Running), 'STOP: owned service remains running');
+  await stopOwnedRuntime();
   for (const name of ['database', 'data']) await docker(['volume', 'inspect', `${project}_${name}`], 'Retained volume check');
   await secrets();
-  check(!(await wsl(['ss', '-H', '-ltn', '( sport = :18008 or sport = :18080 )'], 'Stopped WSL listeners')), 'STOP: proof listener remains');
-  await checkKeepalive(true);
+  await portsAvailable();
   pass('only owned services stopped; both volumes and all three secrets retained');
 }
 
@@ -395,6 +434,46 @@ function validateAcl(entries, currentSid) {
 }
 
 if (process.argv[2] === 'self-test') {
+  test('startup failure releases owned resources and preserves the original error', async () => {
+    const failure = new Error('injected startup failure');
+    let active = false;
+    await assert.rejects(withStartupCleanup(async () => { active = true; throw failure; }, async () => { active = false; }), error => error === failure);
+    assert.equal(active, false);
+    const cleanupFailure = new Error('injected cleanup failure');
+    await assert.rejects(withStartupCleanup(async () => { throw failure; }, async () => { throw cleanupFailure; }), error => error.errors?.[0] === failure && error.errors?.[1] === cleanupFailure);
+  });
+  test('account writes have a container timeout inside the host budget; exhausted budgets never launch', () => {
+    assert.throws(() => accountTimeouts(5), /DEADLINE/);
+    for (const budget of [4000, 9999, 37000]) {
+      const limits = accountTimeouts(budget);
+      assert.ok((limits.innerSeconds + 1) * 1000 < budget);
+      assert.ok((limits.outerSeconds + 1) * 1000 <= budget);
+    }
+  });
+  test('all issued sessions begin logout before any slow session finishes', async () => {
+    const sessions = ['a', 'b', 'outsider'].map(token => ({ token }));
+    const started = [];
+    const release = [];
+    const cleanup = logoutSessions(sessions, async (path, { token }) => {
+      if (path.endsWith('/logout')) await new Promise(resolve => { started.push(token); release.push(resolve); });
+      return {};
+    });
+    await Promise.resolve();
+    assert.deepEqual(started, ['a', 'b', 'outsider']);
+    release.forEach(resolve => resolve());
+    assert.deepEqual(await cleanup, []);
+    assert.ok(sessions.every(session => session.token === undefined));
+  });
+  test('one logout failure is reported without skipping other sessions', async () => {
+    const started = [];
+    const failure = new Error('injected logout failure');
+    const errors = await logoutSessions(['a', 'b', 'outsider'].map(token => ({ token })), async (path, { token }) => {
+      if (path.endsWith('/logout')) { started.push(token); if (token === 'a') throw failure; }
+      return {};
+    });
+    assert.deepEqual(started, ['a', 'b', 'outsider']);
+    assert.deepEqual(errors, [failure]);
+  });
   test('malformed private JSON never exposes its secret input in an error', () => {
     assert.throws(() => privateJson('S3CR3T'), error => !error.message.includes('S3CR3T'));
   });
