@@ -26,8 +26,9 @@ recovery, maintenance and real-network evidence.
 
 Planning does not approve production deployment, delete old code or establish
 product acceptance. The original PO has reviewed the fixed planning revision
-and returned FIX on experiment-policy and retirement dependencies; this revision
-addresses those findings and awaits recheck. The earlier Edge attachment failure
+and returned FIX on experiment-policy and retirement dependencies, then reviewed
+464f71a and gave GO to both logic corrections. This limited review is not approval
+of the whole PR, experiment contract or deployment. The earlier Edge attachment failure
 was recovered. The next sprint targets an isolated stock baseline with two
 synthetic accounts and persistent history; production migration remains gated.
 

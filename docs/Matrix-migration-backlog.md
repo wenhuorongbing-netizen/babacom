@@ -1,6 +1,6 @@
 # Matrix 迁移 Sprint Backlog
 
-关联 [PRD](PRD-matrix-migration.md) / [技术规格](Matrix-migration-spec.md) / [规划票 #50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)。2026-10-13，基线 `c9ec3cf`。用户授权发布计划，后续授权准备资料与隔离部署；**9 Epics / 36父候选票仍DRAFT**，另拆两张首Sprint实验票。当前原战略PO已审固定e14d7e9，结论FIX；本修订处理依赖，待复核为GO。具体代码/依赖/实验契约仍独立冻结，不以大计划授权生产或删除。
+关联 [PRD](PRD-matrix-migration.md) / [技术规格](Matrix-migration-spec.md) / [规划票 #50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)。2026-10-13，基线 `c9ec3cf`。用户授权发布计划，后续授权准备资料与隔离部署；**9 Epics / 36父候选票仍DRAFT**，另拆两张首Sprint实验票。原战略PO先审e14d7e9给FIX，再实际读取464f71a对两项依赖修正复核GO，无该范围遗留阻断；不是全PR/实验/部署批准。具体代码/依赖/实验契约仍独立冻结，不以大计划授权生产或删除。
 
 GitHub里程碑：[Matrix Migration](https://github.com/wenhuorongbing-netizen/babacom/milestone/1)。规划根票[#50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)链接下列Epic。
 
@@ -674,4 +674,4 @@ GitHub：[#95](https://github.com/wenhuorongbing-netizen/babacom/issues/95)；Pa
 
 ## 7. 本轮验证与审查边界
 
-本轮验证仅docs scope_guard、diff whitespace、计划数量/依赖DAG/模块覆盖/链接一致性及独立Standards/Spec审查。产品、安装包、数据迁移、部署、物理设备和中德测试NOT_RUN。原战略PO已审固定e14d7e9给FIX；此前附着两次超时后已恢复并完整回收，新依赖修订待复核。首批为M01/M04只读、#97受限实验合同及#98控制面proof；Windows包必要子集另立范围，不批量开工36父票。
+本轮验证仅docs scope_guard、diff whitespace、计划数量/依赖DAG/模块覆盖/链接一致性及独立Standards/Spec审查。产品、安装包、数据迁移、部署、物理设备和中德测试NOT_RUN。原战略PO对e14d7e9给FIX后，实际读取464f71a对两项依赖修正限范围复核GO；此前附着失败保留为历史。首批为M01/M04只读、#97受限实验合同及#98控制面proof；Windows包必要子集另立范围，不批量开工36父票。
