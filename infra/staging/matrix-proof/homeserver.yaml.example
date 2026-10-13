@@ -1,0 +1,47 @@
+# Filled once by proof.mjs config; real values live outside Git with restricted ACLs.
+server_name: proof.babacom.test
+public_baseurl: http://127.0.0.1:18008/
+pid_file: /data/homeserver.pid
+listeners:
+  - port: 8008
+    type: http
+    tls: false
+    x_forwarded: false
+    bind_addresses: ['0.0.0.0']
+    resources:
+      - names: [client]
+        compress: false
+database:
+  name: psycopg2
+  args:
+    user: synapse
+    password: __DATABASE_PASSWORD__
+    database: synapse
+    host: postgres
+    cp_min: 2
+    cp_max: 5
+media_store_path: /data/media_store
+signing_key_path: /data/proof.babacom.test.signing.key
+registration_shared_secret: __REGISTRATION_SECRET__
+macaroon_secret_key: __MACAROON_SECRET__
+form_secret: __FORM_SECRET__
+report_stats: false
+enable_metrics: false
+enable_registration: false
+enable_registration_without_verification: false
+allow_guest_access: false
+allow_public_rooms_without_auth: false
+allow_public_rooms_over_federation: false
+room_list_publication_rules:
+  - action: deny
+federation_domain_whitelist: []
+trusted_key_servers: []
+suppress_key_server_warning: true
+federation_sender_instances: []
+url_preview_enabled: false
+enable_3pid_lookup: false
+user_directory:
+  enabled: false
+password_config:
+  enabled: true
+  localdb_enabled: true

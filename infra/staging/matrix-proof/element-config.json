@@ -1,0 +1,37 @@
+{
+  "default_server_config": {
+    "m.homeserver": {
+      "base_url": "http://127.0.0.1:18008",
+      "server_name": "proof.babacom.test"
+    }
+  },
+  "disable_custom_urls": true,
+  "disable_guests": true,
+  "disable_login_language_selector": true,
+  "default_country_code": "GB",
+  "brand": "Element",
+  "integrations_ui_url": null,
+  "integrations_rest_url": null,
+  "integrations_widgets_urls": [],
+  "integrations_jitsi_widget_url": "",
+  "room_directory": { "servers": [] },
+  "enable_presence_by_hs_url": { "http://127.0.0.1:18008": false },
+  "show_labs_settings": false,
+  "default_federate": false,
+  "default_theme": "dark",
+  "setting_defaults": {
+    "UIFeature.registration": false,
+    "UIFeature.feedback": false,
+    "UIFeature.shareSocial": false,
+    "UIFeature.identityServer": false,
+    "UIFeature.advancedSettings": false,
+    "UIFeature.voip": false,
+    "UIFeature.widgets": false,
+    "UIFeature.urlPreviews": false,
+    "UIFeature.thirdPartyId": false,
+    "UIFeature.passwordReset": false
+  },
+  "map_style_url": "",
+  "privacy_policy_url": "",
+  "terms_and_conditions_links": []
+}
