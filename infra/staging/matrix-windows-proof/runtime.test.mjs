@@ -78,7 +78,7 @@ test('successful ownership, real guest evidence, cleanup, release then final evi
   assert.ok(f.calls.indexOf('release') < f.calls.indexOf('final'));
   assert.ok(f.calls.some(x => x === `stop --id ${ID} --raw`));
   assert.ok(!f.calls.some(x => x.includes(`--id ${FOREIGN}`)));
-  assert.equal(f.final().status, 'PASS');
+  assert.equal(f.final().status, 'UNKNOWN');
 });
 
 test('preflight remains read only and releases admission', async () => {
@@ -437,6 +437,64 @@ test('post-stop inventory must show disappearance and preserve foreign IDs', asy
 test('final evidence write failure cannot return PASS', async () => {
   const f = fixture({ writeFinal: async () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); } });
   assert.equal((await runHarness('run', f.deps)).status, 'FAIL');
+});
+
+for (const completion of ['success', 'exact-deadline', 'past-deadline', 'reject-after-bytes', 'abort-drain-delay']) {
+  test(`immutable host receipt never claims PASS on ${completion}`, async t => {
+    const directory = await tinyFixture(t);
+    const file = path.join(directory, 'host-final.json');
+    const f = fixture();
+    let serialized, completed = false, aborted = false;
+    if (completion === 'abort-drain-delay') {
+      f.deps.acquire = async () => ({ release: async () => f.advance(359940) });
+    }
+    f.deps.writeFinal = async (_prepared, receipt, options) => {
+      serialized = JSON.stringify(receipt);
+      await writeFile(file, serialized, { flag: 'wx' });
+      if (completion === 'exact-deadline') f.advance(360000);
+      if (completion === 'past-deadline') f.advance(360001);
+      if (completion === 'reject-after-bytes') throw Object.assign(new Error('write acknowledgement failed'), { code: 'EIO' });
+      if (completion === 'abort-drain-delay') {
+        await new Promise(resolve => options.signal.addEventListener('abort', resolve, { once: true }));
+        aborted = true;
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      completed = true;
+    };
+    const result = await runHarness('run', f.deps);
+    assert.equal(result.status, completion === 'success' ? 'PASS' : 'FAIL');
+    if (completion !== 'success') assert.equal(result.evidence.status, 'FAIL');
+    if (completion.includes('deadline') || completion === 'abort-drain-delay') assert.equal(result.evidence.category, 'TIMEOUT');
+    if (completion === 'abort-drain-delay') assert.ok(aborted && completed, 'The aborted writer drains before the terminal failure returns');
+    const receipt = JSON.parse(await readFile(file, 'utf8'));
+    assert.equal(JSON.stringify(receipt), serialized, 'The immutable serialized snapshot is preserved');
+    assert.equal(receipt.status, 'UNKNOWN');
+    assert.equal(receipt.verdictSource, 'runner process exit + emitted terminal JSON');
+    assert.equal(receipt.publication, 'PENDING_AT_SERIALIZATION');
+    assert.deepEqual(receipt.stages, result.stages);
+    assert.deepEqual(receipt.cleanup, result.cleanup);
+    assert.deepEqual(receipt.admissionCleanup, result.admissionCleanup);
+    assert.deepEqual(receipt.guest, result.guest);
+    assert.equal(receipt.evidence, undefined, 'Later publication failure does not mutate the receipt');
+  });
+}
+
+test('already failed receipt retains sanitized original failure after publication rejection', async t => {
+  const directory = await tinyFixture(t);
+  const file = path.join(directory, 'host-final.json');
+  const f = fixture({ readGuest: async () => { throw Object.assign(new Error('guest failed token=secret'), { code: 77 }); } });
+  f.deps.writeFinal = async (_prepared, receipt) => {
+    await writeFile(file, JSON.stringify(receipt), { flag: 'wx' });
+    throw new Error('publication failed');
+  };
+  const result = await runHarness('run', f.deps);
+  const receipt = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(result.status, 'FAIL'); assert.equal(receipt.status, 'FAIL');
+  assert.equal(result.exitCode, 77); assert.equal(receipt.exitCode, 77);
+  assert.equal(receipt.error, 'guest failed token=[REDACTED]');
+  assert.equal(receipt.verdictSource, 'runner process exit + emitted terminal JSON');
+  assert.equal(receipt.publication, 'PENDING_AT_SERIALIZATION');
+  assert.equal(result.evidence.status, 'FAIL');
 });
 
 test('fixed config and XML expose exactly the two constrained mappings', () => {

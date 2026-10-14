@@ -554,7 +554,11 @@ export async function runHarness(mode, injected = {}) {
       catch (error) { drainFailed = true; result.status = 'FAIL'; result.operationCleanup = { status: 'FAIL', ...errorRecord(error) }; }
     }
     if (prepared && prepared.outputExists !== false) {
-      try { await bounded(options => deps.writeFinal(prepared, result, options), 15000, true); }
+      // This immutable receipt is serialized before publication can be acknowledged.
+      // Only the runner's terminal verdict can confirm successful publication in time.
+      const receipt = sanitized({ ...result, status: result.status === 'FAIL' ? 'FAIL' : 'UNKNOWN',
+        verdictSource: 'runner process exit + emitted terminal JSON', publication: 'PENDING_AT_SERIALIZATION' });
+      try { await bounded(options => deps.writeFinal(prepared, receipt, options), 15000, true); }
       catch (error) { result.status = 'FAIL'; result.evidence = { status: 'FAIL', ...errorRecord(error) }; }
     }
     if (!drainFailed && pending.size) {
