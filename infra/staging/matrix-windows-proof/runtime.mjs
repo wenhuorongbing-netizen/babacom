@@ -1,8 +1,7 @@
 import { createServer } from 'node:net';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { open, lstat, mkdir, copyFile, writeFile, readFile, readdir } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { open, lstat, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,8 +46,10 @@ function sanitized(value) {
 export async function acquireAdmission({ signal } = {}) {
   const server = createServer(socket => socket.destroy());
   await new Promise((resolve, reject) => {
+    const abort = () => reject(failure('CANCELLED'));
+    signal?.addEventListener('abort', abort, { once: true });
     server.once('error', error => reject(failure(error.code === 'EADDRINUSE' ? 'BUSY' : 'ADMISSION_FAILED', error.message)));
-    server.listen({ path: FIXED.endpoint, signal }, resolve);
+    server.listen({ path: FIXED.endpoint, signal }, () => { signal?.removeEventListener('abort', abort); resolve(); });
   });
   return { release: () => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())) };
 }
@@ -170,8 +171,10 @@ async function checkedPath(file, kind, options) {
 
 // Fixture-capable file boundary, unavailable from the product CLI.
 export async function sealInput(file, expected, { check = () => {}, attributes = async () => {} } = {}) {
+  check();
   const snapshot = await inspectPath(file);
   await attributes(snapshot.map(item => item.path));
+  check();
   const handle = await open(file, 'r');
   try {
     const held = await handle.stat({ bigint: true });
@@ -206,36 +209,69 @@ async function inspectHost(options) {
   if (!new RegExp(`^(?:Windows Sandbox(?: CLI)?\\s+)?v?${FIXED.version.replace(/\./g, '\\.')}\\s*$`, 'i').test(stdout.trim())) throw failure('CLI_VERSION', safeError(stdout));
 }
 async function prepare(id, options) {
+  const guard = async action => { options.check(); const value = await action(); options.check(); return value; };
   await checkedPath(path.dirname(FIXED.root), 'directory', options);
-  try { await mkdir(FIXED.root); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+  try { await guard(() => mkdir(FIXED.root)); } catch (error) { if (error.code !== 'EEXIST') throw error; }
   await checkedPath(FIXED.root, 'directory', options);
   const directory = path.join(FIXED.root, id);
   const inputDirectory = path.join(directory, 'input');
   const outputDirectory = path.join(directory, 'output');
-  await mkdir(directory);
-  await mkdir(inputDirectory);
-  await mkdir(outputDirectory);
   const sealed = [];
+  const prepared = { outputDirectory, inputDirectory, sealed, outputExists: false, ready: false,
+    configuration: renderWSB(inputDirectory, outputDirectory) };
+  options.registerPrepared(prepared);
+  await guard(() => mkdir(directory));
+  await guard(() => mkdir(inputDirectory));
+  options.check();
+  await mkdir(outputDirectory);
+  prepared.outputExists = true;
+  options.check();
   try {
     const attributes = files => nativePaths(files, options);
     sealed.push(await sealInput(BASELINE.path, BASELINE, { attributes, check: options.check }));
-    const guestBytes = await readFile(GUEST);
+    const guestBytes = await guard(() => readFile(GUEST, { signal: options.signal }));
     sealed.push(await sealInput(GUEST, { size: guestBytes.length, sha256: sha(guestBytes) }, { attributes, check: options.check }));
-    await copyFile(BASELINE.path, path.join(inputDirectory, 'Element Setup 1.12.30.exe'), constants.COPYFILE_EXCL);
-    await copyFile(GUEST, path.join(inputDirectory, 'guest.ps1'), constants.COPYFILE_EXCL);
-    await writeFile(path.join(inputDirectory, 'element-config.json'), CONFIG_TEXT, { flag: 'wx' });
+    await copyExclusive(BASELINE.path, path.join(inputDirectory, 'Element Setup 1.12.30.exe'), options);
+    await copyExclusive(GUEST, path.join(inputDirectory, 'guest.ps1'), options);
+    await guard(() => writeFile(path.join(inputDirectory, 'element-config.json'), CONFIG_TEXT, { flag: 'wx', signal: options.signal }));
     for (const [name, expected] of [
       ['Element Setup 1.12.30.exe', BASELINE], ['guest.ps1', { size: guestBytes.length, sha256: sha(guestBytes) }],
       ['element-config.json', { size: Buffer.byteLength(CONFIG_TEXT), sha256: configHash() }],
     ]) sealed.push(await sealInput(path.join(inputDirectory, name), expected, { attributes, check: options.check }));
     if ((await readdir(inputDirectory)).sort().join('|') !== ['Element Setup 1.12.30.exe', 'element-config.json', 'guest.ps1'].sort().join('|') || (await readdir(outputDirectory)).length) throw failure('MAPPING_CONTENT');
-    return { outputDirectory, inputDirectory, configuration: renderWSB(inputDirectory, outputDirectory), sealed,
-      inputSnapshot: await checkedPath(inputDirectory, 'directory', options),
-      outputSnapshot: await checkedPath(outputDirectory, 'directory', options) };
+    prepared.inputSnapshot = await checkedPath(inputDirectory, 'directory', options);
+    prepared.outputSnapshot = await checkedPath(outputDirectory, 'directory', options);
+    prepared.ready = true;
+    options.check();
+    return prepared;
   } catch (error) {
     await Promise.allSettled(sealed.map(item => item.handle.close()));
     throw error;
   }
+}
+export async function copyExclusive(source, destination, options) {
+  let input, output;
+  try {
+    options.check(); input = await open(source, 'r');
+    options.check(); output = await open(destination, 'wx');
+    const buffer = Buffer.alloc(1024 * 1024);
+    let position = 0;
+    while (true) {
+      options.check();
+      const { bytesRead } = await input.read(buffer, 0, buffer.length, position);
+      options.check();
+      if (!bytesRead) break;
+      let written = 0;
+      while (written < bytesRead) {
+        options.check();
+        const { bytesWritten } = await output.write(buffer, written, bytesRead - written, position + written);
+        options.check();
+        if (!bytesWritten) throw failure('INPUT_COPY', 'Zero-byte write');
+        written += bytesWritten;
+      }
+      position += bytesRead;
+    }
+  } finally { await output?.close(); await input?.close(); }
 }
 async function inputsUnchanged(prepared, options) {
   sameSnapshot(prepared.inputSnapshot, await checkedPath(prepared.inputDirectory, 'directory', options));
@@ -248,25 +284,39 @@ async function execute(args, options) {
   return execFileAsync(FIXED.cli, args, { ...options, encoding: 'utf8', windowsHide: true, shell: false, maxBuffer: 1024 * 1024 });
 }
 async function connect(id, options) {
+  options.check();
   const child = spawn(FIXED.cli, ['connect', '--id', id], { windowsHide: true, shell: false, stdio: 'ignore' });
   let problem;
   let exited = false;
   let closing = false;
+  let closePromise;
   child.on('error', error => { problem = error; });
   child.on('exit', code => { exited = true; if (!closing) problem = Object.assign(failure('CONNECTION_LOST'), { code }); });
-  await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-  return {
+  const connection = {
     check() { if (problem) throw problem; },
     beginCleanup() { closing = true; },
     async close() {
       closing = true;
       if (exited) return;
-      await new Promise((resolve, reject) => {
+      closePromise ??= new Promise((resolve, reject) => {
         child.once('exit', resolve); child.once('error', reject);
         if (!child.kill()) reject(failure('CONNECTION_CLEANUP'));
       });
+      await closePromise;
     },
   };
+  options.registerConnection(connection);
+  const abort = () => { connection.close().catch(() => {}); };
+  options.signal.addEventListener('abort', abort, { once: true });
+  try {
+    await new Promise((resolve, reject) => {
+      child.once('spawn', resolve); child.once('error', reject);
+      options.signal.addEventListener('abort', () => reject(failure('CANCELLED')), { once: true });
+      if (options.signal.aborted) reject(failure('CANCELLED'));
+    });
+    options.check();
+    return connection;
+  } finally { options.signal.removeEventListener('abort', abort); }
 }
 function guestCommand(id) {
   const body = `$ErrorActionPreference='Stop'; Start-Process -FilePath 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','C:\\G1Input\\guest.ps1','-RunId','${id}') -WindowStyle Hidden -ErrorAction Stop | Out-Null`;
@@ -341,13 +391,15 @@ export async function runHarness(mode, injected = {}) {
     }),
     inspectHost, prepare, inputsUnchanged, execute, connect, readGuest,
     wait: ms => new Promise(resolve => setTimeout(resolve, ms)),
-    writeFinal: (prepared, result) => writeFile(path.join(prepared.outputDirectory, 'host-final.json'), `${JSON.stringify(result, null, 2)}\n`, { flag: 'wx' }), ...injected };
+    writeFinal: (prepared, result, options) => writeFile(path.join(prepared.outputDirectory, 'host-final.json'), `${JSON.stringify(result, null, 2)}\n`, { flag: 'wx', signal: options.signal }),
+    terminate: result => { console.error(JSON.stringify(result)); process.exit(1); }, ...injected };
   const deadline = deps.now() + FIXED.totalMs;
   const workDeadline = deadline - FIXED.cleanupMs;
   let stage = 'ADMISSION';
   let admission, prepared, connection;
   let requested = false, owned = false;
   let baseline = [];
+  const pending = new Map();
   const result = { schema: 'g1-host-v1', mode, status: 'FAIL', stage,
     stages: Object.fromEntries(['ADMISSION', 'VERIFY', 'HOST', 'PREPARE', 'INVENTORY', 'INPUTS_BEFORE', 'CREATE', 'INPUTS_MAPPED', 'CONNECT', 'EXEC', 'GUEST', 'INPUTS_AFTER'].map(name => [name, 'NOT_RUN'])),
     cleanup: { status: 'NOT_OWNED' }, admissionCleanup: { status: 'NOT_OWNED' } };
@@ -367,8 +419,15 @@ export async function runHarness(mode, injected = {}) {
       timer = setTimeout(() => { controller.abort(); reject(failure('TIMEOUT')); }, Math.max(1, limit - deps.now()));
       controller.signal.addEventListener('abort', () => reject(failure(external?.aborted ? 'CANCELLED' : 'TIMEOUT')), { once: true });
     });
+    const operation = Promise.resolve().then(() => {
+      check(limit, controller.signal);
+      return fn({ signal: controller.signal, timeout: Math.max(1, limit - deps.now()),
+        check: () => check(limit, controller.signal), registerPrepared: value => { prepared = value; }, registerConnection: value => { connection = value; } });
+    });
+    pending.set(operation, controller);
+    operation.then(() => pending.delete(operation), () => pending.delete(operation));
     try {
-      const value = await Promise.race([fn({ signal: controller.signal, timeout: Math.max(1, limit - deps.now()), check: () => check(limit, controller.signal) }), expiry]);
+      const value = await Promise.race([operation, expiry]);
       check(limit, external);
       return value;
     } finally { clearTimeout(timer); external?.removeEventListener('abort', cancel); }
@@ -429,6 +488,17 @@ export async function runHarness(mode, injected = {}) {
     Object.assign(result, errorRecord(error));
     if (error.guest) result.guest = sanitized(error.guest);
   } finally {
+    let drainFailed = false;
+    // Abort pending work, terminate any registered connector, then drain its continuations
+    // before closing file handles or releasing admission. No detached preparation survives return.
+    for (const controller of pending.values()) controller.abort();
+    let connectionClosing;
+    if (connection) { connection.beginCleanup?.(); connectionClosing = Promise.resolve().then(() => connection.close()); connectionClosing.catch(() => {}); }
+    if (pending.size) {
+      const draining = Promise.allSettled([...pending.keys()]);
+      try { await bounded(() => draining, Math.min(15000, Math.max(1, (deadline - deps.now()) / 2)), true); result.operationCleanup = { status: 'PASS' }; }
+      catch (error) { drainFailed = true; result.status = 'FAIL'; result.operationCleanup = { status: 'FAIL', ...errorRecord(error) }; }
+    }
     connection?.beginCleanup?.();
     if (requested && !owned) result.cleanup = { status: 'UNKNOWN' };
     if (owned) {
@@ -447,10 +517,10 @@ export async function runHarness(mode, injected = {}) {
       } catch (error) { result.cleanup = { status: 'FAIL', ...errorRecord(error) }; result.status = 'FAIL'; }
     }
     if (connection) {
-      try { await closeOwned(() => connection.close()); result.connectionCleanup = { status: 'PASS' }; }
+      try { await closeOwned(() => connectionClosing ?? connection.close()); result.connectionCleanup = { status: 'PASS' }; }
       catch (error) { result.connectionCleanup = { status: 'FAIL', ...errorRecord(error) }; result.status = 'FAIL'; }
     }
-    if (prepared) {
+    if (prepared && prepared.ready !== false && !drainFailed) {
       try { await bounded(options => deps.inputsUnchanged(prepared, options), 15000, true); result.inputIntegrity = { status: 'PASS' }; }
       catch (error) { result.inputIntegrity = { status: 'FAIL', ...errorRecord(error) }; result.status = 'FAIL'; }
     }
@@ -458,13 +528,27 @@ export async function runHarness(mode, injected = {}) {
       try { await closeOwned(() => Promise.all(prepared.sealed.map(item => item.handle.close()))); }
       catch (error) { result.inputCleanup = { status: 'FAIL', ...errorRecord(error) }; result.status = 'FAIL'; }
     }
-    if (admission) {
-      try { await closeOwned(() => admission.release()); result.admissionCleanup = { status: 'PASS' }; }
-      catch (error) { result.admissionCleanup = { status: 'FAIL', ...errorRecord(error) }; result.status = 'FAIL'; }
+    // Cleanup subprocesses/file closures also must settle before admission can be released.
+    if (!drainFailed && pending.size) {
+      for (const controller of pending.values()) controller.abort();
+      const draining = Promise.allSettled([...pending.keys()]);
+      try { await bounded(() => draining, Math.min(15000, Math.max(1, (deadline - deps.now()) / 2)), true); }
+      catch (error) { drainFailed = true; result.status = 'FAIL'; result.operationCleanup = { status: 'FAIL', ...errorRecord(error) }; }
     }
-    if (prepared) {
-      try { await bounded(() => deps.writeFinal(prepared, result), 15000, true); }
+    if (admission) {
+      if (drainFailed) result.admissionCleanup = { status: 'FAIL', category: 'HELD_UNTIL_PROCESS_EXIT' };
+      else {
+        try { await closeOwned(() => admission.release()); result.admissionCleanup = { status: 'PASS' }; }
+        catch (error) { result.admissionCleanup = { status: 'FAIL', ...errorRecord(error) }; result.status = 'FAIL'; }
+      }
+    }
+    if (prepared && prepared.outputExists !== false) {
+      try { await bounded(options => deps.writeFinal(prepared, result, options), 15000, true); }
       catch (error) { result.status = 'FAIL'; result.evidence = { status: 'FAIL', ...errorRecord(error) }; }
+    }
+    if (drainFailed) {
+      deps.terminate(result);
+      throw failure('TERMINATION_REQUIRED', 'Terminal hook returned with pending work; admission remains held');
     }
   }
   return result;

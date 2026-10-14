@@ -15,8 +15,13 @@ $result = [ordered]@{
 }
 function Write-JsonNew([string]$name, $value) {
   $bytes = [Text.Encoding]::UTF8.GetBytes(($value | ConvertTo-Json -Depth 8 -Compress))
-  $file = [IO.File]::Open(('C:\G1Output\' + $name), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+  $final = 'C:\G1Output\' + $name
+  $staging = 'C:\G1Output\staging-' + [Guid]::NewGuid().ToString('D') + '-' + $name
+  $file = [IO.File]::Open($staging, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
   try { $file.Write($bytes, 0, $bytes.Length); $file.Flush() } finally { $file.Dispose() }
+  # Same-directory Move publishes only a closed complete JSON; it never replaces a final file.
+  # If publication fails, retain the staging JSON and every previous final as evidence.
+  [IO.File]::Move($staging, $final)
 }
 function Check-Time([long]$limit) {
   if ($clock.ElapsedMilliseconds -ge $limit) { throw ('TIMEOUT/' + $script:stage) }

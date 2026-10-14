@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as runtime from './runtime.mjs';
 const { runHarness } = runtime;
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -202,6 +202,155 @@ test('late successful operation still respects total deadline and releases admis
   const result = await runHarness('preflight', f.deps);
   assert.equal(result.status, 'FAIL');
   assert.equal(released, true);
+});
+
+test('aborted pending PREPARE drains and closes registered handles before release or return', async () => {
+  const controller = new AbortController();
+  const f = fixture({ signal: controller.signal });
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  let finish;
+  const gate = new Promise(resolve => { finish = resolve; });
+  const prepared = { outputDirectory: 'fixture', outputExists: true, sealed: [{ handle: { close: async () => f.calls.push('handle-close') } }] };
+  f.deps.prepare = async (_id, options) => {
+    f.calls.push('prepare-start');
+    options.registerPrepared?.(prepared);
+    entered();
+    await gate;
+    options.check();
+    f.calls.push('late-effect');
+    return prepared;
+  };
+  let returned = false;
+  const running = runHarness('run', f.deps).then(value => { returned = true; f.calls.push('returned'); return value; });
+  await started;
+  controller.abort();
+  await new Promise(resolve => setImmediate(resolve));
+  const releasedWhilePending = f.calls.includes('release');
+  const returnedWhilePending = returned;
+  finish();
+  const result = await running;
+  assert.equal(releasedWhilePending, false);
+  assert.equal(returnedWhilePending, false);
+  assert.equal(result.category, 'CANCELLED');
+  assert.ok(!f.calls.includes('late-effect'));
+  assert.ok(f.calls.indexOf('handle-close') < f.calls.indexOf('release'));
+  assert.ok(f.calls.indexOf('release') < f.calls.indexOf('returned'));
+  assert.equal(f.final().status, 'FAIL');
+});
+
+test('pending CONNECT is registered and terminated before admission release', async () => {
+  const controller = new AbortController();
+  const f = fixture({ signal: controller.signal });
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  let finish;
+  const gate = new Promise(resolve => { finish = resolve; });
+  const connection = { check() {}, close: async () => { f.calls.push('connector-close'); } };
+  f.deps.connect = async (_id, options) => {
+    options.registerConnection?.(connection);
+    entered();
+    await gate;
+    options.check();
+    f.calls.push('late-connect');
+    return connection;
+  };
+  const running = runHarness('run', f.deps);
+  await started; controller.abort();
+  await new Promise(resolve => setImmediate(resolve));
+  const releasedWhilePending = f.calls.includes('release');
+  finish();
+  const result = await running;
+  assert.equal(releasedWhilePending, false);
+  assert.equal(result.category, 'CANCELLED');
+  assert.ok(!f.calls.includes('late-connect'));
+  assert.ok(f.calls.indexOf('connector-close') >= 0 && f.calls.indexOf('connector-close') < f.calls.indexOf('release'));
+});
+
+test('undrainable preparation terminates a real process while holding admission, with no late effect', { timeout: 10000 }, async t => {
+  const directory = await tinyFixture(t);
+  const script = path.join(directory, 'terminal-fixture.mjs');
+  const moduleUrl = new URL('./runtime.mjs', import.meta.url).href;
+  await writeFile(script, `import { runHarness } from ${JSON.stringify(moduleUrl)};
+import { writeFile } from 'node:fs/promises';
+const controller=new AbortController(); let clock=0;
+await runHarness('run',{
+ now:()=>clock, signal:controller.signal,
+ verify:async()=>({}),inspectHost:async()=>{},
+ prepare:async(_id,options)=>{
+  options.registerPrepared({outputDirectory:process.cwd(),outputExists:true,ready:false,sealed:[]});
+  setTimeout(()=>{clock=359990;controller.abort();},0);
+  await new Promise(resolve=>setTimeout(resolve,200));
+  await writeFile('late-effect.txt','forbidden late effect');
+  return {};
+ },
+ writeFinal:async(_prepared,result)=>{await writeFile('terminal-evidence.json',JSON.stringify(result),{flag:'wx'});process.stdout.write(JSON.stringify(result)+'\\n');}
+});
+await writeFile('returned.txt','forbidden normal return');
+`);
+  const item = childFixture(script, directory, 'terminal');
+  t.after(async () => { if (item.child.exitCode === null && item.child.signalCode === null) item.child.kill(); await item.ended; });
+  const proof = await item.ready;
+  assert.equal((await item.ended).code, 1);
+  assert.equal(proof.status, 'FAIL'); assert.equal(proof.category, 'CANCELLED');
+  assert.equal(proof.operationCleanup.status, 'FAIL');
+  assert.equal(proof.admissionCleanup.category, 'HELD_UNTIL_PROCESS_EXIT');
+  await assert.rejects(readFile(path.join(directory, 'late-effect.txt')), { code: 'ENOENT' });
+  await assert.rejects(readFile(path.join(directory, 'returned.txt')), { code: 'ENOENT' });
+  const lease = await runtime.acquireAdmission();
+  await lease.release(); // OS released the endpoint on the child's nonzero exit.
+});
+
+test('guest JSON publication exposes no final pathname while bytes are still being written', { timeout: 10000 }, async t => {
+  const directory = await tinyFixture(t);
+  const source = await readFile(fileURLToPath(new URL('./guest.ps1', import.meta.url)), 'utf8');
+  const start = source.indexOf('function Write-JsonNew(');
+  const end = source.indexOf('\nfunction Check-Time', start);
+  let writer = source.slice(start, end).replaceAll('C:\\G1Output', directory.replace(/'/g, "''"));
+  assert.ok(writer.includes('$file.Write($bytes, 0, $bytes.Length)'));
+  writer = writer.replace('$file.Write($bytes, 0, $bytes.Length)', `$half=[int]($bytes.Length/2); $file.Write($bytes,0,$half); Write-Output '{"status":"WRITING"}'; [void][Console]::ReadLine(); $file.Write($bytes,$half,$bytes.Length-$half)`);
+  const code = `$ErrorActionPreference='Stop'; ${writer}\nWrite-JsonNew 'proof.json' @{message='complete';runId='${ID}'}`;
+  const child = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', code], { cwd: directory, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  let text = '', stderr = '';
+  child.stderr.on('data', bytes => { stderr += bytes; });
+  const ready = new Promise((resolve, reject) => {
+    child.stdout.on('data', bytes => { text += bytes; if (text.includes('WRITING')) resolve(); });
+    child.once('error', reject);
+    child.once('exit', exitCode => { if (!text.includes('WRITING')) reject(new Error(`PowerShell writer exit ${exitCode}: ${stderr}`)); });
+  });
+  const ended = new Promise(resolve => child.once('exit', code => resolve(code)));
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill(); await ended; });
+  await ready;
+  let premature;
+  try { await readFile(path.join(directory, 'proof.json')); premature = true; }
+  catch (error) { premature = error.code !== 'ENOENT'; }
+  child.stdin.write('continue\n');
+  assert.equal(await ended, 0, stderr);
+  assert.equal(premature, false);
+  assert.deepEqual(JSON.parse(await readFile(path.join(directory, 'proof.json'), 'utf8')), { message: 'complete', runId: ID });
+  const originalWriter = source.slice(start, end).replaceAll('C:\\G1Output', directory.replace(/'/g, "''"));
+  const duplicate = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+    `$ErrorActionPreference='Stop'; ${originalWriter}\nWrite-JsonNew 'proof.json' @{message='replacement'}`], { cwd: directory, windowsHide: true, stdio: 'ignore' });
+  const duplicateEnded = new Promise(resolve => duplicate.once('exit', resolve));
+  t.after(async () => { if (duplicate.exitCode === null && duplicate.signalCode === null) duplicate.kill(); await duplicateEnded; });
+  assert.equal(await duplicateEnded, 1);
+  assert.deepEqual(JSON.parse(await readFile(path.join(directory, 'proof.json'), 'utf8')), { message: 'complete', runId: ID });
+  const retained = (await readdir(directory)).filter(name => name.startsWith('staging-') && name.endsWith('.json'));
+  assert.equal(retained.length, 1);
+  assert.deepEqual(JSON.parse(await readFile(path.join(directory, retained[0]), 'utf8')), { message: 'replacement' });
+});
+
+test('guarded exclusive copy cancels before the next write and never overwrites', async t => {
+  const directory = await tinyFixture(t);
+  const source = path.join(directory, 'source.bin');
+  const destination = path.join(directory, 'copy.bin');
+  await writeFile(source, Buffer.alloc(2 * 1024 * 1024, 7));
+  let checks = 0;
+  await assert.rejects(runtime.copyExclusive(source, destination, { check() { if (++checks === 5) throw new Error('CANCELLED'); } }), /CANCELLED/);
+  const bytes = await readFile(destination);
+  assert.equal(bytes.length, 0, 'Cancellation before the first write preserves a closed partial copy without later writes');
+  await assert.rejects(runtime.copyExclusive(source, destination, { check() {} }), { code: 'EEXIST' });
+  assert.equal((await readFile(destination)).length, 0);
 });
 
 test('connection error is observed while awaiting guest evidence', async () => {
