@@ -682,6 +682,106 @@ async function tinyFixture(t) {
   return directory;
 }
 
+async function connectorFixture(t, body) {
+  const directory = await tinyFixture(t);
+  const script = path.join(directory, 'connector.mjs');
+  await writeFile(script, body);
+  const controller = new AbortController();
+  let child, requestedOptions, registered;
+  const options = { signal: controller.signal, check() { if (controller.signal.aborted) throw new Error('CANCELLED'); }, registerConnection(value) { registered = value; } };
+  const spawnChild = (executable, args, processOptions) => {
+    assert.equal(executable, runtime.FIXED.cli); assert.deepEqual(args, ['connect', '--id', ID]);
+    requestedOptions = processOptions;
+    child = spawn(process.execPath, [script], { ...processOptions, cwd: directory, stdio: ['ignore', 'pipe', 'pipe'] });
+    return child;
+  };
+  t.after(async () => { if (child && child.exitCode === null && child.signalCode === null) child.kill(); await registered?.close().catch(() => {}); });
+  return { directory, controller, options, spawnChild, child: () => child, requestedOptions: () => requestedOptions, registered: () => registered };
+}
+
+async function connectorFailure(connection) {
+  const deadline = Date.now() + 1500;
+  while (Date.now() < deadline) {
+    try { connection.check(); } catch (error) { return error; }
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.fail('Connector did not report its native exit promptly');
+}
+
+test('connector exit0 destroys owned pipes without waiting for a descendant retaining write handles', { timeout: 5000 }, async t => {
+  const f = await connectorFixture(t, `import {spawn} from 'node:child_process';
+import {writeFileSync,existsSync} from 'node:fs';
+const descendant=spawn(process.execPath,[process.cwd()+'/descendant.mjs'],{stdio:['ignore',1,2],windowsHide:true});
+writeFileSync('descendant.pid',String(descendant.pid));
+const ready=setInterval(()=>{if(existsSync('descendant-ready')){clearInterval(ready);process.stderr.write('connector failure detail',()=>process.exit(0));}},5);
+`);
+  await writeFile(path.join(f.directory, 'descendant.mjs'), `import{writeFileSync}from'node:fs';process.stdout.on('error',()=>{});process.stderr.on('error',()=>{});process.stdout.write('descendant has inherited stdout',()=>writeFileSync('descendant-ready','ready'));setInterval(()=>process.stderr.write('late descendant data'),25);setTimeout(()=>process.exit(0),2000);`);
+  let descendantPid;
+  t.after(() => { if (descendantPid) { try { process.kill(descendantPid); } catch (error) { if (error.code !== 'ESRCH') throw error; } } });
+  const connection = await runtime.connect(ID, f.options, f.spawnChild);
+  for (let attempt = 0; attempt < 100 && !descendantPid; attempt++) {
+    try { descendantPid = Number(await readFile(path.join(f.directory, 'descendant.pid'), 'utf8')); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (!descendantPid) await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0);
+  const error = await connectorFailure(connection);
+  assert.equal(error.category, 'CONNECTION_LOST'); assert.equal(error.code, 0);
+  const started = Date.now(); await connection.close(); assert.ok(Date.now() - started < 500);
+  assert.ok(f.child().stdout.destroyed && f.child().stderr.destroyed, 'Owned read streams are destroyed even though descendant handles remain open');
+  assert.deepEqual(f.requestedOptions().stdio, ['ignore', 'pipe', 'pipe']);
+  const snapshot = connection.diagnostics(); const serialized = JSON.stringify(snapshot);
+  assert.ok(snapshot.stderr.text.includes('connector failure detail')); assert.equal(snapshot.stderr.potentiallyIncomplete, true);
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(JSON.stringify(snapshot), serialized, 'Later descendant writes cannot mutate the detached diagnostic');
+});
+
+test('connector diagnostics bound oversized output and redact secrets split across data chunks', { timeout: 5000 }, async t => {
+  const f = await connectorFixture(t, `process.stderr.write('token=');setTimeout(()=>{process.stderr.write('hidden password=');setTimeout(()=>{process.stderr.write('secret '+ 'x'.repeat(32768),()=>process.stdout.write('y'.repeat(32768),()=>process.exit(7)));},10);},10);`);
+  const connection = await runtime.connect(ID, f.options, f.spawnChild);
+  const error = await connectorFailure(connection); await connection.close();
+  assert.equal(error.code, 7); assert.equal(error.category, 'CONNECTION_LOST');
+  const snapshot = connection.diagnostics();
+  assert.ok(snapshot.stderr.text.startsWith('token=[REDACTED] password=[REDACTED]'));
+  assert.ok(!JSON.stringify(snapshot).includes('hidden') && !JSON.stringify(snapshot).includes('secret'));
+  for (const stream of ['stdout', 'stderr']) {
+    assert.equal(snapshot[stream].capturedBytes, 8192); assert.equal(snapshot[stream].truncated, true);
+    assert.equal(snapshot[stream].potentiallyIncomplete, true); assert.ok(snapshot[stream].text.length <= 8192);
+  }
+});
+
+test('connector spawn failure destroys owned streams and preserves the primary native error', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { PassThrough } = await import('node:stream');
+  const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => false;
+  let connection;
+  const error = Object.assign(new Error('native spawn failed'), { code: 'ENOENT' });
+  await assert.rejects(runtime.connect(ID, { signal: new AbortController().signal, check() {}, registerConnection(value) { connection = value; } }, () => {
+    setImmediate(() => child.emit('error', error)); return child;
+  }), value => value === error);
+  await connection.close();
+  assert.ok(child.stdout.destroyed && child.stderr.destroyed);
+  assert.throws(() => connection.check(), value => value === error);
+});
+
+test('connector cancellation destroys owned pipes before tracked cleanup completes', { timeout: 5000 }, async t => {
+  const f = await connectorFixture(t, `setInterval(()=>{},1000);`);
+  const connection = await runtime.connect(ID, f.options, f.spawnChild);
+  f.controller.abort(); await connection.close();
+  assert.ok(f.child().stdout.destroyed && f.child().stderr.destroyed);
+});
+
+test('connector diagnostic snapshot attaches after cleanup without replacing the primary connection failure', async () => {
+  const f = fixture(); let closed = false;
+  f.deps.connect = async () => ({ check() { throw Object.assign(new Error('CONNECTION_LOST'), { category: 'CONNECTION_LOST', code: 0 }); },
+    close: async () => { closed = true; }, diagnostics() { assert.ok(closed); return { stderr: { text: 'native detail', truncated: false, potentiallyIncomplete: true } }; } });
+  const result = await runHarness('run', f.deps);
+  assert.equal(result.status, 'FAIL'); assert.equal(result.exitCode, 0); assert.equal(result.category, 'CONNECTION_LOST');
+  assert.equal(result.connectionDiagnostics.stderr.text, 'native detail');
+  assert.deepEqual(f.final().connectionDiagnostics, result.connectionDiagnostics);
+  assert.equal(result.cleanup.status, 'PASS');
+});
+
 test('full copied input seal rejects altered bytes and native reparse evidence', async t => {
   const directory = await tinyFixture(t);
   const file = path.join(directory, 'input.txt');

@@ -283,20 +283,47 @@ async function inputsUnchanged(prepared, options) {
 async function execute(args, options) {
   return execFileAsync(FIXED.cli, args, { ...options, encoding: 'utf8', windowsHide: true, shell: false, maxBuffer: 1024 * 1024 });
 }
-async function connect(id, options) {
+// The optional process factory is an internal fixture seam, never a CLI/environment input.
+export async function connect(id, options, spawnChild = spawn) {
   options.check();
-  const child = spawn(FIXED.cli, ['connect', '--id', id], { windowsHide: true, shell: false, stdio: 'ignore' });
+  const child = spawnChild(FIXED.cli, ['connect', '--id', id], { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+  const byteLimit = 8192;
+  let captureStopped = false;
+  const captures = ['stdout', 'stderr'].map(name => {
+    const capture = { name, chunks: [], bytes: 0, truncated: false };
+    child[name]?.on('data', chunk => {
+      if (captureStopped) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const retained = Math.min(bytes.length, byteLimit - capture.bytes);
+      if (retained) { capture.chunks.push(Buffer.from(bytes.subarray(0, retained))); capture.bytes += retained; }
+      if (retained < bytes.length) capture.truncated = true;
+      // Keep consuming excess bytes so a full diagnostic buffer cannot block the client.
+    });
+    child[name]?.on('error', error => { if (!captureStopped) capture.error = errorRecord(error); });
+    return capture;
+  });
+  const stopCapture = () => {
+    captureStopped = true;
+    for (const capture of captures) {
+      try { child[capture.name]?.destroy(); } catch (error) { capture.error = errorRecord(error); }
+    }
+  };
   let problem;
   let exited = false;
   let closing = false;
   let closePromise;
-  child.on('error', error => { problem = error; });
-  child.on('exit', code => { exited = true; if (!closing) problem = Object.assign(failure('CONNECTION_LOST'), { code }); });
+  child.on('error', error => { problem = error; if (!child.pid) exited = true; stopCapture(); });
+  child.on('exit', code => { exited = true; if (!closing) problem = Object.assign(failure('CONNECTION_LOST'), { code }); stopCapture(); });
   const connection = {
     check() { if (problem) throw problem; },
+    diagnostics() { return Object.fromEntries(captures.map(capture => [capture.name, {
+      text: safeError(Buffer.concat(capture.chunks, capture.bytes).toString('utf8')), capturedBytes: capture.bytes,
+      byteLimit, truncated: capture.truncated, potentiallyIncomplete: true, ...(capture.error ? { captureError: { ...capture.error } } : {}),
+    }])); },
     beginCleanup() { closing = true; },
     async close() {
       closing = true;
+      stopCapture();
       if (exited) return;
       closePromise ??= new Promise((resolve, reject) => {
         child.once('exit', resolve); child.once('error', reject);
@@ -545,6 +572,10 @@ export async function runHarness(mode, injected = {}) {
     if (connection) {
       try { await closeOwned(() => connectionClosing ?? connection.close()); result.connectionCleanup = { status: 'PASS' }; }
       catch (error) { result.connectionCleanup = { status: 'FAIL', ...errorRecord(error) }; result.status = 'FAIL'; }
+      if (connection.diagnostics) {
+        try { result.connectionDiagnostics = sanitized(connection.diagnostics()); }
+        catch (error) { result.connectionDiagnostics = { captureError: errorRecord(error) }; }
+      }
     }
     if (prepared && prepared.ready !== false && !drainFailed) {
       try { await bounded(options => deps.inputsUnchanged(prepared, options), 15000, true); result.inputIntegrity = { status: 'PASS' }; }
