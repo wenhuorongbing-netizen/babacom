@@ -66,7 +66,7 @@ export function readWindowsSignature({ transport = execFile, signal, timeout = 3
       encoding: 'utf8', maxBuffer: 1024 * 1024,
     }, (error, stdout, stderr) => {
       if (error || stderr.trim()) {
-        reject(new Error(`signature command failed: ${safeError(`${error?.code ?? ''} ${error?.message ?? ''} ${stderr}`)}`));
+        reject(new Error(`signature command failed: ${safeError(`code=${error?.code}; signal=${error?.signal}; killed=${error?.killed}; ${error?.message ?? ''} ${stderr}`)}`));
         return;
       }
       try { resolve(JSON.parse(stdout.replace(/^\uFEFF/, ''))); }
@@ -172,17 +172,19 @@ export async function verifyArtifact(file, baseline = BASELINE, { readSignature 
       handle = await open(file, 'r');
       unchanged(before[0], await handle.stat({ bigint: true }));
       const sha256 = await hash(handle, baseline, check);
-      await handle.close();
-      handle = undefined;
+      // Keep the hashed file open: Windows denies ancestor directory renames
+      // while it has an open descendant, including transient junction swaps.
       check();
       const signature = await readSignature({ signal: controller.signal, timeout: Math.min(30000, TOTAL_MS - (now() - started)) });
       check();
       validateSignature(signature, entries);
       const after = await snapshot(entries, check);
       before.forEach((stat, index) => unchanged(stat, after[index], index === 0));
+      unchanged(before[0], await handle.stat({ bigint: true }));
       postHandle = await open(file, 'r');
       unchanged(before[0], await postHandle.stat({ bigint: true }));
       await hash(postHandle, baseline, check);
+      unchanged(before[0], await handle.stat({ bigint: true }));
       const final = await snapshot(entries, check);
       before.forEach((stat, index) => unchanged(stat, final[index], index === 0));
       check();

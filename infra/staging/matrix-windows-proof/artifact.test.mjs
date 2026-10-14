@@ -130,8 +130,8 @@ test('native failure and timeout propagate through verification without changing
   }
 });
 
-test('changes during signature including a junction to the SAME file fail', async t => {
-  for (const kind of ['replace', 'rewrite', 'truncate', 'metadata', 'late junction', 'native late reparse']) {
+test('file changes and native late reparse evidence during signature fail', async t => {
+  for (const kind of ['replace', 'rewrite', 'truncate', 'metadata', 'native late reparse']) {
     await t.test(kind, async t => {
       const f = await fixture(t);
       const readSignature = async () => {
@@ -139,11 +139,6 @@ test('changes during signature including a junction to the SAME file fail', asyn
         if (kind === 'rewrite') await writeFile(f.file, Buffer.alloc(f.bytes.length, 89));
         if (kind === 'truncate') await writeFile(f.file, 'short');
         if (kind === 'metadata') { const { chmod } = await import('node:fs/promises'); await chmod(f.file, 0o444); }
-        if (kind === 'late junction') {
-          const target = path.join(f.root, 'same-file');
-          await rename(f.parent, target);
-          await symlink(target, f.parent, 'junction');
-        }
         if (kind === 'native late reparse') f.signature.after[1].attributes = 1040;
         return f.signature;
       };
@@ -187,6 +182,68 @@ test('only a bounded absolute PowerShell signature command is launched', async (
     ['malformed', cb => cb(null, '{broken', ''), /signature.*JSON/i],
     ['stderr', cb => cb(null, '{}', 'unexpected warning'), /unexpected warning/],
   ]) await assert.rejects(api.readWindowsSignature({ transport: (_e, _a, _o, cb) => invoke(cb), signal: new AbortController().signal }), pattern, name);
+});
+
+test('real execFile timeout metadata remains visible while credentials are redacted', async () => {
+  await assert.rejects(api.readWindowsSignature({
+    signal: new AbortController().signal,
+    transport: (_exe, _args, _options, callback) => callback(Object.assign(
+      new Error('Command failed: fixed PowerShell command Bearer private-bearer token=private-token'),
+      { code: null, killed: true, signal: 'SIGTERM' },
+    ), '', 'native details password=private-password secret=private-secret'),
+  }), error => {
+    assert.match(error.message, /code=null/);
+    assert.match(error.message, /signal=SIGTERM/);
+    assert.match(error.message, /killed=true/);
+    assert.match(error.message, /Command failed: fixed PowerShell command/);
+    assert.match(error.message, /native details/);
+    assert.doesNotMatch(error.message, /private-bearer|private-token|private-password|private-secret/);
+    assert.match(error.message, /Bearer \[REDACTED\]/);
+    return true;
+  });
+});
+
+for (const restore of [false, true]) test(`${restore ? 'transient restored' : 'persistent late'} same-file parent junction is blocked or rejected`, async t => {
+  const f = await fixture(t);
+  const parentBefore = await lstat(f.parent, { bigint: true });
+  const fileBefore = await lstat(f.file, { bigint: true });
+  let blocked = false;
+  let junctionObserved = false;
+  let failure;
+  try {
+    await api.verifyArtifact(f.file, f.baseline, { readSignature: async () => {
+      const moved = path.join(f.root, 'moved');
+      try { await rename(f.parent, moved); }
+      catch (error) {
+        assert.ok(['EPERM', 'EACCES'].includes(error.code), `unexpected rename failure: ${error.code}`);
+        blocked = true;
+        return f.signature;
+      }
+      await symlink(moved, f.parent, 'junction');
+      junctionObserved = (await lstat(f.parent)).isSymbolicLink();
+      assert.equal(junctionObserved, true, 'attack must actually create a junction');
+      if (restore) {
+        await rm(f.parent);
+        await rename(moved, f.parent);
+      }
+      return f.signature;
+    } });
+  } catch (error) { failure = error; }
+  if (junctionObserved) {
+    assert.ok(failure, 'verification accepted a same-file junction attack');
+    assert.match(failure.message, /changed|identity|metadata|link|reparse/i);
+  } else {
+    assert.equal(blocked, true, 'the operating system must reject the attack');
+    assert.equal(failure, undefined, 'an unmodified input remains verifiable after a blocked attack');
+    assert.equal((await lstat(f.parent)).isSymbolicLink(), false);
+    const parentAfter = await lstat(f.parent, { bigint: true });
+    const fileAfter = await lstat(f.file, { bigint: true });
+    for (const key of ['dev', 'ino', 'mode', 'mtimeNs', 'ctimeNs']) {
+      assert.equal(parentAfter[key], parentBefore[key]);
+      assert.equal(fileAfter[key], fileBefore[key]);
+    }
+    assert.deepEqual(await readFile(f.file), f.bytes);
+  }
 });
 
 test('CLI rejects every unsupported or extra argument with nonzero status', async () => {
