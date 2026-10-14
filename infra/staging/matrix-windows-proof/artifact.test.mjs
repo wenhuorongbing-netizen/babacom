@@ -203,6 +203,18 @@ test('real execFile timeout metadata remains visible while credentials are redac
   });
 });
 
+test('fractional and near-zero signature budgets become bounded positive integer timeouts', async () => {
+  for (const [budget, expected] of [[29999.5, 29999], [0.5, 1], [0, 1], [30000.5, 30000]]) {
+    const signal = new AbortController().signal;
+    await api.readWindowsSignature({ timeout: budget, signal, transport: (_exe, _args, options, callback) => {
+      assert.equal(options.timeout, expected);
+      assert.ok(Number.isInteger(options.timeout) && options.timeout >= 1 && options.timeout <= 30000);
+      assert.equal(options.signal, signal, 'total deadline abort signal must be retained');
+      callback(null, JSON.stringify(signer), '');
+    } });
+  }
+});
+
 for (const restore of [false, true]) test(`${restore ? 'transient restored' : 'persistent late'} same-file parent junction is blocked or rejected`, async t => {
   const f = await fixture(t);
   const parentBefore = await lstat(f.parent, { bigint: true });

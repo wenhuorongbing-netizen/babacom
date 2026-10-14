@@ -62,7 +62,7 @@ function safeError(value) {
 export function readWindowsSignature({ transport = execFile, signal, timeout = 30000 } = {}) {
   return new Promise((resolve, reject) => {
     transport(POWERSHELL, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', SIGNATURE_COMMAND], {
-      timeout: Math.min(30000, timeout), signal, windowsHide: true, shell: false,
+      timeout: Math.max(1, Math.floor(Math.min(30000, timeout))), signal, windowsHide: true, shell: false,
       encoding: 'utf8', maxBuffer: 1024 * 1024,
     }, (error, stdout, stderr) => {
       if (error || stderr.trim()) {
