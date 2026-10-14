@@ -73,10 +73,10 @@ export function validateExec(response) {
   if (!Number.isInteger(value?.ExitCode) || value.ExitCode !== 0) throw Object.assign(failure('GUEST_DISPATCH_FAILED'), { code: value?.ExitCode });
 }
 export function validateCliAlias(alias) {
-  const entries = ['Microsoft.Windows.WindowsSandbox_cw5n1h2txyewy',
-    'Microsoft.Windows.WindowsSandbox_cw5n1h2txyewy!AppCli',
-    'C:\\Program Files\\WindowsApps\\Microsoft.Windows.WindowsSandbox_0.8.107.0_x64__cw5n1h2txyewy\\wsb.exe'];
-  if (alias?.tag !== '8000001b' || !Array.isArray(alias.entries) || alias.entries.length !== 3 ||
+  const entries = ['MicrosoftWindows.WindowsSandbox_cw5n1h2txyewy',
+    'MicrosoftWindows.WindowsSandbox_cw5n1h2txyewy!AppCli',
+    'C:\\Program Files\\WindowsApps\\MicrosoftWindows.WindowsSandbox_0.8.107.0_x64__cw5n1h2txyewy\\wsb.exe', '0'];
+  if (alias?.tag !== '8000001b' || !Array.isArray(alias.entries) || alias.entries.length !== 4 ||
     entries.some((entry, index) => alias.entries[index] !== entry)) throw failure('CLI_ALIAS');
 }
 const xml = value => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

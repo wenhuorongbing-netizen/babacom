@@ -557,14 +557,19 @@ test('invalid inventory and ambiguous create IDs fail closed', () => {
   runtime.parseCreated({ stdout: JSON.stringify(ID) }, ID);
 });
 
-test('fixed official Sandbox APPEXECLINK is allowed; other tags and targets fail', () => {
+test('observed four-field Sandbox APPEXECLINK is allowed; altered metadata fails', () => {
   const alias = { tag: '8000001b', entries: [
-    'Microsoft.Windows.WindowsSandbox_cw5n1h2txyewy', 'Microsoft.Windows.WindowsSandbox_cw5n1h2txyewy!AppCli',
-    'C:\\Program Files\\WindowsApps\\Microsoft.Windows.WindowsSandbox_0.8.107.0_x64__cw5n1h2txyewy\\wsb.exe',
+    'MicrosoftWindows.WindowsSandbox_cw5n1h2txyewy', 'MicrosoftWindows.WindowsSandbox_cw5n1h2txyewy!AppCli',
+    'C:\\Program Files\\WindowsApps\\MicrosoftWindows.WindowsSandbox_0.8.107.0_x64__cw5n1h2txyewy\\wsb.exe', '0',
   ] };
   runtime.validateCliAlias(alias);
-  for (const changed of [{ ...alias, tag: 'a000000c' }, { ...alias, entries: ['other-package', ...alias.entries.slice(1)] },
-    { ...alias, entries: [...alias.entries.slice(0, 2), 'C:\\untrusted\\wsb.exe'] }, { ...alias, entries: [...alias.entries, 'extra'] }]) {
+  const changedEntry = (index, value) => ({ ...alias, entries: alias.entries.map((entry, position) => position === index ? value : entry) });
+  for (const changed of [{ ...alias, tag: 'a000000c' }, changedEntry(0, 'other-package'),
+    changedEntry(0, 'Microsoft.Windows.WindowsSandbox_cw5n1h2txyewy'),
+    changedEntry(1, 'Microsoft.Windows.WindowsSandbox_cw5n1h2txyewy!AppCli'),
+    changedEntry(2, 'C:\\Program Files\\WindowsApps\\Microsoft.Windows.WindowsSandbox_0.8.107.0_x64__cw5n1h2txyewy\\wsb.exe'),
+    changedEntry(2, 'C:\\untrusted\\wsb.exe'), changedEntry(3, '1'), changedEntry(3, 0),
+    { ...alias, entries: alias.entries.slice(0, 3) }, { ...alias, entries: [...alias.entries, 'extra'] }]) {
     assert.throws(() => runtime.validateCliAlias(changed), /CLI_ALIAS/);
   }
 });
