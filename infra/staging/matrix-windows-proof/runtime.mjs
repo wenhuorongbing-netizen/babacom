@@ -322,6 +322,7 @@ function guestCommand(id) {
   const body = `$ErrorActionPreference='Stop'; Start-Process -FilePath 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','C:\\G1Input\\guest.ps1','-RunId','${id}') -WindowStyle Hidden -ErrorAction Stop | Out-Null`;
   return `C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(body, 'utf16le').toString('base64')}`;
 }
+const LOGIN_PROBE = `C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from('exit 0', 'utf16le').toString('base64')}`;
 
 export function validateGuest(value, id) {
   if (!value || value.schema !== 'g1-install-v1' || value.runId !== id) throw failure('INVALID_GUEST_RESULT');
@@ -466,7 +467,29 @@ export async function runHarness(mode, injected = {}) {
       result.observedForeignIds = [...new Set([...baseline, ...after.filter(item => item !== id)])];
       result.stages.CREATE = 'PASS';
       await step('INPUTS_MAPPED', options => deps.inputsUnchanged(prepared, options), 60000);
-      await step('CONNECT', async options => { connection = await deps.connect(id, options); });
+      await step('CONNECT', async options => {
+        connection = await deps.connect(id, options);
+        // Host process spawn does not prove that RDP has established an active login.
+        // Readiness probes share this step's deadline; the guest payload is never retried.
+        result.loginReadiness = { attempts: 0 };
+        while (true) {
+          options.check(); connection.check();
+          result.loginReadiness.attempts++;
+          let response;
+          try { response = await deps.execute(['exec', '--id', id, '--run-as', 'ExistingLogin', '--command', LOGIN_PROBE, '--raw'], options); }
+          catch (error) {
+            if (error.code !== 2147943712) throw error;
+            result.loginReadiness.lastNativeError = errorRecord(error);
+            connection.check(); options.check();
+            await deps.wait(250);
+            options.check();
+            continue;
+          }
+          connection.check(); options.check();
+          validateExec(response);
+          break;
+        }
+      });
       const guestDispatchedAt = deps.now();
       await step('EXEC', async options => { connection.check(); validateExec(await deps.execute(['exec', '--id', id, '--run-as', 'ExistingLogin', '--command', guestCommand(id), '--raw'], options)); });
       stage = 'GUEST'; result.stage = stage;

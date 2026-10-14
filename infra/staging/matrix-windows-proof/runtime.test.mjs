@@ -11,6 +11,8 @@ import { createHash } from 'node:crypto';
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const FOREIGN = '22222222-2222-4222-8222-222222222222';
+const LOGIN_PROBE = `C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from('exit 0', 'utf16le').toString('base64')}`;
+const isLoginProbe = args => args[0] === 'exec' && args[args.indexOf('--command') + 1] === LOGIN_PROBE;
 const inventory = ids => ({ stdout: JSON.stringify({ WindowsSandboxEnvironments: ids.map(Id => ({ Id })) }) });
 function guest() {
   return { schema: 'g1-install-v1', runId: ID, status: 'PASS', stage: 'QUIT',
@@ -87,6 +89,101 @@ test('preflight remains read only and releases admission', async () => {
   assert.deepEqual(f.calls, ['acquire', 'verify', 'host', 'release']);
 });
 
+test('CONNECT waits for an active ExistingLogin session then dispatches the guest exactly once', async () => {
+  const f = fixture(); const original = f.deps.execute;
+  let probes = 0, dispatches = 0;
+  f.deps.execute = async (args, options) => {
+    if (isLoginProbe(args)) {
+      assert.deepEqual(args, ['exec', '--id', ID, '--run-as', 'ExistingLogin', '--command', LOGIN_PROBE, '--raw']);
+      if (++probes < 3) throw Object.assign(new Error('no active login'), { code: 2147943712 });
+    } else if (args[0] === 'exec') { dispatches++; assert.equal(probes, 3, 'No payload is dispatched before a positive readiness probe'); }
+    return original(args, options);
+  };
+  const result = await runHarness('run', f.deps);
+  assert.equal(result.status, 'PASS'); assert.equal(probes, 3); assert.equal(dispatches, 1);
+  assert.equal(result.loginReadiness.lastNativeError.exitCode, 2147943712);
+});
+
+for (const absence of ['persistent', 'cancel', 'spawn-budget']) {
+  test(`CONNECT ${absence} keeps its original deadline and native readiness diagnostic without payload`, async () => {
+    const controller = new AbortController();
+    const f = fixture({ signal: controller.signal }); const original = f.deps.execute;
+    let probes = 0, dispatches = 0;
+    if (absence === 'spawn-budget') f.deps.connect = async () => { f.advance(14750); return { check() {}, close: async () => {} }; };
+    f.deps.execute = async (args, options) => {
+      if (isLoginProbe(args)) {
+        probes++;
+        if (absence === 'cancel') controller.abort();
+        throw Object.assign(new Error('not ready token=secret'), { code: 2147943712 });
+      }
+      if (args[0] === 'exec') dispatches++;
+      return original(args, options);
+    };
+    const result = await runHarness('run', f.deps);
+    assert.equal(result.status, 'FAIL'); assert.equal(result.stage, 'CONNECT');
+    assert.equal(result.category, absence === 'cancel' ? 'CANCELLED' : 'TIMEOUT');
+    assert.equal(dispatches, 0); assert.ok(probes > 0 && probes <= 60);
+    if (absence === 'spawn-budget') assert.equal(probes, 1, 'Time spent spawning consumes the same CONNECT budget');
+    assert.equal(result.loginReadiness.lastNativeError.exitCode, 2147943712);
+    assert.equal(result.loginReadiness.lastNativeError.error, 'not ready token=[REDACTED]');
+    assert.equal(result.cleanup.status, 'PASS'); assert.equal(result.admissionCleanup.status, 'PASS');
+  });
+}
+
+for (const fault of ['native-other', 'native-string', 'message-only', 'raw-nonzero', 'raw-native-number', 'malformed', 'connector-loss']) {
+  test(`CONNECT readiness ${fault} fails immediately without retry or payload`, async () => {
+    const f = fixture(); const original = f.deps.execute;
+    let probes = 0, dispatches = 0, lost = false;
+    const connectorError = Object.assign(new Error('connector lost'), { code: 88 });
+    f.deps.connect = async () => ({ check() { if (lost) throw connectorError; }, close: async () => {} });
+    f.deps.execute = async (args, options) => {
+      if (isLoginProbe(args)) {
+        probes++;
+        if (fault.startsWith('native')) throw Object.assign(new Error('original probe failure'), { code: fault === 'native-other' ? 5 : '2147943712' });
+        if (fault === 'message-only') throw new Error('no active login 2147943712 (0x80070520)');
+        if (fault === 'raw-nonzero') return { stdout: '{"ExitCode":1312}' };
+        if (fault === 'raw-native-number') return { stdout: '{"ExitCode":2147943712}' };
+        if (fault === 'malformed') return { stdout: '{bad' };
+        lost = true;
+      } else if (args[0] === 'exec') dispatches++;
+      return original(args, options);
+    };
+    const result = await runHarness('run', f.deps);
+    assert.equal(result.status, 'FAIL'); assert.equal(result.stage, 'CONNECT');
+    assert.equal(probes, 1); assert.equal(dispatches, 0);
+    if (fault.startsWith('native')) assert.equal(result.error, 'original probe failure');
+    if (fault === 'message-only') assert.equal(result.error, 'no active login 2147943712 (0x80070520)');
+    if (fault === 'raw-nonzero') assert.equal(result.exitCode, 1312);
+    if (fault === 'raw-native-number') assert.equal(result.exitCode, 2147943712);
+    if (fault === 'malformed') assert.equal(result.category, 'INVALID_RESPONSE');
+    if (fault === 'connector-loss') { assert.equal(result.error, 'connector lost'); assert.equal(result.exitCode, 88); }
+    assert.equal(result.cleanup.status, 'PASS');
+  });
+}
+
+test('session loss after readiness never retries the real guest dispatch', async () => {
+  const f = fixture(); const original = f.deps.execute;
+  let probes = 0, dispatches = 0;
+  f.deps.execute = async (args, options) => {
+    if (isLoginProbe(args)) probes++;
+    else if (args[0] === 'exec') { dispatches++; throw Object.assign(new Error('session lost after readiness'), { code: 2147943712 }); }
+    return original(args, options);
+  };
+  const result = await runHarness('run', f.deps);
+  assert.equal(result.status, 'FAIL'); assert.equal(result.stage, 'EXEC'); assert.equal(result.exitCode, 2147943712);
+  assert.equal(probes, 1); assert.equal(dispatches, 1); assert.equal(result.cleanup.status, 'PASS');
+});
+
+test('connector loss immediately before guest dispatch prevents the payload', async () => {
+  const f = fixture(); const original = f.deps.execute;
+  let checks = 0, dispatches = 0;
+  f.deps.connect = async () => ({ check() { if (++checks === 3) throw new Error('connection lost before dispatch'); }, close: async () => {} });
+  f.deps.execute = async (args, options) => { if (args[0] === 'exec' && !isLoginProbe(args)) dispatches++; return original(args, options); };
+  const result = await runHarness('run', f.deps);
+  assert.equal(result.status, 'FAIL'); assert.equal(result.stage, 'EXEC'); assert.equal(dispatches, 0);
+  assert.equal(result.error, 'connection lost before dispatch'); assert.equal(result.cleanup.status, 'PASS');
+});
+
 for (const fault of ['throw-after-create', 'malformed', 'wrong-id', 'confirmation-error', 'confirmation-timeout', 'confirmation-cancel', 'confirmation-missing']) {
   test(`unconfirmed creation ${fault} is UNKNOWN with zero subsequent VM operations`, async () => {
     const f = fixture();
@@ -161,7 +258,7 @@ for (const stage of ['VERIFY', 'HOST', 'PREPARE', 'CONNECT', 'EXEC', 'GUEST', 'I
     let inputChecks = 0;
     f.deps[key] = async (...args) => {
       if (stage === 'INPUTS') { if (++inputChecks === 3) f.advance(330001); }
-      else if (stage !== 'EXEC' || args[0][0] === 'exec') f.advance(330001);
+      else if (stage !== 'EXEC' || (args[0][0] === 'exec' && !isLoginProbe(args[0]))) f.advance(330001);
       return original(...args);
     };
     const result = await runHarness('run', f.deps);
@@ -518,7 +615,7 @@ test('exec verifies native guest exit code independently from host exit success'
   for (const stdout of ['{}', '{"ExitCode":4}', '0', '{"ExitCode":"0"}']) {
     const f = fixture();
     const original = f.deps.execute;
-    f.deps.execute = (args, options) => args[0] === 'exec' ? { stdout } : original(args, options);
+    f.deps.execute = (args, options) => args[0] === 'exec' && !isLoginProbe(args) ? { stdout } : original(args, options);
     const result = await runHarness('run', f.deps);
     assert.equal(result.status, 'FAIL');
     assert.equal(result.stage, 'EXEC');
@@ -536,7 +633,7 @@ for (const stage of ['VERIFY', 'HOST', 'PREPARE', 'CONNECT', 'EXEC', 'GUEST', 'I
     f.deps[key] = async (...args) => {
       const value = await original(...args);
       if (stage === 'INPUTS') { if (++inputs === 3) controller.abort(); }
-      else if (stage !== 'EXEC' || args[0][0] === 'exec') controller.abort();
+      else if (stage !== 'EXEC' || (args[0][0] === 'exec' && !isLoginProbe(args[0]))) controller.abort();
       return value;
     };
     const result = await runHarness('run', f.deps);
