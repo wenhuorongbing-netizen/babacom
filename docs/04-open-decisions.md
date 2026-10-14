@@ -125,7 +125,7 @@ Owner: 8.1
 | D16 | 标准Matrix迁移Release | **DECIDED方向/规划；客户端与部署组合SPIKE** | Jack最终裁定；A协调；原战略PO顾问 | PO对464f71a两项依赖修正限范围GO；用户授权隔离部署准备，PR99/#97合同待签认；G1/生产/退役独立 |
 | D17 | Digo 资料整合与多人工作入口 | **DECIDED 文档整合；运行/组织/许可独立** | Jack 授权本轮；A 串行集成；独立 Reviewer | #102 精确 24 路径；原提交保全、05 唯一指南、逐票 AC 归 GitHub；不变更权限/契约/产品 |
 | D16-E | 原版 Matrix 隔离实验执行 | **DECIDED 签认；PR99 审查合并后生效** | Jack 授权；A 实施；独立 Reviewer | 更新 D16/下文历史待签认状态；#98 四文件、本机回环、合成数据；运行结果待实测 |
-| D16-G1 | Windows 游戏证明首个子交付 | **G1 推进已授权；#105 新范围待签认，#106 阻塞于该范围** | Jack 最终签认；A 协调；子代理研究/独立审查 | 只读核验官方 Windows 产物；不安装、不启 RTC、不采集；G1 仍未通过 |
+| D16-G1 | Windows 产物与隔离安装启动 | **PR107/108 已合并，#105/#106 已关闭；#109 安装启动精确范围待签认** | Jack 最终签认；A 协调；子代理研究/独立审查 | 只读核验已通过；下一批仅新 Sandbox 离线 install/start/Quit；运行 NOT_RUN，G1 仍未通过 |
 
 **本 fork 发布阶段校准：DECIDED（2026-10-04，用户授权修正并合并基线 PR）。**
 沿用 [01-scope-v2.md](01-scope-v2.md) 的既有 R04 范围：完整每频道权限、
@@ -326,3 +326,11 @@ Jack明确要求“继续推进 Matrix 迁移，先把隔离部署和测试跑�
 RTC 研究修正（**候选，运行 NOT_RUN**）：[lk-jwt-service v0.9.0](https://github.com/element-hq/lk-jwt-service/releases/tag/v0.9.0) 为固定 Call 的旧 `/sfu/get`、直接 `/get_token` 路径补充成员检查，但要求 AS 配置及单一关联 homeserver；新版 homeserver-mediated 字段与 SDK43 不同，不能混称兼容。其 3600 秒 SFU JWT 不是主动撤销窗口证明；踢出后新票、旧票重用与已连接参与者需分别验证。固定 Call 开发配置的 LiveKit 1.13.4 只是来源关联候选，镜像 digest/真实联调仍 UNKNOWN。客户端版本和传递依赖保持，不将此次研究升格为新依赖授权。
 
 后续顺序：独立 RTC 范围与固定摘要/可信 TLS/媒体专机 → 最小私房身份与闭麦通话 → 合成轨道/取消晚到/独立音量 → 同一实际包的双真实 Windows 游戏声音、独立麦克风与物理释放。当前回环 WSL 不作为媒体专机；缺节点、可信证书或真实测试者时相应运行 HOLD，继续独立自动层。旧 T1/T2、#18 真人标准、G4 中德/负载、G5 观察切换与 G6 逐文件退役均保持；无采购、生产切换或删除授权。
+
+### D16-G1-P2 隔离安装启动范围（2026-10-14，PROPOSED）
+
+更新上文历史待签认状态：Jack 已签认 PR107；本轮按其指示合并 PR108（main `86da409`），#105/#106 已关闭。两个只读核验器交付，44/44 自测及实际安装包核验通过；这些证据不包含安装启动。Jack 继续要求“推进 G1 的隔离安装和启动验收”。
+
+下一精确合同见 [matrix-windows-install](../.agents/modules/matrix-windows-install.md)，范围票 #109：独立 docs PR 只改该清单与本文件，经独立审查、Jack 签认合并后，另票实施三个新脚本。已核实本机 Sandbox 启用、官方 CLI 0.8.107.0 及当前空实例清单；不需修改宿主功能或管理员提权。安装/启动/退出仍 **NOT_RUN**。
+
+运行固定官方 1.12.30 安装包，限新建自有 Sandbox；只读输入及 UUID 专属可写输出，禁网/麦克风/摄像头/剪贴板/打印机/vGPU，启用 ProtectedClient。安装期仅 VM 默认 profile，预置安全配置，随后独占 profile、固定本地 config 与 `--no-update`；真实欢迎页、实际安装版本与 File→Quit 正常退出均须观察。保持 D14 的跨进程立即 BUSY、确认归属后操作、创建后未确认则 cleanup=UNKNOWN 且禁止猜测 stop；总期限与失败断言写入清单。输出保留，旧材料不清理；无 host 安装、RTC、真实账号、采集或生产权限，Sandbox 结果不替代双实机 G1 与其他 release gates。
