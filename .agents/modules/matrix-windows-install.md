@@ -16,7 +16,7 @@ infra/staging/matrix-windows-proof/guest.ps1
 
 ## 固定输入与宿主边界
 
-- 唯一安装包仍是 [matrix-windows-proof](matrix-windows-proof.md) 固定的 `D:/Code/babacom/.matrix-runtime/g1/windows/Element Setup 1.12.30.exe`：208730288 字节、SHA-256 `b9ac9617acfa667eb5470e67e5db744d3b595b35c285100a53ad17719f7cc6d3`、既定发布者/证书/时间戳，源码关联 `f19cfd9030429240a4209bf5175b372175cf0464`。每次运行先完整调用只读核验，不重下载或替换版本。
+- 唯一安装包仍是 [matrix-windows-proof](matrix-windows-proof.md) 固定的 `D:/Code/babacom/.matrix-runtime/g1/windows/Element Setup 1.12.30.exe`：208730288 字节、SHA-256 `b9ac9617acfa667eb5470e67e5db744d3b595b35c285100a53ad17719f7cc6d3`、既定发布者/证书/时间戳，源码关联 `f19cfd9030429240a4209bf5175b372175cf0464`。取得准入后、安装前完整调用只读核验，不重下载或替换版本。
 - 宿主为 Windows 11 Pro x64，Sandbox 已启用；固定 CLI `C:/Users/Jack/AppData/Local/Microsoft/WindowsApps/wsb.exe`，实测版本 `0.8.107.0`。只调用已核实的 `--version`、`list --raw`、`start --id <UUID> --config <XML> --raw`、`connect --id <UUID>`、`exec --id <UUID> --run-as ExistingLogin --command <固定命令> --raw`、`stop --id <UUID> --raw`。不猜测 create/run/status 子命令。
 - 产品 CLI 只接受 `preflight`、`run`；不接受任意路径、URL、脚本、命令、环境或既有 VM ID。`preflight` 只读，不创建目录/VM、不安装。`run` 每次生成全新 UUID；已有目录、reparse、版本不符或权限不足均失败，不修宿主环境。
 - 宿主只新建 `D:/Code/babacom/.matrix-runtime/g1/windows-install/<UUID>/input` 与同级 `output`；该 UUID 目录必须此前不存在，所有父目录须无 symlink/junction/reparse。`input` 仅含固定安装包的完整副本、当前 `guest.ps1` 副本与生成的 `element-config.json`。复制后完整核对安装包哈希及路径身份，映射前后检查未改变；原安装包只读保留。
@@ -26,10 +26,11 @@ infra/staging/matrix-windows-proof/guest.ps1
 
 ## 归属、期限与失败
 
-- 同机跨进程/工作区共用 `\\.\pipe\babacom-matrix-g1-windows-install` 准入；使用 Windows 首实例排他语义，占用立即 `FAIL/BUSY`，不等待或重试。不能仅用进程内标记；必须由两个真实进程验证排他。
-- 创建前记录已有 Sandbox ID，生成的新 UUID 必须不在其中。只有 `start` 成功且原生响应中的 ID 与请求 UUID 相符才确认归属；之后 list 的同名实例不是补办归属证明。确认后才 connect、exec、stop，不操作已有或他人新建实例。
+- 复用 [D14/T2-V2](../../docs/T2-spec.md) 的同机跨进程/工作区固定准入端点 `\\.\pipe\babacom-sandbox-admission-v1`，与旧 runner 互斥，不另设 Matrix 专用锁。使用 Windows 首实例排他语义；取得准入先于核验、目录创建及任何 Sandbox CLI，占用立即 `FAIL/ADMISSION/BUSY`、`cleanup=NOT_OWNED`，零 CLI 调用，不等待、连接既有端点或重试。
+- 准入保持到归属处理和清理结束，在 finally 中有界释放；释放失败阻止 PASS，另记 admissionCleanup，保留既有主错误。先纳入释放结果，再以 create-new/`wx` 写唯一最终摘要，不能先落盘 PASS。异常退出由 OS 释放管道，不建持久服务/锁文件。必须由不同工作目录的两个真实进程验证排他、正常释放及异常退出后可重新取得，含一个旧 runner 契约端点持有者与新 runner 的争用。
+- 创建前记录已有 Sandbox ID，生成的新 UUID 必须不在其中。只有 `start` 成功、原生响应 ID 与请求 UUID 相符，**且创建后成功 list 包含该 ID**，才确认归属；不能仅凭 list 补办失败创建的归属证明。确认后才 connect、exec、stop，不操作已有或他人新建实例。确认查询失败/超时/取消、无效响应或缺 ID 均归属 UNKNOWN，禁止后续操作。
 - 创建请求发出后若失败、超时、响应格式错误或归属未确认：保留原始错误码，报告 `cleanup=UNKNOWN`，禁止停止猜测的实例。已确认归属的 VM 即使应用失败也应在 finally 中停止，但不得将强制拆除 VM 算作应用正常退出。
-- 从 run 开始使用同一绝对截止时间 **360 秒**，最后 **30 秒**保留给已归属 VM 的 stop/消失确认。原产物核验仍保留其 60 秒总预算、签名 30 秒预算；其他单次 CLI/宿主辅助进程最多 15 秒并受剩余总预算约束。connect 可保留交互连接进程，须跟踪其错误并在退出时关闭本轮连接，不误停其他连接。
+- 从 run 开始使用同一绝对截止时间 **360 秒**，最后 **30 秒**保留给已归属 VM 的 stop/消失确认及准入释放。原产物核验仍保留其 60 秒总预算、签名 30 秒预算；其他单次 CLI/宿主辅助进程最多 15 秒并受剩余总预算约束。connect 可保留交互连接进程，须跟踪其错误并在退出时关闭本轮连接，不误停其他连接。本票只复用 D14 的准入/归属语义；新安装阶段预算不修改旧 T2 runner 的 180 秒整轮、120 秒 guest、15 秒清理或既有断言。
 - exec 在连接的登录会话中启动固定 guest 脚本，后台辅助窗口隐藏；CLI 的 exit 0 只是请求已执行，不能代替 guest 结果。guest 安装收敛最多 120 秒、欢迎页最多 60 秒、正常 Quit 最多 15 秒，均不重置外层截止时间。结果缺失/无效、连接断开、阶段超时或版本漂移均非零退出，保留已完成阶段及原始错误并脱敏，不重试安装、不自动降级隔离。
 
 ## Guest 安装与可观察结果
@@ -76,9 +77,9 @@ node .agents/scope_guard.mjs matrix-windows-install --files infra/staging/matrix
 git diff --check
 ```
 
-自测只使用本轮自有临时小文件、注入 CLI/时钟和合成结果，不运行真实 installer/VM、不读取凭据；清理仅这些测试临时文件。断言覆盖固定输入/配置/映射、reparse/复制哈希、真实双进程 BUSY、先创建再报错的 UNKNOWN、错误或冲突 ID/响应、其他实例保留、全部阶段超时、错误脱敏、错误版本/欢迎页缺失/退托盘不退出必失败，以及归属后失败仍清理。
+自测只使用本轮自有临时小文件、注入 CLI/时钟和合成结果，不运行真实 installer/VM、不读取凭据；清理仅这些测试临时文件。断言覆盖固定输入/配置/映射、reparse/复制哈希、上述新旧契约端点真实双进程 BUSY、释放失败阻止 PASS、先实际创建再报错/确认查询失败/超时/取消的 UNKNOWN 与零后续操作、错误或冲突 ID/响应、其他实例保留、全部阶段超时/取消、错误脱敏、错误版本/欢迎页缺失/退托盘不退出必失败，以及归属后失败仍清理。
 
-真实 run 只有以下全部满足才 exit 0：核验与副本哈希通过；新 VM 内实际安装双版本证据匹配；受控欢迎页 UIA/PNG 已观察；真实 Quit 正常 exit 0 且无本轮残留应用；自有 VM 停止并从清单消失，已有及他人实例均未操作；只读输入未变、本轮输出保留。其他情况必须非零并分阶段报告 `PASS/FAIL/UNKNOWN/NOT_RUN` 与 cleanup 状态，不能降低断言或期限让其变绿。
+真实 run 只有以下全部满足才 exit 0：核验与副本哈希通过；新 VM 内实际安装双版本证据匹配；受控欢迎页 UIA/PNG 已观察；真实 Quit 正常 exit 0 且无本轮残留应用；自有 VM 停止并从清单消失，已有及他人实例均未操作；只读输入未变、准入成功释放、最终摘要已唯一落盘、本轮输出保留。其他情况必须非零并分阶段报告 `PASS/FAIL/UNKNOWN/NOT_RUN` 与 cleanup 状态，不能降低断言或期限让其变绿。
 
 ## 完成边界
 
