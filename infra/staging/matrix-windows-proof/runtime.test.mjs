@@ -301,6 +301,48 @@ await writeFile('returned.txt','forbidden normal return');
   await lease.release(); // OS released the endpoint on the child's nonzero exit.
 });
 
+for (const resource of ['handle', 'connector', 'admission']) {
+  test(`exhausted total budget tracks pending ${resource} close and terminates without release/return`, { timeout: 10000 }, async t => {
+    const directory = await tinyFixture(t);
+    const script = path.join(directory, 'exhausted-close-fixture.mjs');
+    const moduleUrl = new URL('./runtime.mjs', import.meta.url).href;
+    await writeFile(script, `import { runHarness, acquireAdmission } from ${JSON.stringify(moduleUrl)};
+import { appendFileSync } from 'node:fs';
+const resource=process.argv[2]; let clock=0, lists=0, inputChecks=0;
+const event=name=>appendFileSync('events.txt',name+'\\n');
+const gated=async name=>{event(name+'-started');await new Promise(resolve=>setTimeout(resolve,200));event(name+'-completed');};
+const original=()=>Object.assign(new Error('original failure'),{code:77});
+const result=await runHarness(resource==='admission'?'preflight':'run',{
+ now:()=>clock,uuid:()=>${JSON.stringify(ID)},
+ acquire:async()=>{const lease=await acquireAdmission();return {release:async()=>{event('admission-release-started');if(resource==='admission')await gated('admission-close');await lease.release();event('admission-released');}};},
+ verify:async()=>{if(resource==='admission'){clock=360001;throw original();}return {};},inspectHost:async()=>{},
+ prepare:async()=>({outputDirectory:process.cwd(),ready:true,outputExists:true,configuration:'<Configuration/>',sealed:resource==='handle'?[{handle:{close:()=>gated('handle-close')}}]:[]}),
+ inputsUnchanged:async()=>{if(resource==='handle'&&++inputChecks===3)clock=360001;},
+ execute:async args=>({stdout:args[0]==='list'?JSON.stringify({WindowsSandboxEnvironments:(++lists===2?[{Id:${JSON.stringify(ID)}}]:[])}):args[0]==='start'?JSON.stringify({Id:${JSON.stringify(ID)}}):args[0]==='exec'?'{"ExitCode":0}':''}),
+ connect:async()=>({check(){},close:async()=>{if(resource==='connector'){clock=360001;await gated('connector-close');}}}),
+ readGuest:async()=>{throw original();},writeFinal:async()=>{}
+});
+event('harness-returned');process.stdout.write(JSON.stringify(result)+'\\n');
+`);
+    const child = spawn(process.execPath, [script, resource], { cwd: directory, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', bytes => { stderr += bytes; });
+    const ended = new Promise(resolve => child.once('exit', resolve));
+    t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill(); await ended; });
+    assert.equal(await ended, 1, 'Pending cleanup must use terminal FAILURE, never normal return');
+    const result = JSON.parse(stderr.trim());
+    assert.equal(result.status, 'FAIL'); assert.equal(result.exitCode, 77);
+    assert.equal(result.operationCleanup.status, 'FAIL');
+    const events = (await readFile(path.join(directory, 'events.txt'), 'utf8')).trim().split('\n');
+    assert.ok(events.includes(`${resource}-close-started`));
+    assert.ok(!events.includes(`${resource}-close-completed`));
+    assert.ok(!events.includes('harness-returned'));
+    assert.ok(!events.includes('admission-released'));
+    if (resource !== 'admission') assert.ok(!events.includes('admission-release-started'));
+    const lease = await runtime.acquireAdmission(); await lease.release();
+  });
+}
+
 test('guest JSON publication exposes no final pathname while bytes are still being written', { timeout: 10000 }, async t => {
   const directory = await tinyFixture(t);
   const source = await readFile(fileURLToPath(new URL('./guest.ps1', import.meta.url)), 'utf8');

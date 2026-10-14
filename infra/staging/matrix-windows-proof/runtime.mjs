@@ -400,6 +400,11 @@ export async function runHarness(mode, injected = {}) {
   let requested = false, owned = false;
   let baseline = [];
   const pending = new Map();
+  const track = (operation, controller = null) => {
+    pending.set(operation, controller);
+    operation.then(() => pending.delete(operation), () => pending.delete(operation));
+    return operation;
+  };
   const result = { schema: 'g1-host-v1', mode, status: 'FAIL', stage,
     stages: Object.fromEntries(['ADMISSION', 'VERIFY', 'HOST', 'PREPARE', 'INVENTORY', 'INPUTS_BEFORE', 'CREATE', 'INPUTS_MAPPED', 'CONNECT', 'EXEC', 'GUEST', 'INPUTS_AFTER'].map(name => [name, 'NOT_RUN'])),
     cleanup: { status: 'NOT_OWNED' }, admissionCleanup: { status: 'NOT_OWNED' } };
@@ -424,8 +429,7 @@ export async function runHarness(mode, injected = {}) {
       return fn({ signal: controller.signal, timeout: Math.max(1, limit - deps.now()),
         check: () => check(limit, controller.signal), registerPrepared: value => { prepared = value; }, registerConnection: value => { connection = value; } });
     });
-    pending.set(operation, controller);
-    operation.then(() => pending.delete(operation), () => pending.delete(operation));
+    track(operation, controller);
     try {
       const value = await Promise.race([operation, expiry]);
       check(limit, external);
@@ -434,11 +438,10 @@ export async function runHarness(mode, injected = {}) {
   }
   const step = async (name, action, cap = 15000) => { stage = name; result.stage = name; const value = await bounded(action, cap); result.stages[name] = 'PASS'; return value; };
   const closeOwned = action => {
-    // Always initiate release, even if an uncooperative operation exhausted the deadline.
-    // A late release remains a failure; it must not leave the pipe keeping this process alive.
-    const pending = action();
-    pending.catch(() => {});
-    return bounded(() => pending, 15000, true);
+    // Register the returned close promise immediately, before checking the remaining budget. An exhausted
+    // deadline cannot make a resource close disappear from the final drain/termination path.
+    const closing = track(Promise.resolve(action()));
+    return bounded(() => closing, 15000, true);
   };
   try {
     await step('ADMISSION', async options => { admission = await deps.acquire(options); });
@@ -491,9 +494,9 @@ export async function runHarness(mode, injected = {}) {
     let drainFailed = false;
     // Abort pending work, terminate any registered connector, then drain its continuations
     // before closing file handles or releasing admission. No detached preparation survives return.
-    for (const controller of pending.values()) controller.abort();
+    for (const controller of pending.values()) controller?.abort();
     let connectionClosing;
-    if (connection) { connection.beginCleanup?.(); connectionClosing = Promise.resolve().then(() => connection.close()); connectionClosing.catch(() => {}); }
+    if (connection) { connection.beginCleanup?.(); connectionClosing = track(Promise.resolve().then(() => connection.close())); }
     if (pending.size) {
       const draining = Promise.allSettled([...pending.keys()]);
       try { await bounded(() => draining, Math.min(15000, Math.max(1, (deadline - deps.now()) / 2)), true); result.operationCleanup = { status: 'PASS' }; }
@@ -525,12 +528,12 @@ export async function runHarness(mode, injected = {}) {
       catch (error) { result.inputIntegrity = { status: 'FAIL', ...errorRecord(error) }; result.status = 'FAIL'; }
     }
     if (prepared?.sealed) {
-      try { await closeOwned(() => Promise.all(prepared.sealed.map(item => item.handle.close()))); }
+      try { await Promise.all(prepared.sealed.map(async item => closeOwned(() => item.handle.close()))); }
       catch (error) { result.inputCleanup = { status: 'FAIL', ...errorRecord(error) }; result.status = 'FAIL'; }
     }
     // Cleanup subprocesses/file closures also must settle before admission can be released.
     if (!drainFailed && pending.size) {
-      for (const controller of pending.values()) controller.abort();
+      for (const controller of pending.values()) controller?.abort();
       const draining = Promise.allSettled([...pending.keys()]);
       try { await bounded(() => draining, Math.min(15000, Math.max(1, (deadline - deps.now()) / 2)), true); }
       catch (error) { drainFailed = true; result.status = 'FAIL'; result.operationCleanup = { status: 'FAIL', ...errorRecord(error) }; }
@@ -542,9 +545,23 @@ export async function runHarness(mode, injected = {}) {
         catch (error) { result.admissionCleanup = { status: 'FAIL', ...errorRecord(error) }; result.status = 'FAIL'; }
       }
     }
+    // The admission close itself is tracked: a timed-out release must not leave an
+    // unobserved live pipe (or a late release continuation) after normal harness return.
+    if (!drainFailed && pending.size) {
+      for (const controller of pending.values()) controller?.abort();
+      const draining = Promise.allSettled([...pending.keys()]);
+      try { await bounded(() => draining, Math.min(15000, Math.max(1, (deadline - deps.now()) / 2)), true); }
+      catch (error) { drainFailed = true; result.status = 'FAIL'; result.operationCleanup = { status: 'FAIL', ...errorRecord(error) }; }
+    }
     if (prepared && prepared.outputExists !== false) {
       try { await bounded(options => deps.writeFinal(prepared, result, options), 15000, true); }
       catch (error) { result.status = 'FAIL'; result.evidence = { status: 'FAIL', ...errorRecord(error) }; }
+    }
+    if (!drainFailed && pending.size) {
+      for (const controller of pending.values()) controller?.abort();
+      const draining = Promise.allSettled([...pending.keys()]);
+      try { await bounded(() => draining, Math.min(15000, Math.max(1, (deadline - deps.now()) / 2)), true); }
+      catch (error) { drainFailed = true; result.status = 'FAIL'; result.operationCleanup = { status: 'FAIL', ...errorRecord(error) }; }
     }
     if (drainFailed) {
       deps.terminate(result);
