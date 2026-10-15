@@ -49,15 +49,26 @@ function Read-Version {
   return @{ productVersion=$product; displayVersion=[string]$records[0].DisplayVersion }
 }
 function Owned-Processes {
-  $items = @(Get-CimInstance Win32_Process -Filter "Name='Element.exe' OR Name='Update.exe'")
+  # Sandbox can deny WMI/CIM queries; read the actual local process identity directly.
+  $items = @([Diagnostics.Process]::GetProcessesByName('Element')) + @([Diagnostics.Process]::GetProcessesByName('Update'))
   $owned = @()
-  foreach ($item in $items) {
-    if ([string]::IsNullOrEmpty($item.ExecutablePath) -or $null -eq $item.CreationDate) { throw 'OWNERSHIP/Unreadable process' }
-    $full = [IO.Path]::GetFullPath([string]$item.ExecutablePath)
-    if (-not $full.StartsWith(($installRoot.TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase) -or
-      $item.CreationDate.ToUniversalTime() -lt $started) { throw 'OWNERSHIP/Unexpected Element or Update process' }
-    $owned += $item
-  }
+  try {
+    foreach ($item in $items) {
+      try {
+        $module = $item.MainModule
+        if ($null -eq $module -or [string]::IsNullOrEmpty($module.FileName)) { throw 'OWNERSHIP/Unreadable process' }
+        $full = [IO.Path]::GetFullPath($module.FileName)
+        $created = $item.StartTime.ToUniversalTime()
+        if (-not $full.StartsWith(($installRoot.TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase) -or
+          $created -lt $started) { throw 'OWNERSHIP/Unexpected Element or Update process' }
+        $owned += [pscustomobject]@{ Name=($item.ProcessName + '.exe'); ProcessId=$item.Id; ExecutablePath=$full; CreationDate=$created }
+      } catch {
+        # An exited snapshot member is harmless; a live unreadable process still fails closed.
+        if ($item.HasExited) { continue }
+        throw
+      }
+    }
+  } finally { foreach ($item in $items) { $item.Dispose() } }
   return $owned
 }
 function Main-Window($process) {
@@ -75,34 +86,81 @@ function Find-Control($root, [string]$name, $type) {
     [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, $type))
   return $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
 }
+function Find-FileControl($root) {
+  $barCondition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::MenuBar)
+  $bar = $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $barCondition)
+  if ($null -eq $bar) { return $null }
+  # Chromium exposes its native menu-bar entries as Buttons on this pinned build.
+  foreach ($type in @([Windows.Automation.ControlType]::MenuItem, [Windows.Automation.ControlType]::Button)) {
+    $control = Find-Control $bar 'File' $type
+    if ($null -ne $control -and $control.Current.IsEnabled -and -not $control.Current.IsOffscreen) { return $control }
+  }
+  return $null
+}
+function Find-QuitAction($process) {
+  $menuCondition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Menu)
+  # Chromium may report UIA PID 0 even on its native root. Verify HWND ownership
+  # before inspecting any menu, including a separate native popup.
+  $roots = [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)
+  foreach ($root in $roots) {
+    $handle = [IntPtr]$root.Current.NativeWindowHandle
+    if ($handle -eq [IntPtr]::Zero) { continue }
+    $owner = [uint32]0
+    [void][G1Window]::GetWindowThreadProcessId($handle, [ref]$owner)
+    if ($owner -ne $process.Id) { continue }
+    foreach ($menu in $root.FindAll([Windows.Automation.TreeScope]::Descendants, $menuCondition)) {
+      foreach ($name in @('Quit', 'Exit')) {
+        $candidate = Find-Control $menu $name ([Windows.Automation.ControlType]::MenuItem)
+        if ($null -ne $candidate -and $candidate.Current.IsEnabled -and -not $candidate.Current.IsOffscreen) {
+          return @{control=$candidate;action=('File/' + $name)}
+        }
+      }
+    }
+  }
+  return $null
+}
 function Quit-ThroughMenu($process, [long]$limit) {
+  Check-Time $limit
   $root = Main-Window $process
   if ($null -eq $root) { throw 'QUIT/No owned main window' }
-  $file = Find-Control $root 'File' ([Windows.Automation.ControlType]::MenuItem)
-  if ($null -eq $file) { throw 'UIA_UNSUPPORTED/File menu unavailable' }
+  $file = Find-FileControl $root
+  if ($null -eq $file) {
+    Check-Time $limit
+    # The pinned client hides its menu bar by default. One Alt stroke reveals it.
+    [G1Window]::RevealMenu($process.MainWindowHandle, [int]$process.Id)
+    while ($null -eq $file) {
+      Check-Time $limit
+      Start-Sleep -Milliseconds 100
+      Check-Time $limit
+      $root = Main-Window $process
+      if ($null -eq $root) { throw 'QUIT/No owned main window' }
+      $file = Find-FileControl $root
+    }
+  }
   $expand = $null
   $invoke = $null
-  if ($file.TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$expand)) { $expand.Expand() }
+  if ($file.Current.ControlType -eq [Windows.Automation.ControlType]::Button) {
+    # The pinned SubmenuButton exposes no Invoke, and its Expand returns E_FAIL.
+    # Focus the observed File control before sending its standard menu-opening key.
+    $file.SetFocus()
+    if (-not $file.Current.HasKeyboardFocus) { throw 'QUIT/File not focused' }
+    Check-Time $limit
+    [G1Window]::OpenFileMenu($process.MainWindowHandle, [int]$process.Id)
+  }
+  elseif ($file.TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$expand)) { $expand.Expand() }
   elseif ($file.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$invoke)) { $invoke.Invoke() }
   else { throw 'UIA_UNSUPPORTED/File menu cannot open' }
   $quit = $null
   $action = $null
   while ($null -eq $quit) {
     Check-Time $limit
-    # Native Electron menus may be separate desktop popups; constrain them to this PID.
-    $pidCondition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$process.Id)
-    $ownedRoots = [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $pidCondition)
-    foreach ($ownedRoot in $ownedRoots) {
-      foreach ($name in @('Quit', 'Exit')) {
-        $candidate = Find-Control $ownedRoot $name ([Windows.Automation.ControlType]::MenuItem)
-        if ($null -ne $candidate -and $candidate.Current.IsEnabled) { $quit=$candidate; $action=('File/' + $name); break }
-      }
-      if ($null -ne $quit) { break }
-    }
-    if ($null -eq $quit) { Start-Sleep -Milliseconds 100 }
+    $selection = Find-QuitAction $process
+    if ($null -ne $selection) { $quit=$selection.control; $action=$selection.action }
+    else { Start-Sleep -Milliseconds 100 }
   }
   $pattern = $null
   if (-not $quit.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { throw 'UIA_UNSUPPORTED/Quit cannot invoke' }
+  Check-Time $limit
   $pattern.Invoke()
   while (-not $process.HasExited) { Check-Time $limit; Start-Sleep -Milliseconds 100; $process.Refresh() }
   $process.WaitForExit()
@@ -172,10 +230,35 @@ using System;
 using System.Runtime.InteropServices;
 public static class G1Window {
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+  // The guest is required to be x64: native INPUT is 40 bytes, with keyboard data at offset 8.
+  [StructLayout(LayoutKind.Explicit, Size=40)] public struct INPUT {
+    [FieldOffset(0)] public uint type;
+    [FieldOffset(8)] public ushort key;
+    [FieldOffset(12)] public uint flags;
+  }
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT rect);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", SetLastError=true)] private static extern uint SendInput(uint count, INPUT[] inputs, int size);
+  public static void RevealMenu(IntPtr handle, int processId) { SendOwnedKey(handle, processId, 0x12, true); }
+  public static void OpenFileMenu(IntPtr handle, int processId) { SendOwnedKey(handle, processId, 0x28, false); }
+  private static void SendOwnedKey(IntPtr handle, int processId, ushort key, bool activate) {
+    uint owner;
+    GetWindowThreadProcessId(handle, out owner);
+    if (handle == IntPtr.Zero || owner != processId) throw new InvalidOperationException("QUIT/Unowned window");
+    if (activate) SetForegroundWindow(handle);
+    if (GetForegroundWindow() != handle) throw new InvalidOperationException("QUIT/Window not foreground");
+    INPUT[] keys = { new INPUT { type=1, key=key }, new INPUT { type=1, key=key, flags=2 } };
+    int size = Marshal.SizeOf(typeof(INPUT));
+    uint sent = SendInput(2, keys, size);
+    if (sent != 2) {
+      int error = Marshal.GetLastWin32Error();
+      if (sent == 1) SendInput(1, new INPUT[] { keys[1] }, size);
+      throw new System.ComponentModel.Win32Exception(error, "QUIT/Menu key input failed");
+    }
+    if (GetForegroundWindow() != handle) throw new InvalidOperationException("QUIT/Window lost foreground");
+  }
 }
 '@
   Finish-Stage
@@ -242,10 +325,10 @@ public static class G1Window {
         $item=$all.Item($i)
         if (-not $item.Current.IsOffscreen -and $item.Current.IsEnabled) {
           $name=[string]$item.Current.Name
-          if ($name -match '^(Welcome to Element|Sign in|Create account)$') { $names += $name }
+          if ($name -match '^(Be in your element|Sign in|Create account)$') { $names += $name }
         }
       }
-      if (($names -contains 'Welcome to Element') -and ($names -contains 'Sign in') -and ($names -contains 'Create account')) { $controls=@($names | Select-Object -Unique); break }
+      if (($names -contains 'Be in your element') -and ($names -contains 'Sign in') -and ($names -contains 'Create account')) { $controls=@($names | Select-Object -Unique); break }
     }
     Start-Sleep -Milliseconds 200
   }
@@ -274,6 +357,7 @@ public static class G1Window {
   $result.stages[$stage]='FAIL'
   $result.category=([string]$_.Exception.Message).Split('/')[0]
   $result.error=([string]$_.Exception.Message -replace '(?i)(Bearer\s+)\S+','$1[REDACTED]' -replace '(?i)((token|password|secret)\s*[=:]\s*)[^\s,;]+','$1[REDACTED]')
+  $result.failure=@{ scriptLineNumber=$_.InvocationInfo.ScriptLineNumber; hresult=$_.Exception.HResult; exceptionType=$_.Exception.GetType().FullName }
 } finally {
   $result.elapsedMs=$clock.ElapsedMilliseconds
   Write-JsonNew ('guest-' + $RunId + '.json') $result

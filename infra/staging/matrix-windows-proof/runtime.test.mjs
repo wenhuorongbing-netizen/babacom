@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as runtime from './runtime.mjs';
 const { runHarness } = runtime;
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -22,7 +22,7 @@ function guest() {
     finalProductVersion: '1.12.30', finalDisplayVersion: '1.12.30',
     defaultProfileSeeded: true, controlledProfileSeeded: true, earlyProcessesGone: true,
     controlledLaunch: true, welcomeObserved: true, ownedWindow: true, screenshot: 'welcome.png',
-    screenshotSha256: 'a'.repeat(64), controls: ['Welcome to Element', 'Sign in', 'Create account'],
+    screenshotSha256: 'a'.repeat(64), controls: ['Be in your element', 'Sign in', 'Create account'],
     quitAction: 'File/Quit', mainExitCode: 0, ownedProcessesGone: true,
     stages: { ENVIRONMENT: 'PASS', INSTALL: 'PASS', WELCOME: 'PASS', QUIT: 'PASS' } };
 }
@@ -237,6 +237,26 @@ for (const change of [
     assert.equal(result.status, 'FAIL');
     assert.equal(result.cleanup.status, 'PASS');
     assert.ok(f.calls.includes(`stop --id ${ID} --raw`));
+  });
+}
+
+test('pinned Element welcome title with both account actions passes the existing evidence checks', async () => {
+  const f = fixture({ readGuest: async () => ({ ...guest(), controls: ['Be in your element', 'Sign in', 'Create account'] }) });
+  const result = await runHarness('run', f.deps);
+  assert.equal(result.status, 'PASS');
+  assert.equal(result.guest.welcomeObserved, true);
+});
+
+for (const controls of [
+  ['Be in your element'], ['Be in your element', 'Sign in'], ['Be in your element', 'Create account'],
+  ['An error occurred', 'Sign in', 'Create account'], ['Welcome to Element', 'Sign in', 'Create account'],
+]) {
+  test(`welcome controls reject missing actions or the wrong title: ${JSON.stringify(controls)}`, async () => {
+    const f = fixture({ readGuest: async () => ({ ...guest(), controls }) });
+    const result = await runHarness('run', f.deps);
+    assert.equal(result.status, 'FAIL');
+    assert.equal(result.category, 'INVALID_GUEST_RESULT');
+    assert.equal(result.cleanup.status, 'PASS');
   });
 }
 
@@ -479,6 +499,252 @@ test('guest JSON publication exposes no final pathname while bytes are still bei
   assert.deepEqual(JSON.parse(await readFile(path.join(directory, retained[0]), 'utf8')), { message: 'replacement' });
 });
 
+test('guest ownership works without CIM and still checks the native path and creation time', { timeout: 30000 }, async t => {
+  const directory = await tinyFixture(t);
+  const name = `g1${path.basename(directory).slice(-6)}`;
+  const executable = path.join(directory, `${name}.exe`);
+  const script = path.join(directory, 'owned-process.mjs');
+  await copyFile(process.execPath, executable);
+  await writeFile(script, "process.stdout.write('READY\\n'); setInterval(() => {}, 1000);", { flag: 'wx' });
+  const child = spawn(executable, [script], { cwd: directory, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const ended = new Promise(resolve => child.once('exit', resolve));
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill(); await ended; });
+  await new Promise((resolve, reject) => {
+    child.stdout.once('data', resolve);
+    child.once('error', reject);
+    child.once('exit', code => reject(new Error(`Ownership fixture exited early: ${code}`)));
+  });
+  const source = await readFile(fileURLToPath(new URL('./guest.ps1', import.meta.url)), 'utf8');
+  const start = source.indexOf('function Owned-Processes');
+  const end = source.indexOf('\nfunction Main-Window', start);
+  // Only substitute the enumerated names so a test can never inspect an unrelated Element/Update.
+  const helper = source.slice(start, end).replaceAll('Element', name).replaceAll('Update', `${name}u`);
+  const inspect = async (root, future = false) => {
+    const code = `$ErrorActionPreference='Stop'; Set-StrictMode -Version 2
+function Get-CimInstance { throw [UnauthorizedAccessException]::new('fixture CIM denied') }
+$installRoot='${root.replace(/'/g, "''")}'; $started=[DateTime]::UtcNow.AddMinutes(${future ? '1' : '-1'})
+${helper}
+try { @{status='PASS';items=@(Owned-Processes)} | ConvertTo-Json -Depth 4 -Compress }
+catch { @{status='FAIL';error=$_.Exception.Message} | ConvertTo-Json -Compress }`;
+    const probe = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', code],
+      { cwd: directory, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    probe.stdout.on('data', bytes => { stdout += bytes; });
+    probe.stderr.on('data', bytes => { stderr += bytes; });
+    const probeEnded = new Promise((resolve, reject) => { probe.once('exit', resolve); probe.once('error', reject); });
+    t.after(async () => { if (probe.exitCode === null && probe.signalCode === null) probe.kill(); await probeEnded; });
+    assert.equal(await probeEnded, 0, stderr);
+    return JSON.parse(stdout.trim());
+  };
+  await t.test('same-run descendant is identified using the actual process', async () => {
+    const result = await inspect(directory);
+    assert.equal(result.status, 'PASS', result.error);
+    assert.equal(result.items.length, 1);
+    assert.equal(result.items[0].ProcessId, child.pid);
+    assert.equal(result.items[0].ExecutablePath.toLowerCase(), executable.toLowerCase());
+  });
+  await t.test('a different install root is rejected', async () => {
+    const result = await inspect(path.join(directory, 'other'));
+    assert.equal(result.status, 'FAIL');
+    assert.match(result.error, /OWNERSHIP\/Unexpected/);
+  });
+  await t.test('a process predating this run is rejected', async () => {
+    const result = await inspect(directory, true);
+    assert.equal(result.status, 'FAIL');
+    assert.match(result.error, /OWNERSHIP\/Unexpected/);
+  });
+  child.kill(); await ended;
+  await t.test('an exited process leaves an empty ownership inventory', async () => {
+    const result = await inspect(directory);
+    assert.equal(result.status, 'PASS', result.error);
+    assert.deepEqual(result.items, []);
+  });
+});
+
+for (const scenario of ['button', 'menu-item', 'focus-fails', 'input-fails', 'unsupported']) {
+  test(`guest File menu action ${scenario} uses its UIA control semantics`, { timeout: 10000 }, async t => {
+    const directory = await tinyFixture(t);
+    const source = await readFile(fileURLToPath(new URL('./guest.ps1', import.meta.url)), 'utf8');
+    const start = source.indexOf('  $expand = $null', source.indexOf('function Quit-ThroughMenu('));
+    const end = source.indexOf('  $quit = $null', start);
+    const action = source.slice(start, end);
+    const code = `$ErrorActionPreference='Stop'; Set-StrictMode -Version 2
+Add-Type -TypeDefinition @'
+using System;
+namespace Windows.Automation {
+  public static class ControlType { public static object Button=new object(), MenuItem=new object(); }
+  public static class InvokePattern { public static object Pattern=new object(); }
+  public static class ExpandCollapsePattern { public static object Pattern=new object(); }
+}
+public class FileCurrent { public object ControlType; public bool HasKeyboardFocus=false; }
+public class FileFixture {
+  public FileCurrent Current=new FileCurrent(); public int Invocations=0, Expansions=0;
+  public bool TryGetCurrentPattern(object pattern, out object value) {
+    value=this; return ${scenario === 'unsupported' ? 'false' : 'true'};
+  }
+  public void SetFocus() { Current.HasKeyboardFocus=${scenario === 'focus-fails' ? 'false' : 'true'}; }
+  public void Invoke() { Invocations++; throw new Exception("unexpected Invoke"); }
+  public void Expand() { Expansions++; ${scenario !== 'menu-item' ? 'throw new Exception("native Expand failure");' : ''} }
+}
+public static class G1Window {
+  public static int Opens=0;
+  public static void OpenFileMenu(IntPtr handle,int pid) {
+    if(handle.ToInt64()!=42 || pid!=100) throw new Exception("Unowned target");
+    Opens++; ${scenario === 'input-fails' ? 'throw new Exception("native input failure");' : ''}
+  }
+}
+'@
+$file=[FileFixture]::new()
+$file.Current.ControlType=${scenario === 'unsupported' ? '[object]::new()' : `[Windows.Automation.ControlType]::${scenario === 'menu-item' ? 'MenuItem' : 'Button'}`}
+$process=@{Id=100;MainWindowHandle=[IntPtr]42}; $limit=15000
+function Check-Time([long]$value) { if($value -ne 15000) { throw 'Deadline changed' } }
+try { ${action}; @{status='PASS';invocations=$file.Invocations;expansions=$file.Expansions;opens=[G1Window]::Opens} | ConvertTo-Json -Compress }
+catch { @{status='FAIL';error=$_.Exception.Message;invocations=$file.Invocations;expansions=$file.Expansions;opens=[G1Window]::Opens} | ConvertTo-Json -Compress }`;
+    const child = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', code],
+      { cwd: directory, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', bytes => { stdout += bytes; }); child.stderr.on('data', bytes => { stderr += bytes; });
+    const ended = new Promise((resolve, reject) => { child.once('exit', resolve); child.once('error', reject); });
+    t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill(); await ended; });
+    assert.equal(await ended, 0, stderr);
+    const result = JSON.parse(stdout.trim());
+    assert.equal(result.expansions, scenario === 'menu-item' ? 1 : 0);
+    assert.equal(result.invocations, 0);
+    assert.equal(result.opens, scenario === 'button' || scenario === 'input-fails' ? 1 : 0);
+    assert.equal(result.status, scenario === 'button' || scenario === 'menu-item' ? 'PASS' : 'FAIL', result.error);
+    if (scenario === 'focus-fails') assert.match(result.error, /QUIT\/File not focused/);
+    if (scenario === 'input-fails') assert.match(result.error, /native input failure/);
+    if (scenario === 'unsupported') assert.match(result.error, /UIA_UNSUPPORTED\/File menu cannot open/);
+  });
+}
+
+for (const scenario of ['uia-zero', 'uia-matches', 'foreign-native', 'no-native', 'disabled', 'offscreen', 'missing', 'page-item']) {
+  test(`guest Quit lookup ${scenario} requires native window ownership and a visible menu action`, { timeout: 10000 }, async t => {
+    const directory = await tinyFixture(t);
+    const source = await readFile(fileURLToPath(new URL('./guest.ps1', import.meta.url)), 'utf8');
+    const start = source.indexOf('function Find-QuitAction(');
+    assert.ok(start >= 0, 'The production menu ownership boundary must exist');
+    const helper = source.slice(start, source.indexOf('\nfunction Quit-ThroughMenu(', start));
+    const nativeHandle = scenario === 'foreign-native' ? 43 : scenario === 'no-native' ? 0 : 42;
+    const uiaPid = scenario === 'uia-zero' ? 0 : 100;
+    const code = `$ErrorActionPreference='Stop'; Set-StrictMode -Version 2
+Add-Type -TypeDefinition @'
+using System;
+namespace Windows.Automation {
+  public static class ControlType { public static object Menu=new object(), MenuItem=new object(); }
+  public static class AutomationElement { public static object RootElement, ProcessIdProperty=new object(), ControlTypeProperty=new object(); }
+  public static class Condition { public static object TrueCondition=new object(); }
+  public enum TreeScope { Children=2, Descendants=4 }
+  public class PropertyCondition { public object Value; public PropertyCondition(object property, object value) { Value=value; } }
+}
+public static class G1Window {
+  public static uint GetWindowThreadProcessId(IntPtr handle, out uint pid) { pid=(uint)(handle.ToInt64()==42?100:200); return 1; }
+}
+'@
+$script:queries=0
+$nativeRoot=[pscustomobject]@{Current=@{ProcessId=${uiaPid};NativeWindowHandle=${nativeHandle}}}
+$nativeRoot | Add-Member -MemberType ScriptMethod -Name FindAll -Value {
+  param($scope,$condition)
+  if($scope -ne [Windows.Automation.TreeScope]::Descendants -or $condition.Value -ne [Windows.Automation.ControlType]::Menu) { throw 'Expected menu boundary' }
+  if('${scenario}' -eq 'page-item') { return @() }
+  return @{menu=$true}
+}
+$desktop=[pscustomobject]@{}
+$desktop | Add-Member -MemberType ScriptMethod -Name FindAll -Value {
+  param($scope,$condition)
+  if($scope -ne [Windows.Automation.TreeScope]::Children) { throw 'Expected desktop children only' }
+  if($condition -eq [Windows.Automation.Condition]::TrueCondition -or $condition.Value -eq ${uiaPid}) { return $nativeRoot }
+  return @()
+}
+[Windows.Automation.AutomationElement]::RootElement=$desktop
+function Find-Control($root,[string]$name,$type) {
+  $script:queries++
+  if($name -eq 'Quit' -and $type -eq [Windows.Automation.ControlType]::MenuItem -and '${scenario}' -ne 'missing') {
+    return @{Current=@{IsEnabled=${scenario === 'disabled' ? '$false' : '$true'};IsOffscreen=${scenario === 'offscreen' ? '$true' : '$false'}}}
+  }
+  return $null
+}
+${helper}
+try { $found=Find-QuitAction @{Id=100}; @{status='PASS';action=$(if($null -ne $found){$found.action}else{$null});queries=$script:queries} | ConvertTo-Json -Compress }
+catch { @{status='FAIL';error=$_.Exception.Message;queries=$script:queries} | ConvertTo-Json -Compress }`;
+    const child = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', code],
+      { cwd: directory, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', bytes => { stdout += bytes; }); child.stderr.on('data', bytes => { stderr += bytes; });
+    const ended = new Promise((resolve, reject) => { child.once('exit', resolve); child.once('error', reject); });
+    t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill(); await ended; });
+    assert.equal(await ended, 0, stderr);
+    const result = JSON.parse(stdout.trim());
+    assert.equal(result.status, 'PASS', result.error);
+    assert.equal(result.action, scenario === 'uia-zero' || scenario === 'uia-matches' ? 'File/Quit' : null);
+    if (scenario === 'foreign-native' || scenario === 'no-native' || scenario === 'page-item') assert.equal(result.queries, 0);
+  });
+}
+
+for (const scenario of ['visible', 'hidden', 'hidden-button', 'page-button', 'unsupported', 'focus-denied']) {
+  test(`guest File menu discovery ${scenario} stays within the original Quit deadline`, { timeout: 10000 }, async t => {
+    const directory = await tinyFixture(t);
+    const source = await readFile(fileURLToPath(new URL('./guest.ps1', import.meta.url)), 'utf8');
+    const helperStart = source.indexOf('function Find-FileControl(');
+    assert.ok(helperStart >= 0, 'The production menu-bar boundary must exist');
+    const start = helperStart;
+    const end = source.indexOf('  $expand = $null', start);
+    const discovery = `${source.slice(start, end)}\nreturn $file\n}`;
+    const code = `$ErrorActionPreference='Stop'; Set-StrictMode -Version 2
+Add-Type -TypeDefinition @'
+using System;
+namespace Windows.Automation {
+  public static class ControlType { public static object MenuItem=new object(), Button=new object(), MenuBar=new object(); }
+  public static class AutomationElement { public static object ControlTypeProperty=new object(); }
+  public enum TreeScope { Descendants=4 }
+  public class PropertyCondition { public object Value; public PropertyCondition(object property, object value) { Value=value; } }
+}
+public static class G1Window {
+  public static bool Visible=${scenario === 'visible' || scenario === 'page-button' ? 'true' : 'false'};
+  public static int Reveals=0;
+  public static void RevealMenu(IntPtr handle, int pid) {
+    Reveals++;
+    if(handle.ToInt64()!=42 || pid!=100) throw new Exception("Unowned target");
+    ${scenario === 'focus-denied' ? 'throw new Exception("QUIT/Window not foreground");' : scenario === 'unsupported' ? '' : 'Visible=true;'}
+  }
+}
+'@
+$script:elapsed=0
+function Check-Time([long]$limit) { if($script:elapsed -ge $limit) { throw 'TIMEOUT/QUIT' } }
+function Start-Sleep { param([int]$Milliseconds) $script:elapsed += $Milliseconds }
+$nativeRoot=[pscustomobject]@{owned=$true}
+$nativeRoot | Add-Member -MemberType ScriptMethod -Name FindFirst -Value {
+  param($scope,$condition)
+  if($scope -ne [Windows.Automation.TreeScope]::Descendants -or $condition.Value -ne [Windows.Automation.ControlType]::MenuBar) { throw 'Expected menu bar boundary' }
+  if([G1Window]::Visible -and '${scenario}' -ne 'page-button') { return @{menuBar=$true} } return $null
+}
+function Main-Window($process) { return $nativeRoot }
+function Find-Control($root, [string]$name, $type) {
+  if([G1Window]::Visible -and $name -eq 'File' -and $type -eq [Windows.Automation.ControlType]::${scenario.includes('button') ? 'Button' : 'MenuItem'}) { return @{Name='File';Current=@{IsEnabled=$true;IsOffscreen=$false}} }
+  return $null
+}
+${discovery}
+try { $file=Quit-ThroughMenu @{Id=100;MainWindowHandle=[IntPtr]42} 15000; @{status='PASS';name=$file.Name;elapsed=$script:elapsed;reveals=[G1Window]::Reveals} | ConvertTo-Json -Compress }
+catch { @{status='FAIL';error=$_.Exception.Message;elapsed=$script:elapsed;reveals=[G1Window]::Reveals} | ConvertTo-Json -Compress }`;
+    const child = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', code],
+      { cwd: directory, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', bytes => { stdout += bytes; }); child.stderr.on('data', bytes => { stderr += bytes; });
+    const ended = new Promise((resolve, reject) => { child.once('exit', resolve); child.once('error', reject); });
+    t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill(); await ended; });
+    assert.equal(await ended, 0, stderr);
+    const result = JSON.parse(stdout.trim());
+    if (scenario === 'visible' || scenario.startsWith('hidden')) {
+      assert.equal(result.status, 'PASS', result.error); assert.equal(result.name, 'File');
+      assert.equal(result.reveals, scenario.startsWith('hidden') ? 1 : 0);
+    } else {
+      assert.equal(result.status, 'FAIL'); assert.equal(result.reveals, 1);
+      assert.match(result.error, scenario === 'focus-denied' ? /QUIT\/Window not foreground/ : /TIMEOUT\/QUIT/);
+      if (scenario !== 'focus-denied') assert.equal(result.elapsed, 15000);
+    }
+  });
+}
+
 test('guarded exclusive copy cancels before the next write and never overwrites', async t => {
   const directory = await tinyFixture(t);
   const source = path.join(directory, 'source.bin');
@@ -706,6 +972,60 @@ async function connectorFailure(connection) {
     await new Promise(resolve => setTimeout(resolve, 5));
   }
   assert.fail('Connector did not report its native exit promptly');
+}
+
+for (const scenario of ['delayed-login', 'missing-login', 'native-failure']) {
+  test(`launcher handoff ${scenario} requires actual login evidence before one guest dispatch`, { timeout: 5000 }, async t => {
+    const client = await connectorFixture(t, `process.exit(${scenario === 'native-failure' ? 7 : 0});`);
+    const f = fixture(); const original = f.deps.execute;
+    let probes = 0, dispatches = 0;
+    f.deps.connect = async (id, options) => {
+      const connection = await runtime.connect(id, options, client.spawnChild);
+      if (client.child().exitCode === null) await new Promise(resolve => client.child().once('exit', resolve));
+      return connection;
+    };
+    f.deps.execute = async (args, options) => {
+      if (isLoginProbe(args)) {
+        probes++;
+        if (scenario === 'missing-login' || probes < 3) throw Object.assign(new Error('no active login'), { code: 2147943712 });
+      } else if (args[0] === 'exec') { dispatches++; assert.equal(probes, 4, 'Handoff health is rechecked immediately before the one payload'); }
+      return original(args, options);
+    };
+    const result = await runHarness('run', f.deps);
+    assert.equal(result.cleanup.status, 'PASS'); assert.equal(result.admissionCleanup.status, 'PASS');
+    assert.ok(client.child().stdout.destroyed && client.child().stderr.destroyed);
+    if (scenario === 'delayed-login') {
+      assert.equal(result.status, 'PASS'); assert.equal(result.stages.CONNECT, 'PASS');
+      assert.equal(probes, 6); assert.equal(dispatches, 1);
+    } else {
+      assert.equal(result.status, 'FAIL'); assert.equal(result.stage, 'CONNECT'); assert.equal(dispatches, 0);
+      assert.equal(result.category, scenario === 'missing-login' ? 'TIMEOUT' : 'CONNECTION_LOST');
+      if (scenario === 'missing-login') { assert.ok(probes > 0 && probes <= 60); assert.equal(result.loginReadiness.lastNativeError.exitCode, 2147943712); }
+      else { assert.equal(result.exitCode, 7); assert.equal(probes, 0); }
+    }
+  });
+}
+
+for (const [lostAt, stage, dispatches] of [[2, 'EXEC', 0], [3, 'GUEST', 1], [4, 'INPUTS_AFTER', 1]]) {
+  test(`handoff session loss at ${stage} retains the native error and never retries the payload`, { timeout: 5000 }, async t => {
+    const client = await connectorFixture(t, 'process.exit(0);');
+    const f = fixture(); const original = f.deps.execute;
+    let probes = 0, payloads = 0;
+    f.deps.connect = async (id, options) => {
+      const connection = await runtime.connect(id, options, client.spawnChild);
+      if (client.child().exitCode === null) await new Promise(resolve => client.child().once('exit', resolve));
+      return connection;
+    };
+    f.deps.execute = async (args, options) => {
+      if (isLoginProbe(args) && ++probes === lostAt) throw Object.assign(new Error('active session lost'), { code: 2147943712 });
+      if (args[0] === 'exec' && !isLoginProbe(args)) payloads++;
+      return original(args, options);
+    };
+    const result = await runHarness('run', f.deps);
+    assert.equal(result.status, 'FAIL'); assert.equal(result.stage, stage); assert.equal(result.exitCode, 2147943712);
+    assert.equal(result.error, 'active session lost'); assert.equal(probes, lostAt); assert.equal(payloads, dispatches);
+    assert.equal(result.cleanup.status, 'PASS'); assert.equal(result.admissionCleanup.status, 'PASS');
+  });
 }
 
 test('connector exit0 destroys owned pipes without waiting for a descendant retaining write handles', { timeout: 5000 }, async t => {

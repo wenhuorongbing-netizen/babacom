@@ -309,13 +309,20 @@ export async function connect(id, options, spawnChild = spawn) {
     }
   };
   let problem;
+  let loginConfirmed = false;
   let exited = false;
   let closing = false;
   let closePromise;
   child.on('error', error => { problem = error; if (!child.pid) exited = true; stopCapture(); });
   child.on('exit', code => { exited = true; if (!closing) problem = Object.assign(failure('CONNECTION_LOST'), { code }); stopCapture(); });
   const connection = {
-    check() { if (problem) throw problem; },
+    check({ awaitingLogin = false } = {}) {
+      // A clean launcher exit may hand the window to a separate client. It is only
+      // usable after the harness proves ExistingLogin, never on exit 0 alone.
+      if (problem && !(problem.category === 'CONNECTION_LOST' && problem.code === 0 && (awaitingLogin || loginConfirmed))) throw problem;
+    },
+    confirmLogin() { connection.check({ awaitingLogin: true }); loginConfirmed = true; },
+    requiresLoginProbe() { return problem?.category === 'CONNECTION_LOST' && problem.code === 0; },
     diagnostics() { return Object.fromEntries(captures.map(capture => [capture.name, {
       text: safeError(Buffer.concat(capture.chunks, capture.bytes).toString('utf8')), capturedBytes: capture.bytes,
       byteLimit, truncated: capture.truncated, potentiallyIncomplete: true, ...(capture.error ? { captureError: { ...capture.error } } : {}),
@@ -363,7 +370,7 @@ export function validateGuest(value, id) {
       value.installerSha256 !== FIXED.sha256 || value.configSha256 !== configHash() ||
       !['File/Quit', 'File/Exit'].includes(value.quitAction) || value.screenshot !== 'welcome.png' ||
       !/^[0-9a-f]{64}$/.test(value.screenshotSha256 ?? '') || !Array.isArray(value.controls) ||
-      !value.controls.some(item => /^Welcome to Element$/i.test(item)) ||
+      !value.controls.some(item => /^Be in your element$/i.test(item)) ||
       !value.controls.some(item => /^Sign in$/i.test(item)) || !value.controls.some(item => /^Create account$/i.test(item)) ||
       ['ENVIRONMENT', 'INSTALL', 'WELCOME', 'QUIT'].some(key => value.stages?.[key] !== 'PASS')) throw failure('INVALID_GUEST_RESULT');
   return value;
@@ -465,6 +472,15 @@ export async function runHarness(mode, injected = {}) {
     } finally { clearTimeout(timer); external?.removeEventListener('abort', cancel); }
   }
   const step = async (name, action, cap = 15000) => { stage = name; result.stage = name; const value = await bounded(action, cap); result.stages[name] = 'PASS'; return value; };
+  const checkSession = async options => {
+    connection.check();
+    if (connection.requiresLoginProbe?.()) {
+      // After launcher handoff, the active login is the health signal. Never retry
+      // a failed post-readiness probe or dispatch the installation a second time.
+      validateExec(await deps.execute(['exec', '--id', result.runId, '--run-as', 'ExistingLogin', '--command', LOGIN_PROBE, '--raw'], options));
+      connection.check(); options.check();
+    }
+  };
   const closeOwned = action => {
     // Register the returned close promise immediately, before checking the remaining budget. An exhausted
     // deadline cannot make a resource close disappear from the final drain/termination path.
@@ -500,29 +516,30 @@ export async function runHarness(mode, injected = {}) {
         // Readiness probes share this step's deadline; the guest payload is never retried.
         result.loginReadiness = { attempts: 0 };
         while (true) {
-          options.check(); connection.check();
+          options.check(); connection.check({ awaitingLogin: true });
           result.loginReadiness.attempts++;
           let response;
           try { response = await deps.execute(['exec', '--id', id, '--run-as', 'ExistingLogin', '--command', LOGIN_PROBE, '--raw'], options); }
           catch (error) {
             if (error.code !== 2147943712) throw error;
             result.loginReadiness.lastNativeError = errorRecord(error);
-            connection.check(); options.check();
+            connection.check({ awaitingLogin: true }); options.check();
             await deps.wait(250);
             options.check();
             continue;
           }
-          connection.check(); options.check();
+          connection.check({ awaitingLogin: true }); options.check();
           validateExec(response);
+          connection.confirmLogin?.();
           break;
         }
       });
       const guestDispatchedAt = deps.now();
-      await step('EXEC', async options => { connection.check(); validateExec(await deps.execute(['exec', '--id', id, '--run-as', 'ExistingLogin', '--command', guestCommand(id), '--raw'], options)); });
+      await step('EXEC', async options => { await checkSession(options); validateExec(await deps.execute(['exec', '--id', id, '--run-as', 'ExistingLogin', '--command', guestCommand(id), '--raw'], options)); });
       stage = 'GUEST'; result.stage = stage;
       while (true) {
         check(); connection.check();
-        const value = await bounded(options => deps.readGuest(prepared, id, options));
+        const value = await bounded(async options => { await checkSession(options); return deps.readGuest(prepared, id, options); });
         if (value?.status === 'PENDING') {
           result.guestProgress = value;
           const cap = { ENVIRONMENT: 15000, INSTALL: 120000, WELCOME: 60000, QUIT: 15000 }[value.phase];
@@ -533,7 +550,7 @@ export async function runHarness(mode, injected = {}) {
       }
       result.stages.GUEST = 'PASS';
       await step('INPUTS_AFTER', options => deps.inputsUnchanged(prepared, options), 60000);
-      connection.check();
+      await bounded(checkSession);
     }
     result.status = 'PASS';
   } catch (error) {
