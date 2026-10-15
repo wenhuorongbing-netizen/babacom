@@ -1,12 +1,12 @@
 # BabaCom Matrix 迁移 PRD
 
-状态：规划提案，关联 [#50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)。2026-10-13；事实基线为 `c9ec3cfab593e9cd03f0cf320a30bcdeae19edd0`。用户已授权制定并发布计划；本 PR 不实施迁移、不变更既有产品契约、不部署或删除代码。技术约定见 [迁移规格](Matrix-migration-spec.md)，执行清单见 [Backlog](Matrix-migration-backlog.md)。
+关联 [#50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)，规划事实基线为2026-10-13的 `c9ec3cfab593e9cd03f0cf320a30bcdeae19edd0`。本文维护产品结果与迁移约束；最新进展见 [README 当前验收边界](../README.md#current-acceptance-boundary)，签认与证据来源见 [04](04-open-decisions.md)。技术约定见 [迁移规格](Matrix-migration-spec.md)，执行索引见 [Backlog](Matrix-migration-backlog.md)。本文不授予生产切换、真实数据导入或旧代码删除权限。
 
 ## 1. 摘要
 
 将 BabaCom 从自建桌面语音原型迁移到标准 Matrix 生态，复用成熟账号、社区、消息和实时通信能力，把自己的开发投入集中在私人游戏社区体验、Windows 游戏共享和中德可用性。迁移必须同时收回重复身份、权限、媒体生命周期、构建与测试的维护负担。
 
-Matrix 是协议，不是单一可直接替换的“内核”。本计划评估维护中的开源实现，优先配置和窄扩展；不把创建深度 fork 当作完成迁移。现有代码仍是自建方案，尚未使用 Matrix。
+Matrix 是协议，不是单一可直接替换的“内核”。本计划评估维护中的开源实现，优先配置和窄扩展；不把创建深度 fork 当作完成迁移。正式产品切换仍未完成；隔离实验的进展不等于产品已经迁移，具体边界见 [README](../README.md#current-acceptance-boundary)。
 
 ## 2. 责任与决策
 
@@ -18,7 +18,7 @@ Matrix 是协议，不是单一可直接替换的“内核”。本计划评估�
 | 每票 DRI / Reviewer | Ready 前指定一个实施负责人、独立审查者及精确范围；未指定就保持 DRAFT |
 | 测试者 / 运营者 | 提供获准设备、节点与真实会话；对听音、采集释放、恢复和运行证据负责 |
 
-原规划全局 D9 人选仍未指派，本提案不替其任命。既有 Gemini UI Builder 可在适用票 Ready 后负责品牌/体验；共享配置、依赖锁与集成保持单一 writer。原战略 PO 对固定e14d7e9给FIX后，实际读取464f71a对实验契约/生产政策拆分与删除前消费者断接/覆盖交接作限范围复核，两项 **GO**，无该范围遗留阻断；不等于全PR、实验合同或部署批准。此前Edge附着两次超时是历史检查点，后来已恢复并完整回收审核；独立审查与PO结果仍分别报告。
+原规划全局 D9 人选仍未指派。既有 Gemini UI Builder 仅在适用票 Ready 后负责品牌/体验；共享配置、依赖锁与集成保持单一 writer。原战略 PO 的历史审查范围、GO/FIX及后续复核见 [04](04-open-decisions.md)；限范围建议不等于全项目、实验运行或部署批准。
 
 ## 3. 背景与问题
 

@@ -24,7 +24,7 @@ M01核对来源为24编号模块120条，加T1/T2/UI/docs清单19条，共139条
 
 首Sprint只承诺“原版基线可验证”。[#97](https://github.com/wenhuorongbing-netizen/babacom/issues/97)是M02-E/M03-E独立docs范围合同，签认后才释放受限运行；[#98](https://github.com/wenhuorongbing-netizen/babacom/issues/98)是M29-P独立控制面proof，依赖#97与M04最小固定组合，不依赖M02全部生产政策。M05必要Windows包子集在运行前另拆有独立AC/依赖/精确范围的票。M01未访问到的远端资产记录UNKNOWN及影响，阻断真实导入/切换，不阻断纯合成隔离实验。#50只验收规划，不等待九Epic完成才释放盘点。
 
-当前环境核实：WSL2.6.3/内核6.6.87.2已安装，但没有Linux发行版；未发现Docker/Podman。#98拟使用专用Ubuntu WSL+Docker Engine，仅loopback控制面，不采购或改其他服务器。运行前核实端口、镜像摘要、临时秘密与资源归属；当前尚未部署。RTC与可信TLS、两台Windows及采集同意在后续独立交付，不用HTTP本机proof冒充G1。
+历史机器环境不作为当前执行条件。最新隔离 proof 进展见 [README 当前验收边界](../README.md#current-acceptance-boundary)及 [04](04-open-decisions.md)。每张后续实施票在 Ready 前重新核实其固定版本、端口、资源归属与实际前置；RTC、可信 TLS、双真实 Windows 和采集条件仍独立验证，HTTP 本机控制面 proof 不替代 G1。
 
 ## 2. Ready / Done
 
