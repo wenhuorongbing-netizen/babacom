@@ -4,6 +4,8 @@
 
 2026-10-13已逐条核对：原36票的182条候选AC均在对应Issue，无丢失后移除这里的副本；旧全文保留在[959ad74](https://github.com/wenhuorongbing-netizen/babacom/blob/959ad74d8fdbaf7cb29fc6ec2dbf0b5f04932aaa/docs/Matrix-migration-backlog.md)。36父票仍DRAFT；文档合并不批准实验运行或生产。签认和PO审查记录只维护[04](04-open-decisions.md#d16-matrix迁移2026-10-13)。
 
+上述为带日期的父票盘点，不替代后续独立子交付的状态；当前检查点及工程改进顺序见 [04](04-open-decisions.md#matrix-quality-review-2026-10-15)，不自动改变父票AC、依赖或Ready状态。
+
 M01核对来源为24编号模块120条，加T1/T2/UI/docs清单19条，共139条未勾项，含流程模板；它们不是139个独立产品功能。Scope正文Must仍逐项核对，映射最终挂继任Issue，#60汇总例外，不再新建巨型流程副本。
 
 ## 1. Release、Sprint与依赖
@@ -24,7 +26,7 @@ M01核对来源为24编号模块120条，加T1/T2/UI/docs清单19条，共139条
 
 首Sprint只承诺“原版基线可验证”。[#97](https://github.com/wenhuorongbing-netizen/babacom/issues/97)是M02-E/M03-E独立docs范围合同，签认后才释放受限运行；[#98](https://github.com/wenhuorongbing-netizen/babacom/issues/98)是M29-P独立控制面proof，依赖#97与M04最小固定组合，不依赖M02全部生产政策。M05必要Windows包子集在运行前另拆有独立AC/依赖/精确范围的票。M01未访问到的远端资产记录UNKNOWN及影响，阻断真实导入/切换，不阻断纯合成隔离实验。#50只验收规划，不等待九Epic完成才释放盘点。
 
-当前环境核实：WSL2.6.3/内核6.6.87.2已安装，但没有Linux发行版；未发现Docker/Podman。#98拟使用专用Ubuntu WSL+Docker Engine，仅loopback控制面，不采购或改其他服务器。运行前核实端口、镜像摘要、临时秘密与资源归属；当前尚未部署。RTC与可信TLS、两台Windows及采集同意在后续独立交付，不用HTTP本机proof冒充G1。
+历史机器环境不作为当前执行条件。最新隔离 proof 进展见 [README 当前验收边界](../README.md#current-acceptance-boundary)及 [04](04-open-decisions.md)。每张后续实施票在 Ready 前重新核实其固定版本、端口、资源归属与实际前置；RTC、可信 TLS、双真实 Windows 和采集条件仍独立验证，HTTP 本机控制面 proof 不替代 G1。
 
 ## 2. Ready / Done
 

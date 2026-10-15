@@ -334,3 +334,31 @@ RTC 研究修正（**候选，运行 NOT_RUN**）：[lk-jwt-service v0.9.0](http
 下一精确合同见 [matrix-windows-install](../.agents/modules/matrix-windows-install.md)，范围票 #109：独立 docs PR 只改该清单与本文件，经独立审查、Jack 签认合并后，另票实施三个新脚本。已核实本机 Sandbox 启用、官方 CLI 0.8.107.0 及当前空实例清单；不需修改宿主功能或管理员提权。安装/启动/退出仍 **NOT_RUN**。
 
 运行固定官方 1.12.30 安装包，限新建自有 Sandbox；只读输入及 UUID 专属可写输出，禁网/麦克风/摄像头/剪贴板/打印机/vGPU，启用 ProtectedClient。安装期仅 VM 默认 profile，预置安全配置，随后独占 profile、固定本地 config 与 `--no-update`；真实欢迎页、实际安装版本与 File→Quit 正常退出均须观察。保持 D14 的跨进程立即 BUSY、确认归属后操作、创建后未确认则 cleanup=UNKNOWN 且禁止猜测 stop；总期限与失败断言写入清单。输出保留，旧材料不清理；无 host 安装、RTC、真实账号、采集或生产权限，Sandbox 结果不替代双实机 G1 与其他 release gates。
+
+### D16-G1-P2 进展校准（2026-10-15）
+
+本条更新前文历史检查点的当前性，不改写原有签认、NOT_RUN或失败记录。PR110范围已签认合并，#98控制面 proof 已由PR104合并；正式产品仍为旧原型。最新入口摘要维护于 [README](../README.md#current-acceptance-boundary)。
+
+协调者记录A报告：PR112 head `754dd4832c29c5f5629c5c65f8fc296bbc7e42d5` 的170项 runtime/artifact测试通过；自有Sandbox运行 `a1290bdc-26ea-4861-84b5-c4267f5292bd` 完成实际安装、欢迎页观察、File→Quit正常退出及自有VM清理，终端exit 0。本文档审查未重新执行这些检查，也不将协调者报告冒充本次独立运行证据。PR112仍为Draft、未合并。
+
+此结果仅属于G1-P2隔离安装启动子交付，不证明全G1、双实机游戏媒体、真人听音、物理释放、中德负载、E2EE恢复、生产切换或完整Matrix迁移。已有签认AC、Allowed Files、期限、旧活动链义务及其他release gates保持；本次校准不新增运行、采集、删除或合并授权。
+
+<a id="matrix-quality-review-2026-10-15"></a>
+
+### D16 工程质量实际复审（2026-10-15）
+
+已向“ez的游戏”中的[战略 PO](https://chatgpt.com/g/g-p-6a4aab478af48191b7e4c5e4e3dfcb4d-ezde-you-xi/c/6ac2188a-8b8c-83ee-ab67-968c584fe99f)实际发送材料，并新建[CEO｜架构与工程质量审查](https://chatgpt.com/g/g-p-6a4aab478af48191b7e4c5e4e3dfcb4d-ezde-you-xi/c/6ad0feda-23f8-83ed-a370-16ccce0ba320)，两份 GPT-6 Pro 回答均已实际回收。结论一致：六文档状态校准 GO，治理与CI FIX，完整G1、产品迁移及release HOLD；这些是独立咨询结论，不是Jack签认、GitHub批准或新的执行授权。
+
+协调者于19:00 UTC复查：main=`db23ac65de6631b5f7f3b814de448ee5dda47c2b`，PR112仍OPEN/Draft、未合并，head=`754dd4832c29c5f5629c5c65f8fc296bbc7e42d5`；main `protected=false`，rulesets为空。上文170项与Sandbox PASS仍仅为执行者回报，本轮未重跑。PO指出候选 `host-final.json` 可仍记录UNKNOWN/PENDING_AT_SERIALIZATION，最终回报来自终端JSON与退出状态，不能凭该文件单独判定PASS或FAIL。
+
+| 优先级 | 已发现不足及证据边界 | 对应现有工作 |
+|---|---|---|
+| P1 | `scope-guard.yml` 执行候选守卫并读取候选清单，候选可以参与放宽自己的边界；静态机制确认，未执行绕过实验或发现历史滥用 | M03 #62 / M26 #85：工作流、守卫、政策均取可信base，head只提供差异数据 |
+| P1 | main无平台合并保护；根规则的“CI强制”表述过强，CODEOWNERS还需核定实际负责人接受与有效权限 | 治理独立小片；检查、负责人及平台强制分别验收，不擅改权限或任命 |
+| P1 | 当前scope/secrets CI不运行Matrix Windows回归；本地通过不能代替持续验证 | M25 #84：Windows托管runner执行真实170项，不调用安装/启动入口 |
+| P2/P3 | feature禁止互相导入缺少自动断言；生产build依赖测试peer构建。未确认现有非法跨feature导入，也未证明peer进入安装包；main多职责只是后续拆分候选 | M26 #85 / M25 #84：正反例约束、消费者清单和最小拆分，避免大重构 |
+| P1 | 固定源码构建来源、完整发货许可与品牌义务、上游升级/回退尚未闭合；不否定已有官方包隔离核验 | M04 #63 / M05 #64 / M35 #94，分别补证据 |
+
+下一步按三个独立小片推进：①本次只校准README、地图、PRD、spec、Backlog和04，04历史保持字节前缀；②另行冻结可信守卫三文件候选（`.github/workflows/scope-guard.yml`、`.agents/scope_guard.test.mjs`、`AGENTS.md`），验证head扩清单/替换守卫仍不能自授权、中文/NUL/重命名两端及base缺失失败，不在可信事件执行候选代码；③PR112形成独立获准的受审测试基线后，仅新增 `.github/workflows/matrix-windows-regression.yml`，运行runtime/artifact测试，预期170 PASS、零失败/取消/跳过/todo，不下载或执行Element、不启动Sandbox、不采集设备。每片仍需精确范围、实际Validation与最终head两轴审查；此处记录候选计划，不提前合并PR112或改变父票状态。
+
+架构沿用现有spec：Matrix账号/设备/密钥长期所有权与通话/轨道短期生命周期分开，UI投影不成为第二权限权威，停止后晚到回调不能重新发布。完成上述小片后继续固定RTC组合与游戏音频G1，不扩大UI；M25覆盖与消费者核对、M36切换观察及独立断接、M33/M34退役按原出口推进。05仍是唯一协作指南，不新增CEO规范、平行看板或重复巨型报告，也不因本审查删除旧代码或证据。

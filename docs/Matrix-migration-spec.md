@@ -1,6 +1,6 @@
 # Matrix 迁移技术规格
 
-关联 [PRD](PRD-matrix-migration.md)、[#50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)、[Backlog](Matrix-migration-backlog.md)。2026-10-13，基线 `c9ec3cf`。状态：**架构迁移提案；当前未实现 Matrix，技术 GO / 新契约签认未完成。原战略 PO 先对e14d7e9给FIX，再实际读取464f71a复核两处依赖修正，均GO，无该范围遗留阻断；不等于全PR/实验/部署批准。** 本文可用于分票和审查，不自动覆盖已签认 T1/T2。用户后续已授权隔离部署准备；具体实验范围与新依赖仍单独冻结，不构成生产切换或删除授权。
+关联 [PRD](PRD-matrix-migration.md)、[#50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)、[Backlog](Matrix-migration-backlog.md)。架构规划基线为2026-10-13的 `c9ec3cf`。本文定义目标边界、继任契约和发布 Gate，不自动覆盖已签认 T1/T2。最新实施进展与验收边界见 [README](../README.md#current-acceptance-boundary)，历史 PO 复核、签认和运行证据来源见 [04](04-open-decisions.md)。隔离实验授权不构成生产切换、真实数据导入或旧代码删除授权。
 
 ## 1. 决策与实验分开
 
@@ -17,7 +17,7 @@
 
 ## 2. 当前事实与可追溯来源
 
-- 当前 BabaCom 是 Electron → FastAPI 身份/房间授权/JWT → LiveKit 的原型，不是 Matrix。PR49 已合并 UI 外壳；#18 真人验收未完成。
+- 当前正式产品链路是 Electron → FastAPI 身份/房间授权/JWT → LiveKit 的原型，不是 Matrix。PR49 已合并 UI 外壳；#18 真人验收未完成。
 - [Element v1.12.30](https://github.com/element-hq/element-web/releases/tag/v1.12.30) 是本次研究固定的客户端候选。Windows Desktop 在同一仓库 `apps/desktop/`，不要基于旧归档桌面仓库开工。该版本移除旧 Module/Customisation API，并有新的 module-api 2.2；必须针对实际扩展入口设计。
 - [该版本 web package.json](https://github.com/element-hq/element-web/blob/v1.12.30/apps/web/package.json) 固定 `matrix-js-sdk` 43.0.0 与 embedded Element Call 0.26.0。研究到的其他组件最新版不能拼成已验证组合。M04冻结所有版本、提交/镜像摘要、配置、锁文件及升级路径。
 - 该版本 [Desktop 共享 IPC](https://github.com/element-hq/element-web/blob/v1.12.30/apps/desktop/src/ipc.ts#L151-L165) 的已检查回调只传 video；[主进程 handler](https://github.com/element-hq/element-web/blob/v1.12.30/apps/desktop/src/electron-main.ts#L376-L398) 相关路径需实验核实系统音频。这是源码缺口线索，**不是全部 Call 路径不支持音频的证明，也不是 Windows 运行结果**。
