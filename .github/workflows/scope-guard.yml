@@ -1,55 +1,112 @@
 name: scope-guard
 
-# 边界检查：PR 声明自己属于哪个模块，CI 比对 diff 与该模块的 allowed-files。
-# 这条让 AGENTS.md 里「越界直接拒绝」从靠自觉变成技术上进不了 main。
+# Scope decisions use trusted base code/policy; candidate code runs separately.
+# Platform merge enforcement still requires branch protection / required checks.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
 
 jobs:
   scope:
+    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Test scope guard
-        run: node --test .agents/scope_guard.test.mjs
-
-      - name: Read module id from PR body
-        id: module
+      - name: Check changed files using trusted base policy
+        id: trusted_scope
+        working-directory: trusted
+        shell: node {0}
         env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          id=$(printf '%s' "$PR_BODY" | grep -m1 -oP '^\s*Module:\s*\K[\w.\-]+' || true)
-          if [ -z "$id" ]; then
-            echo "::error::PR 正文缺少 'Module: <模块id>' 一行。"
-            echo "::error::取值必须是 .agents/modules/ 里的模块 id，例如 3.1 或 docs。"
-            exit 1
-          fi
-          echo "id=$id" >> "$GITHUB_OUTPUT"
-          echo "模块: $id"
+          const { spawnSync } = require("node:child_process");
+          const { resolve } = require("node:path");
+          const { BASE_SHA: base, HEAD_SHA: head, PR_NUMBER: number, PR_BODY: body = "" } = process.env;
+          function fail(message) {
+            console.error(message);
+            process.exit(1);
+          }
+          if (!/^[0-9a-f]{40}$/.test(base || "") || !/^[0-9a-f]{40}$/.test(head || "")) {
+            fail("Missing or invalid base/head SHA");
+          }
+          if (!/^[1-9][0-9]*$/.test(number || "")) fail("Missing or invalid PR number");
+          const moduleId = body.match(/^[ \t]*Module:[ \t]*([A-Za-z0-9_.-]+)[ \t]*\r?$/m)?.[1];
+          if (!moduleId) fail("PR body must contain Module: <module-id>");
+          function run(command, args, input) {
+            const result = spawnSync(command, args, { input, timeout: 60_000, maxBuffer: 16 * 1024 * 1024 });
+            if (result.error || result.status !== 0) {
+              process.stderr.write(result.stderr || "");
+              fail(`${command} failed: ${result.error?.message || result.status}`);
+            }
+            return result.stdout;
+          }
+          const git = (args) => run("git", args);
+          if (git(["rev-parse", "HEAD"]).toString("utf8").trim() !== base) {
+            fail("Checkout does not match trusted base");
+          }
+          git(["cat-file", "-e", `${base}^{commit}`]);
+          // This public repository needs no persisted credential to read its PR refs.
+          git(["fetch", "--no-tags", "origin", `+refs/pull/${number}/head:refs/scope-candidate`]);
+          if (git(["rev-parse", "refs/scope-candidate"]).toString("utf8").trim() !== head) {
+            fail("Candidate changed after the event; refusing a stale scope check");
+          }
+          git(["cat-file", "-e", `${head}^{commit}`]);
+          const diffOptions = ["--name-only", "--no-renames", "-z"];
+          const changed = git(["diff", ...diffOptions, `${base}...${head}`]);
+          console.log(`Scope policy base: ${base}; candidate head: ${head}; module: ${moduleId}`);
+          process.stdout.write(run(process.execPath, [resolve(".agents/scope_guard.mjs"), moduleId], changed));
 
-      - name: Check changed files against module boundary
-        run: |
-          git diff --name-only --no-renames -z \
-            "origin/${{ github.base_ref }}...HEAD" \
-            | node .agents/scope_guard.mjs "${{ steps.module.outputs.id }}"
-
-  secrets:
+  candidate-tests:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test candidate scope guard
+        run: node --test .agents/scope_guard.test.mjs
+
+  secrets:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Scan for committed secrets
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
