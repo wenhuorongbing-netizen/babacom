@@ -1,0 +1,33 @@
+name: Matrix Windows regression
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-regression:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run Matrix Windows regression tests
+        env:
+          # Keep fixture roots consistent with native process paths, avoiding RUNNER~1 aliases.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        shell: pwsh
+        run: |
+          node --test --test-reporter=spec infra/staging/matrix-windows-proof/runtime.test.mjs infra/staging/matrix-windows-proof/artifact.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
