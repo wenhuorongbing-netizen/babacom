@@ -22,14 +22,11 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Diagnose Windows temporary paths
-        shell: pwsh
-        run: |
-          $paths = New-Object -ComObject Scripting.FileSystemObject
-          Write-Output "TEMP=$env:TEMP; TMP=$env:TMP; RUNNER_TEMP=$env:RUNNER_TEMP"
-          Write-Output "TEMP_LONG=$($paths.GetFolder($env:TEMP).Path); RUNNER_TEMP_LONG=$($paths.GetFolder($env:RUNNER_TEMP).Path)"
-
       - name: Run Matrix Windows regression tests
+        env:
+          # Keep fixture roots consistent with native process paths, avoiding RUNNER~1 aliases.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         shell: pwsh
         run: |
           node --test --test-reporter=spec infra/staging/matrix-windows-proof/runtime.test.mjs infra/staging/matrix-windows-proof/artifact.test.mjs
