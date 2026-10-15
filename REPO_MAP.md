@@ -19,6 +19,8 @@
 | `tests/accounts/`、`tests/permissions/`、`tests/tokens/`、`tests/ratelimit/` | HTTP/会话/权限/限流测试 |
 | `.agents/modules/`、`.github/`、`.claude/` | 文件边界、检查器、CODEOWNERS、CI 与共享 harness |
 | `infra/AGENTS.md` | 基础设施规则；存在规划不代表已部署 |
+| `infra/staging/matrix-proof/` | 已合并的隔离 Matrix 控制面 proof，不是正式产品接线 |
+| `infra/staging/matrix-windows-proof/` | main 已有安装包只读核验器；安装/启动/退出三个文件仍属 PR112 候选，状态与证据见 [04](docs/04-open-decisions.md#matrix-quality-review-2026-10-15) |
 | `scope.html`、`teams.html` | 原始范围/团队规划输入，不是产品完成证明 |
 
 ## 按任务阅读

@@ -19,8 +19,8 @@ The current product remains the custom prototype. Matrix migration progress and 
 The isolated Matrix control-plane proof was merged in [PR104](https://github.com/wenhuorongbing-netizen/babacom/pull/104).
 For G1-P2, the coordinator reports a passing local Sandbox install/start/File→Quit/VM-cleanup run at
 [PR112](https://github.com/wenhuorongbing-netizen/babacom/pull/112) head `754dd483`; that PR remains draft and unmerged.
-This document review did not rerun that acceptance. Full G1, product cutover and the Matrix migration remain incomplete.
-Evidence provenance and updates to earlier checkpoints are recorded in [the decisions](docs/04-open-decisions.md).
+This document review did not rerun that acceptance. Full G1, product cutover, Matrix migration and release acceptance remain incomplete.
+Evidence provenance, the actual PO/CEO review and the next small improvements are recorded in [the decisions](docs/04-open-decisions.md#matrix-quality-review-2026-10-15).
 
 T1 admission, T2 voice code and the first community UI shell are merged.
 [#18](https://github.com/wenhuorongbing-netizen/babacom/issues/18) still requires real two-device listening,
