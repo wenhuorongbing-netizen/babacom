@@ -1,0 +1,54 @@
+{
+    admin off
+    auto_https off
+    persist_config off
+    log {
+        output stderr
+        format json
+        level WARN
+    }
+}
+https://{{DOMAIN_RAW}}:443 {
+    tls /run/secrets/tls.crt /run/secrets/tls.key
+    bind 0.0.0.0
+    @openid path /_matrix/federation/v1/openid/userinfo
+    handle @openid {
+        reverse_proxy synapse:8009 {
+            @redirect status 3xx
+            handle_response @redirect {
+                header -Location
+                header -Refresh
+                respond "" 502
+            }
+        }
+    }
+    handle /.well-known/matrix/server {
+        header Content-Type application/json
+        respond `{"m.server":"{{DOMAIN_RAW}}:443"}` 200
+    }
+    handle /.well-known/matrix/client {
+        header Content-Type application/json
+        respond `{"m.homeserver":{"base_url":"https://{{DOMAIN_RAW}}"}}` 200
+    }
+    handle /_matrix/client/* {
+        reverse_proxy synapse:8008
+    }
+    handle /_synapse/admin/v1/register {
+        reverse_proxy synapse:8008
+    }
+    handle /sfu/get {
+        reverse_proxy auth:8080
+    }
+    handle /get_token {
+        reverse_proxy auth:8080
+    }
+    handle /rtc* {
+        reverse_proxy livekit:7880
+    }
+    handle /twirp/livekit.RoomService/* {
+        reverse_proxy livekit:7880
+    }
+    handle {
+        respond "" 403
+    }
+}

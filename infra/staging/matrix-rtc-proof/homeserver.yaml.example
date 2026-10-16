@@ -1,0 +1,35 @@
+server_name: {{DOMAIN}}
+public_baseurl: https://{{DOMAIN_RAW}}:{{PORT}}/
+pid_file: /tmp/homeserver.pid
+web_client_location: null
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    x_forwarded: true
+    bind_addresses: ['0.0.0.0']
+    resources: [{names: [client, federation], compress: false}]
+database:
+  name: sqlite3
+  args: {database: /data/homeserver.db}
+log_config: /run/secrets/log.config
+media_store_path: /data/media_store
+signing_key_path: /data/homeserver.signing.key
+registration_shared_secret: {{REGISTRATION_SECRET}}
+macaroon_secret_key: {{MACAROON_SECRET}}
+form_secret: {{FORM_SECRET}}
+report_stats: false
+enable_registration: false
+enable_metrics: false
+enable_media_repo: false
+federation_domain_whitelist: []
+trusted_key_servers: []
+suppress_key_server_warning: true
+app_service_config_files: [/run/secrets/appservice.yaml]
+experimental_features:
+  msc3266_enabled: true
+  msc4222_enabled: true
+  msc4140_enabled: true
+  msc4502_enabled: true
+  msc4512_enabled: true
+max_upload_size: 1M
