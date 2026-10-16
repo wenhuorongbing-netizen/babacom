@@ -362,3 +362,56 @@ RTC 研究修正（**候选，运行 NOT_RUN**）：[lk-jwt-service v0.9.0](http
 下一步按三个独立小片推进：①本次只校准README、地图、PRD、spec、Backlog和04，04历史保持字节前缀；②另行冻结可信守卫三文件候选（`.github/workflows/scope-guard.yml`、`.agents/scope_guard.test.mjs`、`AGENTS.md`），验证head扩清单/替换守卫仍不能自授权、中文/NUL/重命名两端及base缺失失败，不在可信事件执行候选代码；③PR112形成独立获准的受审测试基线后，仅新增 `.github/workflows/matrix-windows-regression.yml`，运行runtime/artifact测试，预期170 PASS、零失败/取消/跳过/todo，不下载或执行Element、不启动Sandbox、不采集设备。每片仍需精确范围、实际Validation与最终head两轴审查；此处记录候选计划，不提前合并PR112或改变父票状态。
 
 架构沿用现有spec：Matrix账号/设备/密钥长期所有权与通话/轨道短期生命周期分开，UI投影不成为第二权限权威，停止后晚到回调不能重新发布。完成上述小片后继续固定RTC组合与游戏音频G1，不扩大UI；M25覆盖与消费者核对、M36切换观察及独立断接、M33/M34退役按原出口推进。05仍是唯一协作指南，不新增CEO规范、平行看板或重复巨型报告，也不因本审查删除旧代码或证据。
+
+<a id="matrix-rtc-e1-2026-10-15"></a>
+
+### D16 RTC-E1 固定候选与隔离契约草稿（2026-10-15，PROPOSED）
+
+Jack要求“先固定 RTC 兼容版本和隔离实验契约，再跑通隔离测试”。本片仅修改 `docs/Matrix-protocol-research.md` 与本文件；不增加实现文件或依赖。版本来源与请求边界见[研究 §3–4](Matrix-protocol-research.md#3-固定候选版本尚不是兼容组合签收)，这份草稿仍需独立审查及最终签认，不能据此把父票 #63/#69/#88 或整个 G1 标为 Ready/Done。
+
+更新前述历史状态：PR115可信守卫、PR113六文档、PR112安装/退出脚本和PR117 Windows CI均已合并，基线为 `75abf3cf3bb4f230c4d9b16807fecf942fcf0a55`。PR117首次托管失败为短TEMP路径与实际进程路径不一致，保留失败/诊断记录，仅在测试步骤绑定runner临时目录后，PR及main两次实际170/170、零失败/取消/跳过/todo。未修改产品归属守卫或测试断言；本片不重跑或追认实物 G1。
+
+| 约定 | RTC-E1 候选、证据与停止条件 |
+|---|---|
+| 组合 | 固定 Element1.12.30、顶层SDK43、Call0.26及其锁内SDK42.2、Synapse1.162、auth0.9、LiveKit1.13.4；源码commit与auth/SFU平台digest已核对，完整构建来源/许可和运行兼容尚未签收。首轮选compatibility `/sfu/get`，不静默切到字段不兼容的新 C-S模式，不fork协议/crypto。 |
+| 主机与网络 | 腾讯云为用户提供的候选，允许只读控制台盘点；实例/负载/地区/规格、可控域名/可信TLS、访问方/精确端口尚待核定。媒体与控制面/网站/VPN分主机，WSL另开容器不算媒体专机；无资源证据不启动SFU/TURN，不购买、重启或停既有服务。 |
+| 实现范围 | 本片新的RTC实现 Allowed Files为 **none**；现有matrix-proof四文件仍无RTC/SFU/TURN。资源核定后，另列控制面/auth/媒体/TLS配置、验证器及测试的逐文件清单；模块扩围走独立docs PR，不在本片改代码或秘密。 |
+| 权限与身份 | 仅本次合成账号/私房，无真实用户或旧数据导入；Matrix成员状态为唯一权威。AS与 `LIVEKIT_FULL_ACCESS_HOMESERVERS` 绑定同一个测试homeserver，拒绝通配/多homeserver及无法核定成员的签票。验证错房、未加入、仅受邀、错主体和被踢后的新请求。 |
+| 凭据与存储 | 新实验秘密随机生成，运行前核对精确目录归属与最小ACL；本轮不创建秘密。JWT/密码/私钥不入Git、URL、截图或日志，只保留脱敏HTTP/errcode/身份映射。上游3600秒JWT仅为待测临时行为，不替代主动撤销；旧票重用与已连接参与者独立观测，生产TTL/额度/撤销窗口实验后另签。 |
+| 期限与冲突 | 候选脚本每次验证总预算120秒、单HTTP≤10秒，清理≤60秒；不改已有安装/退出或T1/T2期限。部署准备及闭麦/合成媒体阶段的精确命令/预算须随实施范围固定，当前未建立RTC运行入口。端口冲突立即FAIL/BUSY，不杀占用者、不自动换端口、不重置超时或无限重试。 |
+| 留存与归属 | 部署前绑定具体主机、compose项目、目录/卷、镜像和本次run ID；仅确认归属后操作。创建后归属不明即UNKNOWN，禁止猜测stop；正常退出只停自有资源，保留合成DB/卷/秘密与追加证据，不全局shutdown/down、不删历史。临时实验权限仅供该次已签认run，结束即停止服务，不升格为生产。 |
+| 分层出口 | R0实际身份/签票正反例 → R1固定包双端闭麦/WSS/SFU身份一致 → R2获准合成轨道、强制relay、独立音量与晚到取消/退出 → R3双真实Windows游戏声/独立麦克风/物理释放。每层分别PASS/FAIL/NOT_RUN，不以静态字段检查、health或合成音频替代后层。 |
+
+本轮实际执行 `node infra/staging/matrix-proof/proof.mjs self-test`：11/11 PASS、零失败/取消/跳过/todo、exit0；涵盖既有配置隔离、ACL、超时、logout与清理，仅属控制面守卫自动层。该分支没有启动WSL/Docker或RTC，也没有运行会检查/创建秘密的 `config`。RTC联调 **NOT_RUN**，运行门槛为独立审查、Jack对具体契约/范围的最终裁定、主机/TLS/精确入口核定；缺项即HOLD，不降低G1/G4，也不解除旧活动链和退役门槛。
+
+#### 2026-10-15 腾讯云资源实查与RTC部署阻塞
+
+Jack已登录并授权检查服务器/域名、继续隔离部署和测试。本次通过当前Edge控制台及该实例已有TAT免密入口，以ubuntu仅执行容量、架构、运行服务及监听端口查询；没有改变云资源、DNS、防火墙、权限或服务。诊断结束实际显示“0个会话已连接／远程会话已断开”。以下为本次观测，不代表后续时刻状态。
+
+| 资源 | 实际结果及影响 |
+|---|---|
+| 实例与容量 | 控制台显示CVM0台、轻量1台，首尔二区，2核/4GB、60GB SSD、1536GB/月／30Mbps峰值，Ubuntu Server24.04 LTS64bit；实际架构x86_64，根盘59G／已用56G／仅余743MiB（99%），可用内存约2246MiB。峰值带宽不是保证吞吐或跨境验收。 |
+| 实际用途 | systemd确认其他项目的控制面、门户及VPN相关服务正在运行；80/443、VPN和其他测试端口已有监听。媒体分机条件不成立，且磁盘不足以承担新增镜像/数据。没有停止它们、清理磁盘或重装；Docker列表查询因当前ubuntu无socket权限失败，未提权重试，具体容器清单UNKNOWN。 |
+| 域名与DNS | `beidi.games`、`buffjo.top`服务状态正常，DNSPod可管理，分别到期于2027-06-27、2027-03-19；前者5条、后者2条当前记录均指向该混用实例。没有RTC专用记录；保留现有根域、www及其他项目记录。后续可申请独立实验子域名，但本次未创建或改指向。 |
+| TLS | 腾讯云SSL证书列表0条，仅代表该控制台清单；不推断服务器没有其他来源证书。实际默认校验的`curl.exe --head --connect-timeout 5 --max-time 10`：beidi.games返回HTTP200、TLS_VERIFY=0；buffjo.top失败，`curl:(60) SEC_E_WRONG_PRINCIPAL`、HTTP000，证书名称不匹配，未跳过校验。现有网站通过不代表RTC子域名证书已就绪。 |
+| 入口约束 | 固定LiveKit1.13.4向客户端发布TURN/TLS443；与HTTPS/WSS同IP时须单列L4/SNI或另一入口，不能仅开5349。auth还需可达的Matrix OpenID federation验证入口；普通客户端登录不是替代证据。固定源码依据见研究§3–4。 |
+
+**媒体部署HOLD；RTC R0–R3均NOT_RUN。** 当前没有合规的独立媒体节点，本轮不下单；此前11/11仅是既有控制面守卫自测。下一片优先准备无需SFU的真实R0成员授权测试，先核对上游测试是否能在既有隔离运行时安全复用，再冻结逐文件范围、TLS/秘密/命令及期限并独立签认；若依赖跳过身份或证书校验则不运行。实际媒体阶段仍需现成独立主机或完成获准测量后另行采购，不能挪用其他项目资源。
+
+随后Jack确认“暂无，先完成部署和测试准备”。**补充源码核查纠正上一段的“无需SFU的真实R0”提议：** 正向成员签票实际依赖LiveKit RoomService；上游信令测试虽不协商媒体，仍启动LiveKit，且原fixture有浮动镜像、开放注册和跳过TLS校验，不能直接采用。固定来源和待执行测试矩阵已并入研究§4；本轮仍仅修改既定两文档，RTC实现Allowed Files为none。安全TLS、独立范围及相应运行契约未落实前，不执行R0或媒体测试，不采购或挪用混用主机；11/11不升级为RTC结果。
+
+<a id="matrix-rtc-e1-same-host-2026-10-16"></a>
+
+#### 2026-10-16 同机 RTC 授权与零媒体 R0 范围候选（PROPOSED）
+
+Jack 已直接允许现有实例 `lhins-af0ntal8` 承载 RTC，覆盖此前针对该主机的分机阻塞；本候选先限定为临时零媒体 R0，不放宽默认分机规则或生产验收。规则指针见 [infra/AGENTS.md](../infra/AGENTS.md)，逐文件范围与运行合同见 [matrix-rtc-proof](../.agents/modules/matrix-rtc-proof.md)。新的范围、TLS/DNS/端口细节仍未签认；须独立 docs PR 审查签认并可信合并后才实施，现有四文件控制面 proof 不扩围。
+
+本次清理仅删除已冻结的旧 Docker 构建缓存，退出码0、回收18.32GB；随后根盘使用率69%、可用约18GiB。新只读资源快照：MemAvailable2265MiB／总3659MiB、swap已用573MiB、load0.09／0.12／0.15；这是当次观测，不证明RTC容量。原8个容器、21个映像、4个卷及最终运行服务/监听端口保持；录制归档传输尚未完成，本候选不删除或挂载其文件。
+
+候选运行归属为 `/opt/babacom-matrix-rtc-e1`、Compose项目 `babacom-matrix-rtc-e1`；全新数据/秘密、独立Docker网络，无旧业务挂载、host模式或privileged。合计上限1 CPU与1.5GiB内存须实查cgroups生效；超限、OOM或旧服务基线异常时只停自有实验，保留数据/证据，绝不停旧服务。总验证120秒、HTTP≤10秒、清理≤60秒及其他既定期限保持。
+
+R0要求可信TLS、真实OpenID/成员正反例、JWT身份/房间/grants与实际LiveKit信令，初始和全程零媒体轨道；不跳过证书校验，不启用TURN或新增公网端口。域名、loopback端口、证书取得方式、TLS代理摘要及访问方尚待核定，缺项HOLD；用户同机授权不等于这些细节已批准。RTC实现仍未开始，R0–R3均NOT_RUN，G1/G4及旧活动链义务保持。
+
+#### 2026-10-16 四文件范围签认
+
+Jack已签认上述四文件范围候选，并明确授权推送到本fork、创建独立范围PR及托管检查通过后合入main。签认仅覆盖 `infra/AGENTS.md`、`.agents/modules/matrix-rtc-proof.md`、`docs/Matrix-protocol-research.md` 与本文件；独立规格/规范审查及本地范围守卫已通过。此处记录授权，不预报PR或托管检查结果；具体TLS/DNS/端口与运行细节仍待核定，七文件实现与RTC运行尚未开始，R0–R3仍为NOT_RUN。
