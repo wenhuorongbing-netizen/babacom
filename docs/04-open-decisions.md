@@ -415,3 +415,11 @@ R0要求可信TLS、真实OpenID/成员正反例、JWT身份/房间/grants与实
 #### 2026-10-16 四文件范围签认
 
 Jack已签认上述四文件范围候选，并明确授权推送到本fork、创建独立范围PR及托管检查通过后合入main。签认仅覆盖 `infra/AGENTS.md`、`.agents/modules/matrix-rtc-proof.md`、`docs/Matrix-protocol-research.md` 与本文件；独立规格/规范审查及本地范围守卫已通过。此处记录授权，不预报PR或托管检查结果；具体TLS/DNS/端口与运行细节仍待核定，七文件实现与RTC运行尚未开始，R0–R3仍为NOT_RUN。
+
+#### 2026-10-16 凭据边界复核（修订候选，合并HOLD）
+
+范围票[#118](https://github.com/wenhuorongbing-netizen/babacom/issues/118)与独立范围[PR119](https://github.com/wenhuorongbing-netizen/babacom/pull/119)已发布；原head `97331a7` 托管检查通过，但最终协议复核发现绝对URL禁令与标准OpenID query冲突，Synapse必要认证状态也会写入合成DB。独立Reviewer据此撤回此前对该凭据条款的PASS；CI通过不替代契约正确性，尚未合并。
+
+协调者在既定四文件范围内准备[最小修订](../.agents/modules/matrix-rtc-proof.md#r0-凭据传输与日志准入修订候选待签认)，源码依据见[研究](Matrix-protocol-research.md#r0-凭据边界修订候选)。仅新R0拟替代上文RTC-E1“JWT/密码/私钥不入URL”中的OpenID传输限制及新模块“token仅验证进程内存”：唯一可信HTTPS homeserver的标准OpenID query可承载合成OpenID token；验证器不额外落盘，固定Synapse必要状态限受保护自有DB/事务文件。原T1/T2、既有控制面proof及其他秘密的禁令保持，不授予R1或真实账号例外。历史字节保留；修订尚待独立审查和Jack最终裁定，不冒记新的签认。
+
+原始日志控制、写盘前脱敏、安全事件留存与哨兵负例仍是运行前置HOLD；不能只关闭access log就声称全链无泄漏。TLS/DNS/端口等缺项、七文件未实施及R0–R3 NOT_RUN的边界保持；未启动服务或修改宿主/旧业务监控。

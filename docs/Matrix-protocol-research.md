@@ -158,3 +158,11 @@ G1 仍需两台真实 Windows：游戏画面、系统声音、独立麦克风、
 
 Jack 随后明确允许使用现有腾讯云实例做 RTC；这更新了 §4 中该实例的分机阻塞判断，不将 Docker 隔离等同于独立机器。当前只准备零媒体 R0 的同机候选：范围与资源合同见 [matrix-rtc-proof](../.agents/modules/matrix-rtc-proof.md)，新实查及授权见 [04](04-open-decisions.md#matrix-rtc-e1-same-host-2026-10-16)。此前日期的观测保留。
 七个未来运行文件仍未实施；独立范围 PR、签认与可信合并前不运行。可信 TLS、域名/loopback 精确端口、代理摘要及访问方仍须核定；不开放 TURN、新增公网端口或改旧服务。R0 必须真实验证成员授权与 LiveKit 信令且零媒体轨道；R1–R3、完整 G1/G4 和生产能力仍未验收。
+
+### R0 凭据边界修订候选
+
+[Matrix v1.19](https://spec.matrix.org/v1.19/server-server-api/#get_matrixfederationv1openiduserinfo)要求OpenID userinfo的 `access_token` 为query参数；固定[auth helper](https://github.com/element-hq/lk-jwt-service/blob/0e176b1eca44e67b11484d0bdf56999807bf2b8e/src/helper.rs#L642)确实这样发送，传输失败又将错误链写入ERROR，可能包含完整请求URL。因此“全部token不得进URL”与该标准路径冲突，可信TLS也不证明日志无泄漏。固定[Synapse OpenID存储](https://github.com/element-hq/synapse/blob/63dc0cbfe514f60743212566374ffeb5e9e295c2/synapse/storage/databases/main/openid.py#L28)及[会话存储](https://github.com/element-hq/synapse/blob/63dc0cbfe514f60743212566374ffeb5e9e295c2/synapse/storage/databases/main/registration.py#L2749)还会持久化必要认证状态，不能承诺所有服务只在内存保留token。
+
+仅新R0的候选替代边界、精确OpenID query例外、验证器内存限制、受保护合成DB以及日志哨兵准入统一维护在[模块清单](../.agents/modules/matrix-rtc-proof.md#r0-凭据传输与日志准入修订候选待签认)。这是待签认修订，未解决日志实施方案，未运行或证明无泄漏；原实验及T1/T2凭据合同不因此改变。
+
+后续stock Call也不能沿用绝对URL禁令：固定[Call lockfile](https://github.com/element-hq/element-call/blob/71593f1a245b1afa971e3940596e1c500edf9548/pnpm-lock.yaml#L184)锁定livekit-client2.22.3，其[SignalClient](https://github.com/livekit/client-sdk-js/blob/v2.22.3/src/api/SignalClient.ts#L1360)在WSS `/rtc`或`/rtc/v1`及握手失败的HTTPS验证请求中使用query。R0验证器可用Bearer header，但不证明stock包路径；R1的端点例外、日志与实际包行为须另行审查签认，当前不授权执行。
