@@ -88,7 +88,6 @@ export async function buildDesktop({ renderer = true } = {}) {
   if (renderer) await build({ root: desktop, configFile: join(desktop, 'vite.config.ts'), logLevel: 'warn' });
   await mkdir(join(desktop, 'dist/media'), { recursive: true });
   await cp(join(desktop, 'media.html'), join(desktop, 'dist/media/media.html'));
-  await buildMediaPeer();
 }
 
 export async function packageWindows() {
@@ -127,12 +126,14 @@ async function main() {
       'apps/desktop/playwright.config.ts', 'packages/ui/src', 'tests/shell', 'tests/voice', 'tests/audio']);
   } else {
     if (process.argv.includes('--test-packaged')) {
+      await buildMediaPeer();
       await execute('@playwright/test/cli.js', ['test', '--config', join(desktop, 'playwright.config.ts'), '--project', 'packaged']);
       return;
     }
     await buildDesktop();
     if (process.argv.includes('--package-win')) await packageWindows();
     if (process.argv.includes('--test')) {
+      await buildMediaPeer();
       await execute('@playwright/test/cli.js', ['test', '--config', join(desktop, 'playwright.config.ts'), '--project', 'development']);
     }
   }
