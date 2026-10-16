@@ -1,8 +1,7 @@
 # 协作流程
 
-本文件是 BabaCom 唯一的多人日常开发与跨 fork 合并指南。产出规则见
-[AGENTS](../AGENTS.md)，代码定位见[地图](../REPO_MAP.md)，产品方向见
-[Matrix PRD](PRD-matrix-migration.md)，契约与 Gate 见[迁移规格](Matrix-migration-spec.md)。
+本文件只维护多人日常开发与跨 fork 合并流程；产出规则见 [AGENTS](../AGENTS.md)，
+代码与需求入口见[地图](../REPO_MAP.md)。
 人和 Agent 使用相同交付边界；编辑器、模型和开发方法由各自选择。
 
 ## 1. 角色（一个人可以兼多个）
@@ -88,7 +87,7 @@ Spike回答未知，不承诺其代码进入正式产品。已明确授权的范
 - 使用[仓库模板](../.github/pull_request_template.md)，写机器读取的 Module 与一个 Issue；简述变化、实际证据、失败/NOT_RUN、风险和回退。
 - 逐文件暂存并检查全暂存区；不混入无关 dirty、批量格式化、依赖或秘密。共享契约变化同步合同，不删断言换绿灯。
 - 一个非作者 Reviewer 按固定 base…head 审查 Standards 与 Spec；修复后结论绑定新 head。获准的 Integrator 才合并。
-- 当前 GitHub CI 只有 scope/secrets，不能当完整产品验证。文档检查范围、链接、出处和语义；产品票按实际影响运行类型/lint/行为测试、真实服务或 Windows 包。
+- CI 内容以[工作流](../.github/workflows/)为准，只证明实际运行的检查。文档检查范围、链接、出处和语义；产品票按实际影响运行类型/lint/行为测试、真实服务或 Windows 包。
 - 合成媒体、人耳、物理释放和中德负载是不同证据。保留原始失败，修复后重验相关部分；未变版本不无理由重跑全套。
 
 已有旧桌面命令在 [package.json](../apps/desktop/package.json)，API环境在 [pyproject.toml](../apps/api/pyproject.toml)；

@@ -6,25 +6,21 @@ The current product remains the custom prototype. Matrix migration progress and 
 
 ## Start here
 
-- [Source map](REPO_MAP.md): code, tests and areas to avoid scanning.
-- [Contributor rules](AGENTS.md) → [team workflow](docs/05-collaboration.md) → the Issue's module manifest.
-- [Matrix PRD](docs/PRD-matrix-migration.md): product outcomes.
-- [Migration specification](docs/Matrix-migration-spec.md): architecture, contracts and acceptance gates.
-- [Backlog index](docs/Matrix-migration-backlog.md): Epics, sprint order and links; live AC and status belong to GitHub Issues.
-- [Fixed-stack research](docs/Matrix-protocol-research.md) and [DigoYu's protocol notes](Source/README.md): read relevant sections as needed.
-- [Decisions](docs/04-open-decisions.md): signoffs, review scope and remaining conditions.
+- Development: [source map](REPO_MAP.md) → [contributor rules](AGENTS.md) → [team workflow](docs/05-collaboration.md) and the Issue's module manifest.
+- Migration: [PRD](docs/PRD-matrix-migration.md) → [specification](docs/Matrix-migration-spec.md) → [backlog index](docs/Matrix-migration-backlog.md). Live acceptance criteria and status belong to GitHub Issues.
+- Signoffs and evidence provenance: [decisions](docs/04-open-decisions.md).
 
 ## Current acceptance boundary
 
-The isolated Matrix control-plane proof was merged in [PR104](https://github.com/wenhuorongbing-netizen/babacom/pull/104).
-For G1-P2, the coordinator reports a passing local Sandbox install/start/File→Quit/VM-cleanup run at
-[PR112](https://github.com/wenhuorongbing-netizen/babacom/pull/112) head `754dd483`; that PR remains draft and unmerged.
-This document review did not rerun that acceptance. Full G1, product cutover, Matrix migration and release acceptance remain incomplete.
-Evidence provenance, the actual PO/CEO review and the next small improvements are recorded in [the decisions](docs/04-open-decisions.md#matrix-quality-review-2026-10-15).
+The isolated Matrix control-plane proof ([PR104](https://github.com/wenhuorongbing-netizen/babacom/pull/104)),
+Windows Sandbox install/start/File→Quit/VM-cleanup scripts ([PR112](https://github.com/wenhuorongbing-netizen/babacom/pull/112))
+and Windows regression CI ([PR117](https://github.com/wenhuorongbing-netizen/babacom/pull/117)) are merged.
+The reported local G1-P2 run and its review are recorded in [the decisions](docs/04-open-decisions.md#matrix-quality-review-2026-10-15);
+this documentation change did not rerun it. Full G1, product cutover, Matrix migration and release acceptance remain incomplete.
 
 T1 admission, T2 voice code and the first community UI shell are merged.
 [#18](https://github.com/wenhuorongbing-netizen/babacom/issues/18) still requires real two-device listening,
-physical release and China–Germany acceptance. Scope/secrets CI and synthetic media do not establish them.
+physical release and China–Germany acceptance. CI and synthetic media do not establish them.
 The seven legacy issues and #41's preserved local work are tracked in the Backlog.
 Signed [T1](docs/T1-spec.md), [T2](docs/T2-spec.md) and [automation](docs/testing-automation-spec.md)
 contracts still govern active old paths. Candidate Element/Synapse compatibility, game audio,
@@ -50,6 +46,8 @@ isolated fixtures do not configure production access. New upstream clients use t
 
 ## Reference and provenance
 
+[Fixed-stack research](docs/Matrix-protocol-research.md) and [DigoYu's protocol notes](Source/README.md)
+are references to consult for the relevant task.
 [Scope](docs/01-scope-v2.md), [platform NFR](docs/02-platform-nfr.md) and [cost model](docs/03-cost-model.md)
 retain product requirements and numeric acceptance baselines.
 The original scope.html, teams.html and [engineering review](docs/00-review-plan01.md) remain historical inputs;

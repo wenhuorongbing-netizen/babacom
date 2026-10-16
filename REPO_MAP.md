@@ -12,15 +12,15 @@
 | `apps/desktop/src/features/voice/`、`src/features/audio/` | 房间、麦克风与播放状态；feature 不互相 import |
 | `apps/desktop/src/i18n/`、`src/styles/tokens.css` | 中文文案与设计令牌 |
 | `apps/desktop/scripts/build.mjs` | 类型检查、lint、构建、打包与桌面测试入口 |
-| `apps/desktop/scripts/dev.mjs` | 旧开发/测试启动与 Sandbox 验收入口；历史修复已集成，未结问题看对应票 |
+| `apps/desktop/scripts/dev.mjs` | 旧开发/测试启动与 Sandbox 验收入口 |
 | `apps/api/app/` | 认证主体、房间授权、准入路由、签发与限流；普通入口无 provider 拒绝启动 |
 | `packages/contracts/`、`packages/ui/` | 共享 schema 与 UI 原语 |
 | `tests/shell/`、`tests/voice/`、`tests/audio/` | 真实 Electron 旅程、SFU/合成 peer 与生命周期回归 |
 | `tests/accounts/`、`tests/permissions/`、`tests/tokens/`、`tests/ratelimit/` | HTTP/会话/权限/限流测试 |
 | `.agents/modules/`、`.github/`、`.claude/` | 文件边界、检查器、CODEOWNERS、CI 与共享 harness |
 | `infra/AGENTS.md` | 基础设施规则；存在规划不代表已部署 |
-| `infra/staging/matrix-proof/` | 已合并的隔离 Matrix 控制面 proof，不是正式产品接线 |
-| `infra/staging/matrix-windows-proof/` | main 已有安装包只读核验器；安装/启动/退出三个文件仍属 PR112 候选，状态与证据见 [04](docs/04-open-decisions.md#matrix-quality-review-2026-10-15) |
+| `infra/staging/matrix-proof/` | 隔离 Matrix 控制面 proof |
+| `infra/staging/matrix-windows-proof/` | Windows 安装包只读核验、隔离安装/启动/退出与 Sandbox 回归 |
 | `scope.html`、`teams.html` | 原始范围/团队规划输入，不是产品完成证明 |
 
 ## 按任务阅读
@@ -28,15 +28,15 @@
 | 任务 | 入口 |
 |---|---|
 | 开工与改动边界 | [AGENTS.md](AGENTS.md) → 对应目录 AGENTS → `.agents/modules/<id>.md` |
-| Matrix迁移主线 | [PRD](docs/PRD-matrix-migration.md) → [规格](docs/Matrix-migration-spec.md) → [9 Epics/36父票索引](docs/Matrix-migration-backlog.md)；实时 AC/范围/状态归 GitHub Issue，未来票 DRAFT；#97合同/#98隔离proof独立 |
-| 协议选版/学习 | [研究](docs/Matrix-protocol-research.md) 固定候选与差异 → [Digo 学习索引](Source/README.md) 按需查 v1.19；保留原提交，学习笔记不作部署合同 |
+| Matrix迁移主线 | [PRD](docs/PRD-matrix-migration.md) → [规格](docs/Matrix-migration-spec.md) → [Backlog](docs/Matrix-migration-backlog.md)；实时 AC/范围/状态归 GitHub Issue |
+| 协议选版/学习 | [固定栈研究](docs/Matrix-protocol-research.md)、[Digo 学习索引](Source/README.md)；按需读取，学习笔记不作部署合同 |
 | T1 桌面与准入 | [T1 规格](docs/T1-spec.md)、[t1 清单](.agents/modules/t1.md) |
 | T2 语音与采集 | [T2 规格](docs/T2-spec.md)、[t2 清单](.agents/modules/t2.md) |
 | 启动/清理自动化 | [自动化规格](docs/testing-automation-spec.md)；实施票另列精确子集 |
 | 设备验收与测试方法 | [T2-03 研究](docs/T2-03-acceptance-research.md) |
 | 当前签认/阻塞 | [待决表](docs/04-open-decisions.md)、GitHub 对应 Issue/PR |
 | 长期范围/阶段 | [范围](docs/01-scope-v2.md)、[平台标准](docs/02-platform-nfr.md) |
-| 多人工作与守卫维护 | [05 唯一协作指南](docs/05-collaboration.md)、[06 守卫机制](docs/06-agent-harness.md)；[成本](docs/03-cost-model.md) 按需查，不重复工作流程 |
+| 多人工作与守卫维护 | [05 协作指南](docs/05-collaboration.md)、[06 守卫机制](docs/06-agent-harness.md) |
 | GitHub 操作 | [Issue tracker](docs/agents/issue-tracker.md)；只操作本 fork |
 
 ## 不要读或清理的地方
@@ -71,4 +71,4 @@ git diff --check
 
 不得直接改 main；一次一 Issue、一模块。`apps/api/migrations/` 不得直接改，迁移写 `_proposed/`。
 公共接口变化同步契约；正常 T1 测试仅按已合并的狭窄例外修改。自动化、打包启动、
-合成媒体、真人听音和跨境证据分别判断；scope/secrets CI 不替代产品验证。
+合成媒体、真人听音和跨境证据分别判断；CI 结论只覆盖实际运行的检查。
