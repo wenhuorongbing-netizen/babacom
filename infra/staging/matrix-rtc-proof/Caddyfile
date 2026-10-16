@@ -8,7 +8,7 @@
         level WARN
     }
 }
-https://{{DOMAIN_RAW}}:443 {
+https://{{DOMAIN_RAW}}:{{PORT}} {
     tls /run/secrets/tls.crt /run/secrets/tls.key
     bind 0.0.0.0
     @openid path /_matrix/federation/v1/openid/userinfo
@@ -24,11 +24,11 @@ https://{{DOMAIN_RAW}}:443 {
     }
     handle /.well-known/matrix/server {
         header Content-Type application/json
-        respond `{"m.server":"{{DOMAIN_RAW}}:443"}` 200
+        respond `{"m.server":"{{DOMAIN_RAW}}:{{PORT}}"}` 200
     }
     handle /.well-known/matrix/client {
         header Content-Type application/json
-        respond `{"m.homeserver":{"base_url":"https://{{DOMAIN_RAW}}"}}` 200
+        respond `{"m.homeserver":{"base_url":"https://{{DOMAIN_RAW}}:{{PORT}}"}}` 200
     }
     handle /_matrix/client/* {
         reverse_proxy synapse:8008

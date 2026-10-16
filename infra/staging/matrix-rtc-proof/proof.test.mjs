@@ -7,12 +7,12 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import net from 'node:net';
-import { validateContract, SafeEvents, httpRequest, transaction, assertOwned, assertResources, assertTicket, assertParticipants, redirectGuard, Budget, PINS, OPENID_HELPER } from './proof.mjs';
+import { validateContract, SafeEvents, httpRequest, transaction, assertOwned, assertResources, assertTicket, assertParticipants, redirectGuard, Budget, PINS, OPENID_HELPER, startExperiment, stopOwned, serverName, templateValues, assertMembershipDenial, command } from './proof.mjs';
 
 function contract() {
   return { host: 'lhins-af0ntal8', root: '/opt/babacom-matrix-rtc-e1', project: 'babacom-matrix-rtc-e1',
     runId: 'a'.repeat(32), domain: 'rtc.example.org', port: 18443, certificateSource: 'operator-provisioned-public-chain',
-    approved: true, logAdmission: true, fullAccessHomeservers: ['rtc.example.org'], asHomeserver: 'rtc.example.org',
+    approved: true, logAdmission: true, machineUuid:'machine', fullAccessHomeservers: ['rtc.example.org:18443'], asHomeserver: 'rtc.example.org:18443',
     platform: 'linux/amd64', source: PINS, sourceHashes: Object.fromEntries(['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'].map(name=>[name,'f'.repeat(64)])), auxiliary: { cgroup: '/sys/fs/cgroup/rtc-r0', cpu: .1, memory: 134217728 },
     thresholds: { minFreeMemory: 2000000000, minFreeDisk: 3000000000, maxLoad: 2, maxOldCpuPercent: 80, maxOldMemoryGrowth: 100000000 },
     baseline: [{ id: 'b'.repeat(64), image: 'sha256:' + 'c'.repeat(64), status: 'running', mounts: [] }],
@@ -24,6 +24,61 @@ test('contract has no domain, port, certificate, baseline, thresholds, log or au
     const c = contract(); delete c[key]; assert.throws(() => validateContract(c), undefined, key);
   }
   for (const change of [{ port: 0 }, { fullAccessHomeservers: ['*'] }, { asHomeserver: 'other.example.org' }, { fullAccessHomeservers: ['rtc.example.org','other'] }, { domain: 'https://rtc.example.org' }, { platform: 'linux/arm64' }]) assert.throws(() => validateContract({ ...contract(), ...change }));
+});
+
+test('startup shares the public deadline through delayed Docker preflight and supervisor dispatch', async () => {
+  let now=0,dispatched=false,cleaned=false;const budget=new Budget(120000,()=>now);
+  const io={preflight:async(_c,b)=>{assert.equal(b.remaining(),120000);now+=100000;},launch:async(_c,b)=>{dispatched=true;assert.equal(b.remaining(),20000);return b.end;},status:async(_c,b)=>{now+=21000;b.remaining();},recover:async()=>{cleaned=true;}};
+  await assert.rejects(startExperiment(contract(),budget,io),/DEADLINE/);assert.equal(dispatched,true);assert.equal(cleaned,true);assert.equal(now,121000);
+});
+
+test('waitFor checks the deadline even if its predicate is already true', async () => {
+  let now=0;const budget=new Budget(10,()=>now);now=11;await assert.rejects(budget.waitFor(()=>true),/DEADLINE/);
+});
+test('BUSY before a new supervisor launches never stops an existing experiment',async()=>{
+  let stopped=false;await assert.rejects(startExperiment(contract(),new Budget(1000),{preflight:async()=>{throw Error('BUSY');},launch:async()=>{throw Error('must not launch');},recover:async()=>{stopped=true;}}),/BUSY/);assert.equal(stopped,false);
+});
+
+function receipt(c){return {version:1,host:c.host,machineUuid:'machine',project:c.project,runId:c.runId,containers:['synapse','livekit','auth','caddy'].map((service,n)=>({service,id:String(n+1).repeat(64),image:PINS[service].image,imageId:'sha256:'+String(n+5).repeat(64),created:'2026-10-16T00:00:00Z'}))};}
+function inspected(c,row){return {Id:row.id,Image:row.imageId,Created:row.created,State:{Running:true},Config:{Image:row.image,Labels:{'com.docker.compose.project':c.project,'com.docker.compose.service':row.service,'rtc.run':c.runId,'rtc.host':c.host}}};}
+test('recovery ignores stale supervisor PID/socket and stops only receipt-owned resources with fresh checks', async () => {
+  const c=contract(),r=receipt(c);let now=0;const stopped=[];const states=new Map(r.containers.map(x=>[x.id,inspected(c,x)]));states.get(r.containers[1].id).Config.Labels['rtc.run']='another-run';
+  const io={machine:()=>r.machineUuid,inspect:async(id,b)=>{b.remaining();return structuredClone(states.get(id));},stop:async(id,b)=>{b.remaining();stopped.push(id);states.get(id).State.Running=false;}};
+  const result=await stopOwned(c,r,new Budget(60000,()=>now),io);assert.equal(result,'UNKNOWN');assert.equal(stopped.length,3);assert.equal(stopped.includes(r.containers[1].id),false);
+  assert.equal(states.get(r.containers[1].id).State.Running,true);
+});
+test('slow Docker inspections exhaust one stop deadline without starting late mutations', async () => {
+  const c=contract(),r=receipt(c);let now=0;const states=new Map(r.containers.map(x=>[x.id,inspected(c,x)]));const stopped=[];
+  const io={machine:()=>r.machineUuid,inspect:async(id,b)=>{now+=9000;b.remaining();return structuredClone(states.get(id));},stop:async(id,b)=>{b.remaining();stopped.push(id);states.get(id).State.Running=false;}};
+  const result=await stopOwned(c,r,new Budget(60000,()=>now),io);assert.equal(result,'DEADLINE');assert.ok(now<=63000);assert.equal(stopped.length,3);
+});
+test('wrong host, run, project, configured image, actual image and created identity prevent cleanup mutation', async()=>{
+  const c=contract(),r=receipt(c);
+  for(const change of [{host:'other'},{runId:'other'},{project:'other'},{machineUuid:'other'}]){let mutated=false;const result=await stopOwned(c,{...r,...change},new Budget(1000),{machine:()=>r.machineUuid,inspect:async()=>{throw Error('must not inspect');},stop:async()=>{mutated=true;}});assert.equal(result,'UNKNOWN');assert.equal(mutated,false);}
+  for(const field of ['Image','Created']){let mutated=0;const result=await stopOwned(c,r,new Budget(1000),{machine:()=>r.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(x=>x.id===id)),[field]:'other'}),stop:async()=>{mutated++;}});assert.equal(result,'UNKNOWN');assert.equal(mutated,0);}
+});
+test('rendered internal route, published route, Matrix authority and TLS name remain consistent',()=>{
+  const c=contract(),values=templateValues(c,{}),render=text=>text.replace(/\{\{([A-Z_]+)\}\}/g,(_,key)=>values[key]??'synthetic');
+  assert.equal(serverName(c),'rtc.example.org:18443');
+  const hs=render(fs.readFileSync(new URL('./homeserver.yaml.example',import.meta.url),'utf8'));assert.ok(hs.includes('server_name: "rtc.example.org:18443"'));
+  const as=render(fs.readFileSync(new URL('./appservice-registration.yaml.example',import.meta.url),'utf8'));assert.ok(as.includes('rtc\\.example\\.org:18443$'));
+  const caddy=render(fs.readFileSync(new URL('./Caddyfile',import.meta.url),'utf8'));assert.ok(caddy.includes('https://rtc.example.org:18443'));assert.equal(caddy.includes('rtc.example.org:443'),false);
+  const compose=fs.readFileSync(new URL('./compose.yaml',import.meta.url),'utf8');assert.ok(compose.includes('LIVEKIT_FULL_ACCESS_HOMESERVERS: ${RTC_DOMAIN:?approved domain required}:${RTC_PORT:?approved port required}'));assert.ok(compose.includes('LIVEKIT_HS_SERVER_NAME: ${RTC_DOMAIN:?approved domain required}:${RTC_PORT:?approved port required}'));assert.ok(compose.includes(':${RTC_PORT:?approved exact loopback port required}'));
+});
+test('valid-identity membership denials require observed 403/M_FORBIDDEN; authentication/network failures cannot pass',()=>{
+  assert.deepEqual(assertMembershipDenial({status:403,body:Buffer.from('{"errcode":"M_FORBIDDEN"}')}),{status:403,errcode:'M_FORBIDDEN'});
+  for(const [status,body] of [[401,{errcode:'M_UNAUTHORIZED'}],[403,{errcode:'M_UNAUTHORIZED'}],[502,{errcode:'M_FORBIDDEN'}],[403,{errcode:'M_FORBIDDEN',jwt:'bad'}]])assert.throws(()=>assertMembershipDenial({status,body:Buffer.from(JSON.stringify(body))}));
+});
+
+test('recovery works after actual supervisor SIGKILL through delayed process-backed Docker fixtures', {timeout:10000}, async()=>{
+  const controller=spawn(process.execPath,['-e',"process.stdout.write('ready');setInterval(()=>{},1000);"],{stdio:['ignore','pipe','pipe']});await once(controller.stdout,'data');controller.kill('SIGKILL');const [code,signal]=await once(controller,'close');assert.ok(code!==0||signal);
+  const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),stopped=[];
+  const delayed=async(value,budget)=>JSON.parse(await command(process.execPath,['-e',`setTimeout(()=>process.stdout.write(${JSON.stringify(JSON.stringify(value))}),20);`],{budget}));
+  const io={machine:()=>r.machineUuid,inspect:(id,budget)=>delayed(states.get(id),budget),stop:async(id,budget)=>{await delayed({status:'stopped'},budget);stopped.push(id);states.get(id).State.Running=false;}};
+  assert.equal(await stopOwned(c,r,new Budget(5000),io),'OK');assert.equal(stopped.length,4);assert.ok([...states.values()].every(i=>!i.State.Running));
+});
+test('actual delayed Docker child cannot outlive its inherited operation budget', {timeout:3000}, async()=>{
+  const start=performance.now();await assert.rejects(command(process.execPath,['-e',"setTimeout(()=>process.stdout.write('late'),1000);"],{budget:new Budget(40)}),/DEADLINE/);assert.ok(performance.now()-start<500);
 });
 test('unknown log chunks never pass through; split/encoded secrets only become counters', () => {
   const lines = []; const events = new SafeEvents(value => lines.push(value));

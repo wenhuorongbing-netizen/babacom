@@ -45,8 +45,8 @@ services:
       LIVEKIT_URL: wss://${RTC_DOMAIN:?approved domain required}:${RTC_PORT:?approved port required}
       LIVEKIT_KEY_FROM_FILE: /run/secrets/livekit.key
       LIVEKIT_SECRET_FROM_FILE: /run/secrets/livekit.secret
-      LIVEKIT_FULL_ACCESS_HOMESERVERS: ${RTC_DOMAIN:?approved domain required}
-      LIVEKIT_HS_SERVER_NAME: ${RTC_DOMAIN:?approved domain required}
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: ${RTC_DOMAIN:?approved domain required}:${RTC_PORT:?approved port required}
+      LIVEKIT_HS_SERVER_NAME: ${RTC_DOMAIN:?approved domain required}:${RTC_PORT:?approved port required}
       LIVEKIT_AS_REGISTRATION_FILE: /run/secrets/appservice.yaml
       LIVEKIT_JWT_BIND: '[::]:8080'
       LIVEKIT_LOG_LEVEL: warn
@@ -59,7 +59,7 @@ services:
     # 2.11.7-alpine / source 72dd0fb067f6d7826c7f79907670ba4a713bfe37
     image: docker.io/library/caddy@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229
     command: [caddy, run, --config, /run/secrets/Caddyfile, --adapter, caddyfile]
-    ports: ['127.0.0.1:${RTC_PORT:?approved exact loopback port required}:443']
+    ports: ['127.0.0.1:${RTC_PORT:?approved exact loopback port required}:${RTC_PORT:?approved exact loopback port required}']
     networks:
       isolated:
         aliases: ['${RTC_DOMAIN:?approved domain required}']

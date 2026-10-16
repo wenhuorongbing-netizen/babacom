@@ -20,16 +20,21 @@ export const PINS=Object.freeze({
 });
 function requireFact(ok,code='CONTRACT'){if(!ok) throw new Error(code);}
 export class Budget {
-  constructor(ms){requireFact(Number.isFinite(ms)&&ms>0);this.end=performance.now()+ms;}
-  remaining(cap=Infinity){const n=Math.min(this.end-performance.now(),cap);requireFact(n>0,'DEADLINE');return Math.ceil(n);}
+  constructor(ms,clock=()=>Number(process.hrtime.bigint())/1e6){requireFact(Number.isFinite(ms)&&ms>0);this.clock=clock;this.end=clock()+ms;}
+  static fromDeadline(end){const budget=new Budget(1);requireFact(Number.isFinite(end),'DEADLINE');budget.end=end;budget.remaining();return budget;}
+  remaining(cap=Infinity){const n=Math.min(this.end-this.clock(),cap);requireFact(n>0,'DEADLINE');return Math.ceil(n);}
+  child(ms){this.remaining();const child=new Budget(ms,this.clock);child.end=Math.min(child.end,this.end);return child;}
+  async waitFor(predicate){while(true){this.remaining();if(predicate())return;await new Promise(r=>setTimeout(r,this.remaining(25)));}}
 }
+export function serverName(c){return `${c.domain}:${c.port}`;}
 export function validateContract(c){
   requireFact(c&&c.host==='lhins-af0ntal8'&&c.root===ROOT&&c.project===PROJECT);
   requireFact(c.approved===true&&c.logAdmission===true&&/^[a-f0-9]{32}$/.test(c.runId));
   requireFact(typeof c.domain==='string'&&/^(?=.{4,253}$)[a-z0-9]+(?:[-.][a-z0-9]+)*\.[a-z]{2,}$/.test(c.domain));
   requireFact(Number.isInteger(c.port)&&c.port>1024&&c.port<65536);
   requireFact(c.certificateSource==='operator-provisioned-public-chain'&&/^[a-f0-9]{64}$/.test(c.certificateSha256));
-  requireFact(c.asHomeserver===c.domain&&JSON.stringify(c.fullAccessHomeservers)===JSON.stringify([c.domain]));
+  requireFact(c.asHomeserver===serverName(c)&&JSON.stringify(c.fullAccessHomeservers)===JSON.stringify([serverName(c)]));
+  requireFact(typeof c.machineUuid==='string'&&c.machineUuid.length>0&&c.machineUuid.length<=128);
   requireFact(c.platform==='linux/amd64'&&JSON.stringify(c.source)===JSON.stringify(PINS));
   requireFact(c.sourceHashes&&Object.keys(c.sourceHashes).length===7&&SOURCE_FILES.every(name=>/^[a-f0-9]{64}$/.test(c.sourceHashes[name])));
   requireFact(Array.isArray(c.accessors)&&c.accessors.length>0&&c.accessors.every(x=>x==='operator-loopback'));
@@ -95,12 +100,13 @@ export function assertParticipants(actual,expected){
 }
 
 // Runtime errors are always converted to fixed enums at the command boundary.
-function command(executable,args,{input,timeout=10000}={}){
+export function command(executable,args,{input,timeout=10000,budget}={}){
+  if(budget)timeout=budget.remaining(timeout);
   return new Promise((resolve,reject)=>{
     const p=spawn(executable,args,{stdio:['pipe','pipe','pipe'],env:{PATH:process.env.PATH,HOME:process.env.HOME}});const out=[];let size=0;
     const timer=setTimeout(()=>{p.kill('SIGKILL');reject(new Error('DEADLINE'));},timeout);
     p.stdout.on('data',b=>{size+=b.length;if(size>4194304){p.kill('SIGKILL');reject(new Error('OUTPUT_LIMIT'));}else out.push(b);});p.stderr.on('data',()=>{});
-    p.on('error',()=>{clearTimeout(timer);reject(new Error('COMMAND'));});p.on('close',code=>{clearTimeout(timer);code===0?resolve(Buffer.concat(out).toString()):reject(new Error('COMMAND'));});p.stdin.end(input);
+    p.on('error',()=>{clearTimeout(timer);reject(new Error('COMMAND'));});p.on('close',code=>{clearTimeout(timer);try{budget?.remaining();code===0?resolve(Buffer.concat(out).toString()):reject(new Error('COMMAND'));}catch{reject(new Error('DEADLINE'));}});p.stdin.end(input);
   });
 }
 function protectedFile(file,uid=0){const s=fs.lstatSync(file);requireFact(s.isFile()&&!s.isSymbolicLink()&&s.uid===uid&&(s.mode&0o077)===0,'PERMISSIONS');return s;}
@@ -108,20 +114,22 @@ function privateDir(dir,uid=0){const s=fs.lstatSync(dir);requireFact(s.isDirecto
 function readContract(){requireFact(process.platform==='linux'&&process.getuid()===0,'HOLD');privateDir(ROOT);protectedFile(`${ROOT}/runtime.json`);return validateContract(JSON.parse(fs.readFileSync(`${ROOT}/runtime.json`)));}
 function actualCgroup(dir){const cpu=fs.readFileSync(`${dir}/cpu.max`,'utf8').trim().split(/\s+/);const memory=Number(fs.readFileSync(`${dir}/memory.max`,'utf8').trim());requireFact(fs.readFileSync(`${dir}/memory.swap.max`,'utf8').trim()==='0','SWAP');return {cpu:Number(cpu[0])/Number(cpu[1]),memory};}
 function ownAux(c){const rel=fs.readFileSync('/proc/self/cgroup','utf8').trim().split('\n').find(x=>x.startsWith('0::'))?.slice(3);requireFact(rel&&path.resolve('/sys/fs/cgroup'+rel)===c.auxiliary.cgroup,'AUX_CGROUP');const row=actualCgroup(c.auxiliary.cgroup);requireFact(row.cpu<=c.auxiliary.cpu&&row.memory<=c.auxiliary.memory,'AUX_CGROUP');return row;}
-function compose(c,args,budget){return command('docker',['compose','--project-name',c.project,'--file',`${ROOT}/compose.yaml`,...args],{timeout:budget.remaining(10000)});}
-async function inspect(id){return JSON.parse(await command('docker',['inspect',id]))[0];}
-async function ownContainers(c){const ids=(await command('docker',['ps','-aq','--filter',`label=com.docker.compose.project=${c.project}`])).trim().split(/\s+/).filter(Boolean);const rows=[];for(const id of ids){const i=await inspect(id);const service=i.Config.Labels['com.docker.compose.service'];assertOwned(i,c,service);rows.push(i);}requireFact(new Set(rows.map(x=>x.Config.Labels['com.docker.compose.service'])).size===rows.length,'UNKNOWN');return rows;}
-async function baseline(c){
+function compose(c,args,budget){return command('docker',['compose','--project-name',c.project,'--file',`${ROOT}/compose.yaml`,...args],{budget});}
+async function inspect(id,budget){return JSON.parse(await command('docker',['inspect',id],{budget}))[0];}
+async function ownContainers(c,budget){const ids=(await command('docker',['ps','-aq','--filter',`label=com.docker.compose.project=${c.project}`],{budget})).trim().split(/\s+/).filter(Boolean);const rows=[];for(const id of ids){const i=await inspect(id,budget);const service=i.Config.Labels['com.docker.compose.service'];assertOwned(i,c,service);rows.push(i);}requireFact(new Set(rows.map(x=>x.Config.Labels['com.docker.compose.service'])).size===rows.length,'UNKNOWN');return rows;}
+async function baseline(c,budget){
+  budget.remaining();
   requireFact(os.freemem()>=c.thresholds.minFreeMemory&&os.loadavg()[0]<=c.thresholds.maxLoad,'BASELINE');
   const disk=fs.statfsSync(ROOT);requireFact(disk.bavail*disk.bsize>=c.thresholds.minFreeDisk,'BASELINE');
-  for(const b of c.baseline){const i=await inspect(b.id);requireFact(i.Image===b.image&&i.State.Status===b.status&&JSON.stringify(i.Mounts)===JSON.stringify(b.mounts),'BASELINE');
+  for(const b of c.baseline){const i=await inspect(b.id,budget);requireFact(i.Image===b.image&&i.State.Status===b.status&&JSON.stringify(i.Mounts)===JSON.stringify(b.mounts),'BASELINE');
     requireFact(Number.isSafeInteger(b.memoryUsageBytes)&&b.memoryUsageBytes>=0,'BASELINE');
     const rel=fs.readFileSync(`/proc/${i.State.Pid}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3).trim();requireFact(rel,'BASELINE');
     const dir='/sys/fs/cgroup'+rel;const memory=Number(fs.readFileSync(`${dir}/memory.current`,'utf8'));requireFact(memory-b.memoryUsageBytes<=c.thresholds.maxOldMemoryGrowth,'BASELINE');
-    const stats=await command('docker',['stats','--no-stream','--format','{{.CPUPerc}}',b.id]);const cpu=Number(stats.trim().replace('%',''));requireFact(Number.isFinite(cpu)&&cpu<=c.thresholds.maxOldCpuPercent,'BASELINE');
+    const stats=await command('docker',['stats','--no-stream','--format','{{.CPUPerc}}',b.id],{budget});const cpu=Number(stats.trim().replace('%',''));requireFact(Number.isFinite(cpu)&&cpu<=c.thresholds.maxOldCpuPercent,'BASELINE');
   }
 }
-async function cgroups(c,containers){
+async function cgroups(c,containers,budget){
+  budget.remaining();
   const rows=[ownAux(c)];
   for(const i of containers){assertOwned(i,c,i.Config.Labels['com.docker.compose.service']);requireFact(i.State.Running&&i.State.Pid>0&&!i.State.OOMKilled,'RESOURCES');
     const rel=fs.readFileSync(`/proc/${i.State.Pid}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3);requireFact(rel,'RESOURCES');rows.push(actualCgroup('/sys/fs/cgroup'+rel.trim()));
@@ -131,33 +139,36 @@ async function cgroups(c,containers){
   }
   assertResources(rows);return rows;
 }
-async function preflight(c,{port=true}={}){
+async function preflight(c,budget,{port=true}={}){
+  budget.remaining();
   for(const name of SOURCE_FILES){const file=`${ROOT}/${name}`;requireFact(!fs.lstatSync(file).isSymbolicLink()&&crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')===c.sourceHashes[name],'SOURCE');}
   requireFact(!fs.readFileSync('/proc/sys/kernel/core_pattern','utf8').trim().startsWith('|'),'CORE_HANDLER');
   requireFact(fs.readFileSync('/proc/self/limits','utf8').split('\n').some(x=>/^Max core file size\s+0\s+0\s+bytes$/.test(x.trim())),'CORE');
   requireFact(fs.readFileSync('/sys/class/dmi/id/product_uuid','utf8').trim()===c.machineUuid&&typeof c.machineUuid==='string','HOST');
-  ownAux(c);await baseline(c);
+  ownAux(c);await baseline(c,budget);
   privateDir(`${ROOT}/secrets`);privateDir(`${ROOT}/data`,991);privateDir(`${ROOT}/events`);
   protectedFile(`${ROOT}/secrets/tls.key`);protectedFile(`${ROOT}/secrets/tls.crt`);
   const cert=fs.readFileSync(`${ROOT}/secrets/tls.crt`);requireFact(crypto.createHash('sha256').update(cert).digest('hex')===c.certificateSha256,'TLS');
   const x=new crypto.X509Certificate(cert);requireFact(x.checkHost(c.domain)&&Date.parse(x.validTo)>Date.now(),'TLS');
-  const info=JSON.parse(await command('docker',['info','--format','{{json .}}']));requireFact(info.OSType==='linux'&&info.Architecture==='x86_64'&&info.CgroupVersion==='2','PLATFORM');
-  for(const p of Object.values(PINS)){const i=JSON.parse(await command('docker',['image','inspect',p.image]))[0];requireFact(i.Os==='linux'&&i.Architecture==='amd64'&&i.RepoDigests.includes(p.image),'IMAGE');}
+  const info=JSON.parse(await command('docker',['info','--format','{{json .}}'],{budget}));requireFact(info.OSType==='linux'&&info.Architecture==='x86_64'&&info.CgroupVersion==='2','PLATFORM');
+  for(const p of Object.values(PINS)){const i=JSON.parse(await command('docker',['image','inspect',p.image],{budget}))[0];requireFact(i.Os==='linux'&&i.Architecture==='amd64'&&i.RepoDigests.includes(p.image),'IMAGE');}
   if(port)await new Promise((resolve,reject)=>{const s=net.createServer();s.once('error',()=>reject(new Error('BUSY')));s.listen(c.port,'127.0.0.1',()=>s.close(resolve));});
+  budget.remaining();
 }
 function yamlString(x){return JSON.stringify(x);}
 function render(c,text,values){return text.replace(/\{\{([A-Z_]+)\}\}/g,(_,key)=>{requireFact(Object.hasOwn(values,key),'TEMPLATE');return values[key];});}
-async function configure(c){
-  await preflight(c);requireFact((await ownContainers(c)).length===0,'BUSY');
+export function templateValues(c,secrets){return {...Object.fromEntries(Object.entries(secrets).map(([k,v])=>[k,yamlString(v)])),DOMAIN:yamlString(c.domain),DOMAIN_RAW:c.domain,SERVER_NAME:yamlString(serverName(c)),SERVER_REGEX:serverName(c).replaceAll('.','\\.'),PORT:String(c.port),RUN_ID:c.runId,ROOT};}
+async function configure(c,budget){
+  await preflight(c,budget);requireFact((await ownContainers(c,budget)).length===0,'BUSY');
   const fresh=()=>crypto.randomBytes(32).toString('hex');
   const secrets={AS_TOKEN:fresh(),HS_TOKEN:fresh(),REGISTRATION_SECRET:fresh(),MACAROON_SECRET:fresh(),FORM_SECRET:fresh(),LIVEKIT_KEY:fresh(),LIVEKIT_SECRET:fresh()};
-  const values={...Object.fromEntries(Object.entries(secrets).map(([k,v])=>[k,yamlString(v)])),DOMAIN:yamlString(c.domain),DOMAIN_RAW:c.domain,DOMAIN_REGEX:c.domain.replaceAll('.','\\.'),PORT:String(c.port),RUN_ID:c.runId,ROOT};
+  const values=templateValues(c,secrets);
   const targets=[['homeserver.yaml.example','secrets/homeserver.yaml',991],['appservice-registration.yaml.example','secrets/appservice.yaml',991],['livekit.yaml.example','secrets/livekit.yaml',0],['Caddyfile','secrets/Caddyfile',0]];
   for(const [,target] of targets)requireFact(!fs.existsSync(`${ROOT}/${target}`),'BUSY');
   for(const [source,target,uid] of targets){const out=render(c,fs.readFileSync(`${ROOT}/${source}`,'utf8'),values);fs.writeFileSync(`${ROOT}/${target}`,out,{flag:'wx',mode:0o400});fs.chownSync(`${ROOT}/${target}`,uid,uid);}
   fs.writeFileSync(`${ROOT}/secrets/livekit.key`,secrets.LIVEKIT_KEY,{flag:'wx',mode:0o400});fs.writeFileSync(`${ROOT}/secrets/livekit.secret`,secrets.LIVEKIT_SECRET,{flag:'wx',mode:0o400});
   const env=`RTC_DOMAIN=${c.domain}\nRTC_PORT=${c.port}\nRTC_RUN_ID=${c.runId}\n`;fs.writeFileSync(`${ROOT}/.env`,env,{flag:'wx',mode:0o400});
-  await compose(c,['config','--quiet'],new Budget(10000));
+  await compose(c,['config','--quiet'],budget);
 }
 function validateGenerated(c){
   const files=[['homeserver.yaml',991],['appservice.yaml',991],['livekit.yaml',0],['Caddyfile',0],['livekit.key',0],['livekit.secret',0]];
@@ -168,8 +179,46 @@ function validateGenerated(c){
     const value=JSON.parse(text.match(new RegExp('^'+yaml+': (.+)$','m'))?.[1]??'null');requireFact(typeof value==='string'&&/^[a-f0-9]{64}$/.test(value),'CONFIG');secrets[key]=yamlString(value);
   }
   for(const [key,name] of [['LIVEKIT_KEY','livekit.key'],['LIVEKIT_SECRET','livekit.secret']]){const value=fs.readFileSync(`${ROOT}/secrets/${name}`,'utf8');requireFact(/^[a-f0-9]{64}$/.test(value),'CONFIG');secrets[key]=yamlString(value);}
-  const values={...secrets,DOMAIN:yamlString(c.domain),DOMAIN_RAW:c.domain,DOMAIN_REGEX:c.domain.replaceAll('.','\\.'),PORT:String(c.port),RUN_ID:c.runId,ROOT};
+  const values={...templateValues(c,{}),...secrets};
   for(const [template,target] of [['homeserver.yaml.example','homeserver.yaml'],['appservice-registration.yaml.example','appservice.yaml'],['livekit.yaml.example','livekit.yaml'],['Caddyfile','Caddyfile']])requireFact(render(c,fs.readFileSync(`${ROOT}/${template}`,'utf8'),values)===fs.readFileSync(`${ROOT}/secrets/${target}`,'utf8'),'CONFIG');
+}
+
+function ownershipPath(c){return `${ROOT}/ownership-${c.runId}.json`;}
+function readOwnership(c){protectedFile(ownershipPath(c));return JSON.parse(fs.readFileSync(ownershipPath(c),'utf8'));}
+function writeOwnership(c,containers){
+  const receipt={version:1,host:c.host,machineUuid:c.machineUuid,project:c.project,runId:c.runId,containers:containers.map(i=>({id:i.Id,service:i.Config.Labels['com.docker.compose.service'],image:i.Config.Image,imageId:i.Image,created:i.Created}))};
+  const fd=fs.openSync(ownershipPath(c),'wx',0o400);try{fs.writeFileSync(fd,JSON.stringify(receipt)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+  const directory=fs.openSync(ROOT,'r');try{fs.fsyncSync(directory);}finally{fs.closeSync(directory);}return receipt;
+}
+const recoveryIO={machine:()=>fs.readFileSync('/sys/class/dmi/id/product_uuid','utf8').trim(),inspect,stop:(id,budget)=>command('docker',['stop','--time','3',id],{budget})};
+export async function stopOwned(c,receipt,budget,io=recoveryIO){
+  let unknown=false;
+  try{
+    budget.remaining();requireFact(receipt?.version===1&&receipt.host===c.host&&receipt.runId===c.runId&&receipt.project===c.project&&receipt.machineUuid===c.machineUuid&&io.machine()===c.machineUuid,'UNKNOWN');
+    requireFact(Array.isArray(receipt.containers)&&receipt.containers.length===4&&new Set(receipt.containers.map(x=>x.id)).size===4&&new Set(receipt.containers.map(x=>x.service)).size===4,'UNKNOWN');
+    for(const row of [...receipt.containers].reverse()){
+      budget.remaining();
+      try{
+        requireFact(SERVICES.includes(row.service)&&row.image===PINS[row.service].image&&/^[a-f0-9]{64}$/.test(row.id)&&/^sha256:[a-f0-9]{64}$/.test(row.imageId)&&typeof row.created==='string','UNKNOWN');
+        const verify=i=>{assertOwned(i,c,row.service);requireFact(i.Id===row.id&&i.Image===row.imageId&&i.Created===row.created,'UNKNOWN');};
+        const current=await io.inspect(row.id,budget);budget.remaining();verify(current);
+        if(current.State.Running){budget.remaining();await io.stop(row.id,budget);}
+        const after=await io.inspect(row.id,budget);budget.remaining();verify(after);requireFact(!after.State.Running,'UNKNOWN');
+      }catch(error){if(error.message==='DEADLINE')throw error;unknown=true;}
+    }
+    budget.remaining();return unknown?'UNKNOWN':'OK';
+  }catch(error){return error.message==='DEADLINE'?'DEADLINE':'UNKNOWN';}
+}
+export async function startExperiment(c,budget,io){
+  let launched=false;
+  try{
+    budget.remaining();await io.preflight(c,budget);budget.remaining();await io.launch(c,budget);launched=true;
+    while(true){budget.remaining();const status=await io.status(c,budget);budget.remaining();if(status.status==='OK')return;await new Promise(r=>setTimeout(r,budget.remaining(25)));}
+  }catch(error){if(launched)await io.recover(c);throw error;}
+}
+
+export function assertMembershipDenial(response){
+  const parsed=JSON.parse(response.body);requireFact(response.status===403&&parsed.errcode==='M_FORBIDDEN'&&!parsed.jwt,'DENIAL');return {status:response.status,errcode:parsed.errcode};
 }
 
 export function roomAlias(room){return crypto.createHash('sha256').update(JSON.stringify([room,'m.call#ROOM'])).digest('base64').replace(/=+$/,'');}
@@ -275,22 +324,23 @@ class Runtime {
   constructor(c){this.c=c;this.attaches=new Map();this.sockets=new Set();this.fixture={open:0,close:0,upstreamOpen:0,upstreamClosed:0,destination:0,ack:0,ready:0,fault:0};this.stopping=false;this.budget=new Budget(300000);this.events=new SafeEvents(event=>{
     fs.appendFileSync(`${ROOT}/events/${c.runId}.jsonl`,JSON.stringify({...event,time:new Date().toISOString()})+'\n',{mode:0o600,flag:'a'});
   });}
-  async waitFor(predicate,budget){while(!predicate()){await new Promise(r=>setTimeout(r,Math.min(25,budget.remaining())));}}
-  async start(){
-    const budget=new Budget(120000);await preflight(this.c);validateGenerated(this.c);await compose(this.c,['create','--pull','never'],budget);
-    const containers=await ownContainers(this.c);requireFact(containers.length===4,'OWNERSHIP');
+  async waitFor(predicate,budget){return budget.waitFor(predicate);}
+  async start(budget){
+    await preflight(this.c,budget);validateGenerated(this.c);await compose(this.c,['create','--pull','never'],budget);
+    const containers=await ownContainers(this.c,budget);requireFact(containers.length===4,'OWNERSHIP');writeOwnership(this.c,containers);
     for(const i of containers){requireFact(i.HostConfig.LogConfig.Type==='none'&&i.HostConfig.MemorySwap===i.HostConfig.Memory&&i.HostConfig.Memory>0&&i.HostConfig.NanoCpus>0&&i.HostConfig.NetworkMode!=='host'&&!i.HostConfig.Privileged&&i.HostConfig.Ulimits.some(x=>x.Name==='core'&&x.Hard===0&&x.Soft===0),'CONFIG');}
     for(const service of ['synapse','livekit','auth','caddy']){
+      budget.remaining();requireFact(!this.stopping,'STOP');
       const i=containers.find(x=>x.Config.Labels['com.docker.compose.service']===service);assertOwned(i,this.c,service);
       const child=spawn('docker',['start','--attach',i.Id],{stdio:['ignore','pipe','pipe']});const state={child,ended:false,id:i.Id};this.attaches.set(service,state);
       child.stdout.on('data',b=>this.events.consume(service,b));child.stderr.on('data',b=>this.events.consume(service,b));child.on('error',()=>{state.ended=true;});child.on('close',()=>{state.ended=true;});
-      while(!(await inspect(i.Id)).State.Running){requireFact(!state.ended,'START');await new Promise(r=>setTimeout(r,Math.min(25,budget.remaining())));}
-      const actual=await inspect(i.Id);await cgroups(this.c,[actual]);this.events.event(service,'started');
+      while(!(await inspect(i.Id,budget)).State.Running){requireFact(!state.ended&&!this.stopping,'START');await new Promise(r=>setTimeout(r,budget.remaining(25)));}
+      const actual=await inspect(i.Id,budget);await cgroups(this.c,[actual],budget);this.events.event(service,'started');
       if(service==='synapse')await this.startHelper(i.Id,budget);
     }
-    await cgroups(this.c,await ownContainers(this.c));await baseline(this.c);
-    let ready=false;while(!ready){try{await this.api('/_matrix/client/versions',{},budget);ready=true;}catch{budget.remaining();await new Promise(r=>setTimeout(r,100));}}
-    let auditing=false;this.monitor=setInterval(()=>{if(auditing||this.stopping)return;auditing=true;this.audit().catch(()=>this.stop().catch(()=>{})).finally(()=>{auditing=false;});},1000);
+    await cgroups(this.c,await ownContainers(this.c,budget),budget);await baseline(this.c,budget);
+    let ready=false;while(!ready){try{await this.api('/_matrix/client/versions',{},budget);ready=true;}catch{await new Promise(r=>setTimeout(r,budget.remaining(100)));}}
+    let auditing=false;this.monitor=setInterval(()=>{if(auditing||this.stopping)return;auditing=true;this.audit(this.budget).catch(()=>this.stop().catch(()=>{})).finally(()=>{auditing=false;});},1000);
   }
   async startHelper(id,budget){
     this.helper=spawn('docker',['exec','-i',id,'python','-u','-c',OPENID_HELPER],{stdio:['pipe','pipe','pipe']});let carry='';
@@ -298,25 +348,24 @@ class Runtime {
     this.helper.stderr.on('data',b=>this.events.consume('synapse',b));this.helper.on('error',()=>{this.fixture.fault++;});this.helper.on('close',()=>{if(!this.stopping)this.fixture.fault++;});
     await this.waitFor(()=>this.fixture.ready===1,budget);
   }
-  async mode(mode,user){requireFact(['real','fixture','timeout'].includes(mode)||/^redirect3\d\d$/.test(mode),'MODE');requireFact(!user||new RegExp(`^@rtc-[ab]:${this.c.domain.replaceAll('.','\\.')}$`).test(user),'MODE');const count=this.fixture.ack;this.helper.stdin.write(JSON.stringify({mode,...(user?{user}:{})})+'\n');await this.waitFor(()=>this.fixture.ack>count,new Budget(1000));}
-  async audit(){this.budget.remaining();requireFact(this.fixture.fault===0,'HELPER');await baseline(this.c);await cgroups(this.c,await ownContainers(this.c));requireFact([...this.attaches.values()].every(x=>!x.ended),'ATTACH');}
+  async mode(mode,user,budget){budget.remaining();requireFact(['real','fixture','timeout'].includes(mode)||/^redirect3\d\d$/.test(mode),'MODE');requireFact(!user||new RegExp(`^@rtc-[ab]:${serverName(this.c).replaceAll('.','\\.')}$`).test(user),'MODE');const count=this.fixture.ack;this.helper.stdin.write(JSON.stringify({mode,...(user?{user}:{})})+'\n');await this.waitFor(()=>this.fixture.ack>count,budget.child(1000));}
+  async audit(budget){this.budget.remaining();budget.remaining();requireFact(this.fixture.fault===0,'HELPER');await baseline(this.c,budget);await cgroups(this.c,await ownContainers(this.c,budget),budget);requireFact([...this.attaches.values()].every(x=>!x.ended),'ATTACH');}
   async api(route,{method='GET',body,token,expected=200}={},budget=new Budget(10000)){
     const r=await httpRequest(`https://${this.c.domain}:${this.c.port}${route}`,{method,body:body===undefined?undefined:JSON.stringify(body),token,lookup:lookupLoopback,timeout:budget.remaining(8000),headers:body===undefined?{}:{'Content-Type':'application/json'}});
     this.events.event('verifier','http',r.status,r.status===expected?'OK':'FAIL');requireFact(r.status===expected,'HTTP');let parsed;try{parsed=JSON.parse(r.body);}catch{throw new Error('BODY');}return parsed;
   }
-  async auth(body,budget){const result=await transaction(()=>httpRequest(`https://${this.c.domain}:${this.c.port}/sfu/get`,{method:'POST',body:JSON.stringify(body),lookup:lookupLoopback,timeout:budget.remaining(10000),headers:{'Content-Type':'application/json'}}),()=>this.killAuth(),{budget,timeout:8000,limit:10000});requireFact(result.status==='OK','DEADLINE');return result.value;}
-  async killAuth(){
-    const state=this.attaches.get('auth');requireFact(state,'UNKNOWN');const i=await inspect(state.id);assertOwned(i,this.c,'auth');await command('docker',['kill','--signal','KILL',i.Id],{timeout:1000});
-    const budget=new Budget(1500);let exit=false;while(true){exit=!(await inspect(i.Id)).State.Running;if(exit&&state.ended&&this.fixture.open===this.fixture.close&&this.fixture.upstreamOpen===this.fixture.upstreamClosed)break;await new Promise(r=>setTimeout(r,Math.min(10,budget.remaining())));}
+  async auth(body,budget){const requestBudget=budget.child(10000);const result=await transaction(()=>httpRequest(`https://${this.c.domain}:${this.c.port}/sfu/get`,{method:'POST',body:JSON.stringify(body),lookup:lookupLoopback,timeout:requestBudget.remaining(),headers:{'Content-Type':'application/json'}}),()=>this.killAuth(requestBudget),{budget:requestBudget,timeout:8000,limit:10000});requireFact(result.status==='OK','DEADLINE');return result.value;}
+  async killAuth(budget){
+    const state=this.attaches.get('auth');requireFact(state,'UNKNOWN');const i=await inspect(state.id,budget);assertOwned(i,this.c,'auth');await command('docker',['kill','--signal','KILL',i.Id],{timeout:1000,budget});
+    let exit=false;while(true){budget.remaining();exit=!(await inspect(i.Id,budget)).State.Running;if(exit&&state.ended&&this.fixture.open===this.fixture.close&&this.fixture.upstreamOpen===this.fixture.upstreamClosed)break;await new Promise(r=>setTimeout(r,budget.remaining(10)));}
     return {exit,attachEnd:state.ended,upstreamClosed:this.fixture.open===this.fixture.close&&this.fixture.upstreamOpen===this.fixture.upstreamClosed};
   }
-  async stop(){
-    if(this.stopping)return;this.stopping=true;clearInterval(this.monitor);const budget=new Budget(60000);let unknown=false;
-    for(const service of [...SERVICES].reverse()){
-      const state=this.attaches.get(service);if(!state)continue;
-      try{const i=await inspect(state.id);assertOwned(i,this.c,service);if(i.State.Running)await command('docker',['stop','--time','3',i.Id],{timeout:budget.remaining(10000)});const end=await inspect(i.Id);requireFact(!end.State.Running,'STOP');await this.waitFor(()=>state.ended,budget);this.events.event(service,'stopped');}catch{unknown=true;}
-    }
-    await baseline(this.c);this.events.event('verifier','chunks',0,'OK',this.events.chunks);requireFact(!unknown,'UNKNOWN');
+  async stop(budget=new Budget(60000)){
+    if(this.stopPromise)return this.stopPromise;this.stopping=true;clearInterval(this.monitor);
+    this.stopPromise=(async()=>{const result=await stopOwned(this.c,readOwnership(this.c),budget);requireFact(result==='OK',result);
+      for(const [service,state] of this.attaches){await this.waitFor(()=>state.ended,budget);this.events.event(service,'stopped');}
+      await baseline(this.c,budget);this.events.event('verifier','chunks',0,'OK',this.events.chunks);
+    })();return this.stopPromise;
   }
 }
 
@@ -337,7 +386,7 @@ Runtime.prototype.register=async function(name,budget){
   const config=fs.readFileSync(`${ROOT}/secrets/homeserver.yaml`,'utf8');const secret=JSON.parse(config.match(/^registration_shared_secret: (.+)$/m)[1]);
   const mac=crypto.createHmac('sha1',secret).update([nonce,name,password,'notadmin'].join('\0')).digest('hex');
   const result=await this.api(endpoint,{method:'POST',body:{nonce,username:name,password,admin:false,mac}},budget);
-  requireFact(result.user_id===`@${name}:${this.c.domain}`&&typeof result.access_token==='string'&&typeof result.device_id==='string','IDENTITY');return result;
+  requireFact(result.user_id===`@${name}:${serverName(this.c)}`&&typeof result.access_token==='string'&&typeof result.device_id==='string','IDENTITY');return result;
 };
 Runtime.prototype.admin=async function(method,body,budget){
   const key=fs.readFileSync(`${ROOT}/secrets/livekit.key`,'utf8'),secret=fs.readFileSync(`${ROOT}/secrets/livekit.secret`,'utf8');
@@ -347,41 +396,41 @@ Runtime.prototype.admin=async function(method,body,budget){
 };
 Runtime.prototype.openid=async function(account,budget){
   const result=await this.api(`/_matrix/client/v3/user/${encodeURIComponent(account.user_id)}/openid/request_token`,{method:'POST',token:account.access_token,body:{}},budget);
-  requireFact(result.matrix_server_name===this.c.domain&&typeof result.access_token==='string','OPENID');return result;
+  requireFact(result.matrix_server_name===serverName(this.c)&&typeof result.access_token==='string','OPENID');return result;
 };
 Runtime.prototype.denied=async function(body,budget){
   const before=await this.admin('ListParticipants',{room:roomAlias(body.room)},budget);
-  const result=await this.auth(body,budget);requireFact([401,403].includes(result.status),'DENIAL');
-  const parsed=JSON.parse(result.body);requireFact(!parsed.jwt&&typeof parsed.errcode==='string','DENIAL');
+  const result=await this.auth(body,budget);const observed=assertMembershipDenial(result);
   const after=await this.admin('ListParticipants',{room:roomAlias(body.room)},budget);
-  assertParticipants(after.participants??[],(before.participants??[]).map(x=>x.identity));this.events.event('auth','http',result.status,'M_FORBIDDEN');
+  assertParticipants(after.participants??[],(before.participants??[]).map(x=>x.identity));this.events.event('auth','http',observed.status,observed.errcode);
 };
-Runtime.prototype.scan=async function(secrets){
+Runtime.prototype.scan=async function(secrets,budget){
+  budget.remaining();
   const file=`${ROOT}/events/${this.c.runId}.jsonl`;protectedFile(file);const content=fs.readFileSync(file,'utf8');
   for(const secret of secrets){const forms=[secret,encodeURIComponent(secret),JSON.stringify(secret).slice(1,-1),[...secret].map(x=>'\\u'+x.charCodeAt(0).toString(16).padStart(4,'0')).join('')];requireFact(forms.every(x=>!content.includes(x)),'LEAK');}
-  requireFact(!fs.existsSync(`${ROOT}/data/homeserver.log`),'LOG_FILE');for(const i of await ownContainers(this.c))requireFact(i.HostConfig.LogConfig.Type==='none','LOG_DRIVER');
+  requireFact(!fs.existsSync(`${ROOT}/data/homeserver.log`),'LOG_FILE');for(const i of await ownContainers(this.c,budget))requireFact(i.HostConfig.LogConfig.Type==='none','LOG_DRIVER');
   this.events.event('verifier','scan',0,'OK',secrets.length);
 };
 Runtime.prototype.sentinels=async function(account,room,budget){
-  const sentinel='incapable-'+crypto.randomBytes(24).toString('hex');const body={room,device_id:account.device_id,openid_token:{access_token:sentinel,token_type:'Bearer',expires_in:1,matrix_server_name:this.c.domain}};
-  await this.mode('real');await this.denied(body,budget);await this.scan([sentinel]);
-  await this.mode('fixture',account.user_id);const fixture=await this.auth(body,budget);requireFact(fixture.status===200,'FIXTURE');this.events.event('auth','gate',200,'OK',1);await this.scan([sentinel]);
+  const sentinel='incapable-'+crypto.randomBytes(24).toString('hex');const body={room,device_id:account.device_id,openid_token:{access_token:sentinel,token_type:'Bearer',expires_in:1,matrix_server_name:serverName(this.c)}};
+  await this.mode('real',undefined,budget);const incapable=await this.auth(body,budget);const incapBody=JSON.parse(incapable.body);requireFact(incapable.status===401&&incapBody.errcode==='M_UNAUTHORIZED'&&!incapBody.jwt,'INCAPABLE');this.events.event('auth','http',incapable.status,incapBody.errcode);await this.scan([sentinel],budget);
+  await this.mode('fixture',account.user_id,budget);const fixture=await this.auth(body,budget);requireFact(fixture.status===200,'FIXTURE');this.events.event('auth','gate',200,'OK',1);await this.scan([sentinel],budget);
   for(let status=300;status<400;status++){
-    await this.mode(`redirect${status}`);const r=await httpRequest(`https://${this.c.domain}:${this.c.port}/_matrix/federation/v1/openid/userinfo?access_token=${encodeURIComponent(sentinel)}`,{lookup:lookupLoopback,timeout:budget.remaining(8000)});
+    await this.mode(`redirect${status}`,undefined,budget);const r=await httpRequest(`https://${this.c.domain}:${this.c.port}/_matrix/federation/v1/openid/userinfo?access_token=${encodeURIComponent(sentinel)}`,{lookup:lookupLoopback,timeout:budget.remaining(8000)});
     requireFact(r.status===502&&!r.headers.location&&!r.headers.refresh&&r.body.length===0&&this.fixture.destination===0,'REDIRECT');
   }
   for(const server of ['127.0.0.1:9','127.0.0.1:8080']){
-    const r=await this.auth({...body,openid_token:{...body.openid_token,matrix_server_name:server}},budget);requireFact(r.status>=400&&r.status<600,'FAULT');await this.scan([sentinel]);
+    const r=await this.auth({...body,openid_token:{...body.openid_token,matrix_server_name:server}},budget);requireFact(r.status>=400&&r.status<600,'FAULT');await this.scan([sentinel],budget);
   }
-  await this.mode('timeout');const started=performance.now();const open=this.fixture.upstreamOpen;
-  const r=await transaction(()=>httpRequest(`https://${this.c.domain}:${this.c.port}/sfu/get`,{method:'POST',body:JSON.stringify(body),lookup:lookupLoopback,timeout:10000,headers:{'Content-Type':'application/json'}}),()=>this.killAuth(),{budget,timeout:8000,limit:10000});
+  await this.mode('timeout',undefined,budget);const started=performance.now();const open=this.fixture.upstreamOpen;const requestBudget=budget.child(10000);
+  const r=await transaction(()=>httpRequest(`https://${this.c.domain}:${this.c.port}/sfu/get`,{method:'POST',body:JSON.stringify(body),lookup:lookupLoopback,timeout:requestBudget.remaining(),headers:{'Content-Type':'application/json'}}),()=>this.killAuth(requestBudget),{budget:requestBudget,timeout:8000,limit:10000});
   requireFact(r.status==='OK'&&r.value.status>=400&&r.value.status<600,'DEADLINE_PROOF');
-  await this.waitFor(()=>this.fixture.upstreamOpen>open&&this.fixture.upstreamOpen===this.fixture.upstreamClosed&&this.fixture.open===this.fixture.close,new Budget(Math.max(1,10000-(performance.now()-started))));
+  await this.waitFor(()=>this.fixture.upstreamOpen>open&&this.fixture.upstreamOpen===this.fixture.upstreamClosed&&this.fixture.open===this.fixture.close,requestBudget);
   requireFact(performance.now()-started<10000,'DEADLINE_PROOF');
-  await this.mode('real');await this.scan([sentinel]);this.events.event('verifier','gate',200,'OK',100);
+  await this.mode('real',undefined,budget);await this.scan([sentinel],budget);this.events.event('verifier','gate',200,'OK',100);
 };
-Runtime.prototype.verify=async function(){
-  const budget=new Budget(120000);await this.audit();const secrets=[];const sockets=[];
+Runtime.prototype.verify=async function(budget){
+  await this.audit(budget);const secrets=[];const sockets=[];
   try{
     const a=await this.register('rtc-a',budget),b=await this.register('rtc-b',budget),outsider=await this.register('rtc-outsider',budget);
     secrets.push(a.access_token,b.access_token,outsider.access_token);
@@ -404,43 +453,54 @@ Runtime.prototype.verify=async function(){
       const participants=await this.admin('ListParticipants',{room:roomAlias(room)},budget);assertParticipants(participants.participants??[],expected);
     }
     const wrong=await httpRequest(`https://${this.c.domain}:${this.c.port}/get_token`,{method:'POST',lookup:lookupLoopback,timeout:budget.remaining(8000),body:JSON.stringify({room_id:room,slot_id:'m.call#ROOM',openid_token:tokenA,member:{id:'wrong-subject',claimed_user_id:outsider.user_id,claimed_device_id:a.device_id}}),headers:{'Content-Type':'application/json'}});
-    requireFact([401,403].includes(wrong.status)&&!JSON.parse(wrong.body).jwt,'WRONG_SUBJECT');
+    const wrongBody=JSON.parse(wrong.body);requireFact(wrong.status===401&&wrongBody.errcode==='M_UNAUTHORIZED'&&!wrongBody.jwt,'WRONG_SUBJECT');this.events.event('auth','http',wrong.status,wrongBody.errcode);
+    assertParticipants((await this.admin('ListParticipants',{room:roomAlias(room)},budget)).participants??[],expected);
     await this.api(`/_matrix/client/v3/rooms/${encoded}/kick`,{method:'POST',body:{user_id:b.user_id},token:a.access_token},budget);const fresh=await this.openid(b,budget);secrets.push(fresh.access_token);await this.denied(request(b,fresh),budget);
     // Existing participants and old JWT remain separate upstream behavior. Remove
     // both own participants explicitly; do not claim kick revokes established RTC.
     for(const identity of expected)await this.admin('RemoveParticipant',{room:roomAlias(room),identity},budget);
     assertParticipants((await this.admin('ListParticipants',{room:roomAlias(room)},budget)).participants??[],[]);
-    await this.scan(secrets);await this.audit();this.events.event('verifier','participants',200,'OK',2);this.events.event('verifier','gate',200,'OK',0);
+    await this.scan(secrets,budget);await this.audit(budget);this.events.event('verifier','participants',200,'OK',2);this.events.event('verifier','gate',200,'OK',0);
   }finally{for(const socket of sockets)socket.destroy();}
 };
 
-async function ipc(c,action,timeout=10000){
+async function ipc(c,action,budget){
   requireFact(['status','verify','stop'].includes(action),'IPC');const sock=`${ROOT}/supervisor.sock`;protectedSocket(sock);
-  return new Promise((resolve,reject)=>{const client=net.createConnection(sock);let carry='';const timer=setTimeout(()=>{client.destroy();reject(new Error('DEADLINE'));},timeout);client.on('connect',()=>client.end(JSON.stringify({action})+'\n'));client.on('data',b=>{carry+=b; if(carry.length>256)client.destroy();});client.on('end',()=>{clearTimeout(timer);try{const r=JSON.parse(carry);requireFact(['OK','FAIL','BUSY'].includes(r.status),'IPC');resolve(r);}catch{reject(new Error('IPC'));}});client.on('error',()=>{clearTimeout(timer);reject(new Error('IPC'));});});
+  return new Promise((resolve,reject)=>{const client=net.createConnection(sock);let carry='';const timer=setTimeout(()=>{client.destroy();reject(new Error('DEADLINE'));},budget.remaining());client.on('connect',()=>client.end(JSON.stringify({action,deadline:budget.end})+'\n'));client.on('data',b=>{carry+=b; if(carry.length>256)client.destroy();});client.on('end',()=>{clearTimeout(timer);try{budget.remaining();const r=JSON.parse(carry);requireFact(['OK','FAIL','BUSY'].includes(r.status),'IPC');resolve(r);}catch{reject(new Error('IPC'));}});client.on('error',()=>{clearTimeout(timer);reject(new Error('IPC'));});});
 }
 function protectedSocket(sock){const s=fs.lstatSync(sock);requireFact(s.isSocket()&&s.uid===0&&(s.mode&0o077)===0,'IPC');}
-async function supervise(c){
+async function supervise(c,startBudget){
   requireFact(!fs.existsSync(`${ROOT}/supervisor.sock`),'BUSY');const runtime=new Runtime(c);let ready=false,busy=true,stopped=false;
   const server=net.createServer({allowHalfOpen:true},client=>{let carry='';client.setTimeout(1000,()=>client.destroy());client.on('data',b=>{carry+=b;if(carry.length>128)client.destroy();});client.on('end',async()=>{
-    client.setTimeout(0);let action;try{const value=JSON.parse(carry);requireFact(Object.keys(value).length===1,'IPC');action=value.action;}catch{client.end('{"status":"FAIL"}');return;}
+    client.setTimeout(0);let action,budget;try{const value=JSON.parse(carry);requireFact(Object.keys(value).length===2&&Object.hasOwn(value,'action')&&Object.hasOwn(value,'deadline'),'IPC');action=value.action;budget=Budget.fromDeadline(value.deadline);requireFact(budget.remaining()<=120000&&budget.end<=runtime.budget.end,'IPC');}catch{client.end('{"status":"FAIL"}');return;}
     if(action==='status'){client.end(JSON.stringify({status:ready?'OK':'BUSY'}));return;}
+    if(action==='stop'&&busy){runtime.stopping=true;client.end('{"status":"BUSY"}');return;}
     if(busy||!ready||!['verify','stop'].includes(action)){client.end('{"status":"BUSY"}');return;}
-    busy=true;try{if(action==='verify')await runtime.verify();else{await runtime.stop();stopped=true;}client.end('{"status":"OK"}');}catch{await runtime.stop().catch(()=>{});stopped=true;client.end('{"status":"FAIL"}');}finally{busy=false;if(runtime.stopping||stopped){server.close();fs.unlinkSync(`${ROOT}/supervisor.sock`);}}
+    busy=true;try{if(action==='verify')await runtime.verify(budget);else{await runtime.stop(budget);stopped=true;}client.end('{"status":"OK"}');}catch{await runtime.stop().catch(()=>{});stopped=true;client.end('{"status":"FAIL"}');}finally{busy=false;if(runtime.stopping||stopped){server.close();if(fs.existsSync(`${ROOT}/supervisor.sock`))fs.unlinkSync(`${ROOT}/supervisor.sock`);}}
   });});
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(`${ROOT}/supervisor.sock`,()=>{fs.chmodSync(`${ROOT}/supervisor.sock`,0o600);resolve();});});
   const timer=setTimeout(async()=>{await runtime.stop().catch(()=>{});server.close();if(fs.existsSync(`${ROOT}/supervisor.sock`))fs.unlinkSync(`${ROOT}/supervisor.sock`);},300000);timer.unref();
-  try{await runtime.start();ready=true;busy=false;}catch{await runtime.stop().catch(()=>{});server.close();fs.unlinkSync(`${ROOT}/supervisor.sock`);throw new Error('START');}
+  try{await runtime.start(startBudget);ready=true;busy=false;}catch{await runtime.stop().catch(()=>{});server.close();if(fs.existsSync(`${ROOT}/supervisor.sock`))fs.unlinkSync(`${ROOT}/supervisor.sock`);throw new Error('START');}
   for(const signal of ['SIGTERM','SIGINT'])process.once(signal,async()=>{await runtime.stop().catch(()=>{});server.close();if(fs.existsSync(`${ROOT}/supervisor.sock`))fs.unlinkSync(`${ROOT}/supervisor.sock`);});
 }
-export async function main(action){
-  requireFact(['preflight','config','up','verify','stop','__supervise'].includes(action),'COMMAND');const c=readContract();
-  if(action==='preflight')await preflight(c);
-  else if(action==='config')await configure(c);
-  else if(action==='__supervise')await supervise(c);
-  else if(action==='up'){
-    await preflight(c);requireFact(!fs.existsSync(`${ROOT}/supervisor.sock`),'BUSY');const child=spawn(process.execPath,[fileURLToPath(import.meta.url),'__supervise'],{detached:true,stdio:'ignore'});child.unref();
-    const budget=new Budget(120000);let ready=false;while(!ready){budget.remaining();if(fs.existsSync(`${ROOT}/supervisor.sock`)){const r=await ipc(c,'status');ready=r.status==='OK';}if(!ready)await new Promise(r=>setTimeout(r,100));}
-  }else if(action==='verify'){const r=await ipc(c,'verify',120000);requireFact(r.status==='OK','VERIFY');}
-  else {const r=await ipc(c,'stop',60000);requireFact(r.status==='OK','STOP');}
+function launchRecovery(c){
+  if(!fs.existsSync(ownershipPath(c)))return;
+  const deadline=new Budget(60000);const child=spawn(process.execPath,[fileURLToPath(import.meta.url),'__recover',String(deadline.end)],{detached:true,stdio:'ignore'});child.unref();
 }
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main(process.argv[2]).then(()=>{if(process.argv[2]!=='__supervise')process.stdout.write('{"service":"verifier","event":"command","errcode":"OK"}\n');}).catch(()=>{process.stderr.write(JSON.stringify({service:'verifier',event:'command',errcode:['verify','stop','__supervise'].includes(process.argv[2])?'FAIL':'HOLD'})+'\n');process.exitCode=1;});
+export async function main(action){
+  const budget=['__supervise','__recover'].includes(action)?Budget.fromDeadline(Number(process.argv[3])):new Budget(action==='stop'?60000:120000);
+  requireFact(['preflight','config','up','verify','stop','__supervise','__recover'].includes(action),'COMMAND');const c=readContract();budget.remaining();ownAux(c);
+  if(action==='preflight')await preflight(c,budget);
+  else if(action==='config')await configure(c,budget);
+  else if(action==='__supervise')await supervise(c,budget);
+  else if(action==='__recover'){const result=await stopOwned(c,readOwnership(c),budget);requireFact(result==='OK',result);await baseline(c,budget);}
+  else if(action==='up'){
+    await startExperiment(c,budget,{preflight,launch:async(_c,shared)=>{shared.remaining();requireFact(!fs.existsSync(`${ROOT}/supervisor.sock`),'BUSY');const child=spawn(process.execPath,[fileURLToPath(import.meta.url),'__supervise',String(shared.end)],{detached:true,stdio:'ignore'});child.unref();},status:async(_c,shared)=>fs.existsSync(`${ROOT}/supervisor.sock`)?ipc(c,'status',shared):{status:'BUSY'},recover:launchRecovery});
+  }else if(action==='verify'){try{const r=await ipc(c,'verify',budget);requireFact(r.status==='OK','VERIFY');}catch(error){launchRecovery(c);throw error;}}
+  else {
+    // Notify a living controller; cleanup ownership never depends on a PID/socket.
+    if(fs.existsSync(`${ROOT}/supervisor.sock`))await ipc(c,'stop',budget.child(1000)).catch(()=>{});
+    const result=await stopOwned(c,readOwnership(c),budget);requireFact(result==='OK',result);await baseline(c,budget);
+  }
+}
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main(process.argv[2]).then(()=>{if(!process.argv[2].startsWith('__'))process.stdout.write('{"service":"verifier","event":"command","errcode":"OK"}\n');}).catch(()=>{process.stderr.write(JSON.stringify({service:'verifier',event:'command',errcode:['verify','stop','__supervise','__recover'].includes(process.argv[2])?'FAIL':'HOLD'})+'\n');process.exitCode=1;});

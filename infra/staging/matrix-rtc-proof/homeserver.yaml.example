@@ -1,4 +1,4 @@
-server_name: {{DOMAIN}}
+server_name: {{SERVER_NAME}}
 public_baseurl: https://{{DOMAIN_RAW}}:{{PORT}}/
 pid_file: /tmp/homeserver.pid
 web_client_location: null
