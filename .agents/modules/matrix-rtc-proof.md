@@ -1,12 +1,12 @@
 # matrix-rtc-proof — 同机零媒体 R0 候选
 
-状态：**PROPOSED／未实施**。Jack 已允许指定腾讯云主机进行 RTC；精确范围和运行合同须独立 docs PR 审查、Jack 签认及可信合并后生效。范围票 #118 与独立范围 PR #119 已建立，尚未合并；关联 M04 #63、M10 #69、M29 #88，窄实施票尚未建立。DRI：Codex协调者；Reviewer须独立于Builder。
+状态：**原范围 PR119 已合并；标准组件精简修订待签认，真实 R0 NOT_RUN**。实施票 #124 的原候选保留在 `feat/matrix-rtc-r0-proof`（`ff4cd0933950dfb8e3afb8bef8b5d5eb7e9684e8`）；本轮仅准备文档候选，不发布或改写原实现。下文原运行合同在新修订签认、独立审查和可信合并前继续有效；关联 M04 #63、M10 #69、M29 #88。
 
 ## 目标与范围
 
 仅证明真实 Matrix 身份/私房成员授权、SFU签票及LiveKit信令，初始和全程零媒体轨道；不以health或伪造token代替。沿用[固定版本/摘要与接口](../../docs/Matrix-protocol-research.md#3-固定候选版本尚不是兼容组合签收)，首轮compatibility `/sfu/get`，AS与full-access只绑定同一个测试homeserver。新TLS代理镜像及完整构建来源仍须核定，缺项HOLD。
 
-## Allowed Files（未来实施候选）
+## Allowed Files（已合并七文件范围）
 
 <!-- allowed-files:start -->
 infra/staging/matrix-rtc-proof/compose.yaml
@@ -18,7 +18,7 @@ infra/staging/matrix-rtc-proof/proof.mjs
 infra/staging/matrix-rtc-proof/proof.test.mjs
 <!-- allowed-files:end -->
 
-仅以上七个未来源码/配置文件；本轮不创建它们，不改现有matrix-proof、产品、依赖manifest或旧业务配置。宿主秘密、证书和运行数据不入Git。
+仅以上七个源码/配置文件；精简文档候选不修改它们，不改现有matrix-proof、产品、依赖manifest或旧业务配置。宿主秘密、证书和运行数据不入Git。
 
 ## 候选运行合同
 
@@ -42,7 +42,20 @@ infra/staging/matrix-rtc-proof/proof.test.mjs
 
 仅关闭access log不足：固定auth的传输错误可能含完整URL。逐服务的原始日志控制、写盘前脱敏和安全事件留存方案仍HOLD，具体运行合同签认前不发送有效令牌；不改宿主或旧业务监控。先用不具认证能力的唯一哨兵覆盖成功、超时、TLS/连接和握手失败，检查代理、Synapse、auth、LiveKit、Docker、验证器的全部输出及拟保留证据，确认原值、URL编码及日志转义形式均未泄漏；真实运行再以只输出计数/结果的扫描复核。发现泄漏即FAIL并停止自有实验、保留受限证据，不能事后删日志伪造通过。允许留存时间、状态/errcode、事件计数、资源与退出码等脱敏安全事件，不把丢弃所有日志当验收。
 
-## Validation（未来接口，当前均未实现/未执行）
+### 标准组件精简修订（PROPOSED，尚未替换原合同）
+
+目标是四个固定官方服务（Synapse、auth、LiveKit、Caddy）加现有 Node 脚本，保留上述七文件范围。移除自建 OpenID 代理、手写 RFC6455 与自建监管层；使用 Node 24.13.0 内置 WebSocket 的 Bearer header 扩展，不加 SDK/npm 依赖，不建立 ICE/媒体连接。源码依据统一见[研究](../../docs/Matrix-protocol-research.md#标准-r0-精简候选2026-10-16)。
+
+| 需 Jack 裁定的窄变化 | 候选边界 |
+|---|---|
+| 期限 | 验证客户端单 HTTP 仍≤10秒；不再承诺 stock auth 内部 socket≤10秒。仅已核定的 OpenID/客户端发现请求为30秒，Twirp总期限未证实；整个启动/验证任务由标准 systemd/Compose 在120秒外界期限内终止，清理≤60秒。进程死亡、卡住及退出负例未实证即HOLD，不把 `WebSocket.close()` 当作 socket 已销毁。 |
+| 合成凭据持久化例外 | 仅本实验合成凭据可受操作系统常规内存管理影响，可能进入受保护的 swap/core；stock auth 原始 stderr 可暂存于受信运行时管道内存。这是对旧 memory-only/原始输出禁令的新例外，不追认旧验收。必须先冻结实际路径、权限和可访问主体；未知即HOLD，不修改宿主或旧业务监控。验证器不额外落盘；凭据仍不得进入持久日志、Git、命令行、导航URL、终端或证据。 |
+| 日志与留证 | 容器使用 `logging: none`、关闭access log；逐项核验Docker与旁路不持久化原始输出。保留脱敏状态、errcode、计数、资源及退出事件；哨兵先验证输出/持久化边界，再发送有效令牌，不把丢弃原始日志当完整验收。发现非获准持久化或外传立即FAIL，只停自有实验并保留受限证据。 |
+| TLS候选 | `rtc-r0.beidi.games:18443`，仅loopback；新独立密钥与公信证书，DNS-01仅新增本次 `_acme-challenge.rtc-r0` TXT，不改旧A记录、代理、防火墙或公网端口。域名使用/证书取得及具体运行细节仍待签认，未核定不运行。 |
+
+Matrix登录token注销必须独立验证；注销/停服不等于已签发OpenID或LiveKit JWT立即失效。记录固定栈的实际TTL，停止后不重启复用该实验状态。上述例外不覆盖真实账号、产品、R1–R3或其他主机；保留原分支、数据库、秘密及全部历史证据。
+
+## Validation（原候选接口；精简实现与真实运行尚未验证）
 
 仓库根执行范围与自测：
 ```powershell

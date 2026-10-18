@@ -126,6 +126,7 @@ Owner: 8.1
 | D17 | Digo 资料整合与多人工作入口 | **DECIDED 文档整合；运行/组织/许可独立** | Jack 授权本轮；A 串行集成；独立 Reviewer | #102 精确 24 路径；原提交保全、05 唯一指南、逐票 AC 归 GitHub；不变更权限/契约/产品 |
 | D16-E | 原版 Matrix 隔离实验执行 | **DECIDED 签认；PR99 审查合并后生效** | Jack 授权；A 实施；独立 Reviewer | 更新 D16/下文历史待签认状态；#98 四文件、本机回环、合成数据；运行结果待实测 |
 | D16-G1 | Windows 产物与隔离安装启动 | **PR107/108 已合并，#105/#106 已关闭；#109 安装启动精确范围待签认** | Jack 最终签认；A 协调；子代理研究/独立审查 | 只读核验已通过；下一批仅新 Sandbox 离线 install/start/Quit；运行 NOT_RUN，G1 仍未通过 |
+| D16-RTC | 标准 Matrix RTC 最小链路 | **原范围PR119已合并；精简修订PROPOSED，真实R0 NOT_RUN** | Jack最终裁定；A协调；独立Reviewer | [现有模块](../.agents/modules/matrix-rtc-proof.md#标准组件精简修订proposed尚未替换原合同)；#124旧候选保留，未放宽运行合同 |
 
 **本 fork 发布阶段校准：DECIDED（2026-10-04，用户授权修正并合并基线 PR）。**
 沿用 [01-scope-v2.md](01-scope-v2.md) 的既有 R04 范围：完整每频道权限、
@@ -423,3 +424,15 @@ Jack已签认上述四文件范围候选，并明确授权推送到本fork、创
 协调者在既定四文件范围内准备[最小修订](../.agents/modules/matrix-rtc-proof.md#r0-凭据传输与日志准入修订候选待签认)，源码依据见[研究](Matrix-protocol-research.md#r0-凭据边界修订候选)。仅新R0拟替代上文RTC-E1“JWT/密码/私钥不入URL”中的OpenID传输限制及新模块“token仅验证进程内存”：唯一可信HTTPS homeserver的标准OpenID query可承载合成OpenID token；验证器不额外落盘，固定Synapse必要状态限受保护自有DB/事务文件。原T1/T2、既有控制面proof及其他秘密的禁令保持，不授予R1或真实账号例外。历史字节保留；修订尚待独立审查和Jack最终裁定，不冒记新的签认。
 
 原始日志控制、写盘前脱敏、安全事件留存与哨兵负例仍是运行前置HOLD；不能只关闭access log就声称全链无泄漏。TLS/DNS/端口等缺项、七文件未实施及R0–R3 NOT_RUN的边界保持；未启动服务或修改宿主/旧业务监控。
+
+#### 2026-10-16 标准 R0 精简候选（待签认）
+
+PR119已合并；#124原实现 `ff4cd0933950dfb8e3afb8bef8b5d5eb7e9684e8` 完整保留于 `feat/matrix-rtc-r0-proof`，不合并或删除。Jack要求收缩到最简单标准链路、不新增治理文档；本候选只修改既有模块、本文件及协议研究。以四个固定官方服务、标准systemd/Compose生命周期和Node内置WebSocket替代自建代理/监管/握手代码；不增加验证SDK、Kubernetes或新虚拟化平台。
+
+需独立裁定的精确差异只在[模块候选表](../.agents/modules/matrix-rtc-proof.md#标准组件精简修订proposed尚未替换原合同)维护：保留客户端HTTP≤10秒和实验120秒/清理60秒，允许固定上游内部期限；合成凭据可能进入受保护OS swap/core，原始stderr仅可暂存在受信管道内存，禁止持久日志和外传。拟用 `rtc-r0.beidi.games:18443` 与新独立可信证书、仅新增本次DNS验证TXT；均未签认，不冒记为原memory-only/内部10秒验收通过。
+
+实际swap/core保护路径、权限/主体、日志旁路、标准生命周期正反例、TLS及主机止损阈值未核定即HOLD；仅在上述先决条件及可信合并完成后才运行。当前Edge腾讯云终端连续两次无法附着，本轮未发云命令或启动RTC；R0及迁移未完成。原历史字节、旧服务/数据和未合并工作保留。
+
+2026-10-18续接：此前从同一Edge连接上的实例控制台新开OrcaTerm后已成功登录，旧终端附着失败不能代表整个连接失效。随后仅做只读检查：根盘约18GiB可用、MemAvailable约2281MiB、18443无监听、实验目录不存在；这些是此前快照，今日腾讯云登录已过期，未重新核定容量。`/swap.img` 为root:root/0600，Apport启用且`/var/crash`为3777；实际崩溃文件及其访问主体仍未核定，不能宣称已满足“受保护core”。普通ubuntu调用Docker元数据报permission denied，不等于Docker不可用；先前`sudo -n docker ps`可读。没有启动RTC或改旧服务。
+
+本机Node临时假令牌fixture因lean-ctx误拆PowerShell here-string而整条拒绝执行（`lean-ctx split your command line wrongly`），标记NOT_RUN；未启动listener、没有Bearer/TLS/退出运行证据，不以源码核对或旧测试替代。三文件候选仍待签认，未推送；原实现`ff4cd093`保持。
