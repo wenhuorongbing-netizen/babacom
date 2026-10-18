@@ -1,0 +1,476 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import http from 'node:http';
+import https from 'node:https';
+import net from 'node:net';
+import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const ROOT='/opt/babacom-matrix-rtc-e1', PROJECT='babacom-matrix-rtc-e1';
+const SERVICES=['synapse','livekit','auth','caddy'];
+const SOURCE_FILES=['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'];
+export const PINS=Object.freeze({
+  synapse:{image:'ghcr.io/element-hq/synapse@sha256:43fd704aedef503a6fba2e5696439ef7bac24479a3472e364561973f550e4aad',source:'63dc0cbfe514f60743212566374ffeb5e9e295c2'},
+  auth:{image:'ghcr.io/element-hq/lk-jwt-service@sha256:2c985ab98de8da3b101c09fb597404dcb2723bb984b1ee20a430a8bb4f6a51a9',source:'0e176b1eca44e67b11484d0bdf56999807bf2b8e'},
+  livekit:{image:'docker.io/livekit/livekit-server@sha256:f63579e294b6dbf38e0e6151a24a5b425e9293e75e6d41959f470c957248b8a7',source:'0b3fd288e3ef3263ec475ba0d78cf3ad77459981'},
+  caddy:{image:'docker.io/library/caddy@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229',source:'72dd0fb067f6d7826c7f79907670ba4a713bfe37'},
+});
+function requireFact(ok,code='CONTRACT'){if(!ok) throw new Error(code);}
+export class Budget {
+  constructor(ms,clock=()=>Number(process.hrtime.bigint())/1e6){requireFact(Number.isFinite(ms)&&ms>0);this.clock=clock;this.end=clock()+ms;}
+  static fromDeadline(end){const budget=new Budget(1);requireFact(Number.isFinite(end),'DEADLINE');budget.end=end;budget.remaining();return budget;}
+  remaining(cap=Infinity){const n=Math.min(this.end-this.clock(),cap);requireFact(n>0,'DEADLINE');return Math.ceil(n);}
+  child(ms){this.remaining();const child=new Budget(ms,this.clock);child.end=Math.min(child.end,this.end);return child;}
+  async waitFor(predicate){while(true){this.remaining();if(predicate())return;await new Promise(r=>setTimeout(r,this.remaining(25)));}}
+}
+export function serverName(c){return `${c.domain}:${c.port}`;}
+export function validateContract(c){
+  requireFact(c&&c.host==='lhins-af0ntal8'&&c.root===ROOT&&c.project===PROJECT);
+  requireFact(c.approved===true&&c.logAdmission===true&&/^[a-f0-9]{32}$/.test(c.runId));
+  requireFact(typeof c.domain==='string'&&/^(?=.{4,253}$)[a-z0-9]+(?:[-.][a-z0-9]+)*\.[a-z]{2,}$/.test(c.domain));
+  requireFact(Number.isInteger(c.port)&&c.port>1024&&c.port<65536);
+  requireFact(c.certificateSource==='operator-provisioned-public-chain'&&/^[a-f0-9]{64}$/.test(c.certificateSha256));
+  requireFact(c.asHomeserver===serverName(c)&&JSON.stringify(c.fullAccessHomeservers)===JSON.stringify([serverName(c)]));
+  requireFact(typeof c.machineUuid==='string'&&c.machineUuid.length>0&&c.machineUuid.length<=128);
+  requireFact(c.platform==='linux/amd64'&&JSON.stringify(c.source)===JSON.stringify(PINS));
+  requireFact(c.sourceHashes&&Object.keys(c.sourceHashes).length===7&&SOURCE_FILES.every(name=>/^[a-f0-9]{64}$/.test(c.sourceHashes[name])));
+  requireFact(Array.isArray(c.accessors)&&c.accessors.length>0&&c.accessors.every(x=>x==='operator-loopback'));
+  requireFact(c.auxiliary&&c.auxiliary.unit==='babacomrtc'+c.runId+'.slice'&&c.auxiliary.cgroup==='/sys/fs/cgroup/'+c.auxiliary.unit);
+  requireFact(c.auxiliary.cpu>0&&c.auxiliary.cpu<=.2&&c.auxiliary.memory>0&&c.auxiliary.memory<=268435456);
+  requireFact(c.thresholds&&['minFreeMemory','minFreeDisk','maxLoad','maxOldCpuPercent','maxOldMemoryGrowth'].every(k=>Number.isFinite(c.thresholds[k])&&c.thresholds[k]>0));
+  requireFact(Array.isArray(c.baseline)&&c.baseline.length>0&&c.baseline.every(x=>/^[a-f0-9]{64}$/.test(x.id)&&typeof x.image==='string'&&x.status==='running'&&Array.isArray(x.mounts)));
+  requireFact(/^[a-f0-9]{64}$/.test(c.nodeSha256),'NODE');
+  const metadata=row=>row&&typeof row.path==='string'&&path.isAbsolute(row.path)&&!row.path.split('/').includes('..')&&Number.isInteger(row.uid)&&row.uid>=0&&Number.isInteger(row.gid)&&row.gid>=0&&Number.isInteger(row.mode)&&row.mode>=0&&row.mode<=0o777&&Array.isArray(row.accessors)&&row.accessors.length>0&&row.accessors.every(x=>typeof x==='string'&&/^[a-zA-Z0-9_-]+$/.test(x));
+  requireFact(c.persistence&&typeof c.persistence.corePattern==='string'&&c.persistence.corePattern.length>0&&c.persistence.corePattern.length<4096&&Array.isArray(c.persistence.locations)&&c.persistence.locations.length>0&&c.persistence.locations.every(x=>metadata(x)&&['swap','core-directory','core-handler'].includes(x.kind)),'PERSISTENCE');
+  requireFact(c.logging&&Array.isArray(c.logging.coverage)&&JSON.stringify([...c.logging.coverage].sort())===JSON.stringify(['connection','handshake','redirect','success','timeout','tls'])&&Array.isArray(c.logging.bypasses)&&c.logging.bypasses.length>0&&c.logging.bypasses.every(x=>metadata(x)&&['socket','file','directory'].includes(x.kind)&&x.writesRaw===false),'LOG_ADMISSION');
+  return c;
+}
+const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','command','scan']);
+const ERRORS=new Set(['OK','M_FORBIDDEN','M_UNAUTHORIZED','M_UNKNOWN_TOKEN','FAIL','HOLD','UNKNOWN','DEADLINE','CONTRACT','BUSY']);
+export class SafeEvents {
+  constructor(write){this.write=write;this.bytes=0;this.chunks=0;}
+  consume(service,chunk){this.bytes+=chunk.length;this.chunks++;}
+  event(service,event,status=0,errcode='OK',count=1){
+    if(event==='chunks'&&this.chunks>1)return;
+    this.write({service:SERVICES.includes(service)?service:'verifier',event:EVENTS.has(event)?event:'unknown',status:Number.isInteger(status)&&status>=0&&status<600?status:0,errcode:ERRORS.has(errcode)?errcode:'UNKNOWN',count:Number.isSafeInteger(count)&&count>=0?count:0});
+  }
+}
+export function assertOwned(i,c,service){
+  const l=i?.Config?.Labels;
+  requireFact(/^[a-f0-9]{64}$/.test(i?.Id)&&SERVICES.includes(service)&&l?.['rtc.run']===c.runId&&l?.['rtc.host']===c.host&&l?.['com.docker.compose.project']===c.project&&l?.['com.docker.compose.service']===service&&i.Config.Image===PINS[service].image,'UNKNOWN');
+}
+export function assertResources(rows){
+  requireFact(Array.isArray(rows)&&rows.length>0,'RESOURCES');
+  requireFact(rows.every(x=>Number.isFinite(x.cpu)&&x.cpu>0&&Number.isSafeInteger(x.memory)&&x.memory>0),'RESOURCES');
+  requireFact(rows.reduce((n,x)=>n+x.cpu,0)<=1.000000001&&rows.reduce((n,x)=>n+x.memory,0)<=1610612736,'RESOURCES');
+}
+export function assertContainerConfiguration(i,c,service){
+  assertOwned(i,c,service);const h=i.HostConfig;
+  requireFact(h?.LogConfig?.Type==='none'&&i.LogPath===''&&h.ReadonlyRootfs===true&&h.Privileged===false&&h.NetworkMode===c.project+'_isolated'&&h.CapDrop?.includes('ALL')&&(!h.CapAdd||h.CapAdd.length===0),'CONFIG');
+  const ports=h.PortBindings??{},expected=service==='caddy'?{[c.port+'/tcp']:[{HostIp:'127.0.0.1',HostPort:String(c.port)}]}:{};
+  requireFact(JSON.stringify(ports)===JSON.stringify(expected),'PORT');
+  const targets={synapse:['data','homeserver.yaml','appservice.yaml','log.config'],livekit:['livekit.yaml'],auth:['appservice.yaml','livekit.key','livekit.secret'],caddy:['Caddyfile','tls.crt','tls.key']}[service];
+  requireFact(Array.isArray(i.Mounts)&&i.Mounts.filter(x=>x.Type==='bind').length===targets.length&&i.Mounts.every(x=>x.Type==='bind'||x.Type==='tmpfs'&&['/tmp',...(service==='caddy'?['/data','/config']:[])].includes(x.Destination)),'MOUNTS');
+  for(const name of targets){const data=name==='data',source=c.root+(data?'/data':'/secrets/'+name),destination=data?'/data':'/run/secrets/'+name;requireFact(i.Mounts.some(x=>x.Type==='bind'&&x.Source===source&&x.Destination===destination&&x.RW===data),'MOUNTS');}
+}
+export function httpRequest(url,{method='GET',body,token,timeout=8000,allowHttpFixture=false,lookup,headers={}}={}){
+  const u=new URL(url);requireFact((u.protocol==='https:'||(allowHttpFixture&&u.protocol==='http:'&&u.hostname==='127.0.0.1'))&&!u.username&&!u.password,'TLS');
+  requireFact(timeout>0&&timeout<=10000,'DEADLINE');
+  return new Promise((resolve,reject)=>{
+    let size=0;const chunks=[];
+    const req=(u.protocol==='https:'?https:http).request(u,{method,lookup,rejectUnauthorized:true,headers:{...headers,...(token?{Authorization:`Bearer ${token}`}:{})}},res=>{
+      res.on('data',b=>{size+=b.length;if(size>1048576){req.destroy();reject(new Error('BODY_LIMIT'));}else chunks.push(b);});
+      res.on('end',()=>{clearTimeout(timer);resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)});});
+      res.on('error',()=>{clearTimeout(timer);reject(new Error('NETWORK'));});
+    });
+    const timer=setTimeout(()=>{req.destroy();reject(new Error('DEADLINE'));},timeout);
+    req.on('error',()=>{clearTimeout(timer);reject(new Error('NETWORK'));});
+    req.end(body);
+  });
+}
+export function assertTicket(claims,e){
+  requireFact(claims?.sub===e.subject&&claims.iss===e.key&&claims.exp>Date.now()/1000&&claims.exp<=Date.now()/1000+3610,'JWT');
+  const v=claims.video;requireFact(v?.room===e.room&&v.roomJoin===true&&v.canPublish===true&&v.canSubscribe===true,'JWT');
+  requireFact(Object.keys(v).every(k=>['room','roomJoin','canPublish','canSubscribe','canPublishData','canUpdateOwnMetadata','roomCreate','hidden','roomAdmin','roomList','roomRecord'].includes(k)),'JWT');
+  requireFact(['roomAdmin','roomCreate','roomList','roomRecord','hidden'].every(k=>v[k]!==true),'JWT');
+  requireFact(['canPublishData','canUpdateOwnMetadata'].every(k=>v[k]===undefined||v[k]===true),'JWT');
+}
+export function assertParticipants(actual,expected){
+  requireFact(Array.isArray(actual)&&actual.length===expected.length&&actual.every(x=>expected.includes(x.identity)&&(x.tracks===undefined||(Array.isArray(x.tracks)&&x.tracks.length===0))),'TRACKS');
+}
+
+// Runtime errors are always converted to fixed enums at the command boundary.
+export function command(executable,args,{input,timeout=10000,budget}={}){
+  if(budget)timeout=budget.remaining(timeout);
+  return new Promise((resolve,reject)=>{
+    const p=spawn(executable,args,{stdio:['pipe','pipe','pipe'],env:{PATH:process.env.PATH,HOME:process.env.HOME}});const out=[];let size=0,failed;
+    const kill=code=>{failed=code;if(!p.kill('SIGKILL'))reject(new Error('UNKNOWN'));};
+    const timer=setTimeout(()=>kill('DEADLINE'),timeout);
+    p.stdout.on('data',b=>{size+=b.length;if(size>4194304)kill('OUTPUT_LIMIT');else out.push(b);});p.stderr.on('data',()=>{});
+    p.on('error',()=>{clearTimeout(timer);reject(new Error('COMMAND'));});p.on('close',code=>{clearTimeout(timer);try{if(failed)throw new Error(failed);budget?.remaining();code===0?resolve(Buffer.concat(out).toString()):reject(new Error('COMMAND'));}catch(error){reject(new Error(failed||'DEADLINE'));}});p.stdin.end(input);
+  });
+}
+function protectedFile(file,uid=0,mode,gid=uid){const s=fs.lstatSync(file);requireFact(s.isFile()&&!s.isSymbolicLink()&&s.uid===uid&&(mode===undefined?(s.mode&0o077)===0:(s.mode&0o777)===mode&&s.gid===gid),'PERMISSIONS');return s;}
+function privateDir(dir,uid=0){const s=fs.lstatSync(dir);requireFact(s.isDirectory()&&!s.isSymbolicLink()&&s.uid===uid&&(s.mode&0o077)===0,'PERMISSIONS');}
+function readContract(){requireFact(process.platform==='linux'&&process.getuid()===0,'HOLD');privateDir(ROOT);protectedFile(`${ROOT}/runtime.json`);return validateContract(JSON.parse(fs.readFileSync(`${ROOT}/runtime.json`)));}
+function actualCgroup(dir){const cpu=fs.readFileSync(`${dir}/cpu.max`,'utf8').trim().split(/\s+/);const memory=Number(fs.readFileSync(`${dir}/memory.max`,'utf8').trim());requireFact(fs.readFileSync(`${dir}/memory.swap.max`,'utf8').trim()==='0','SWAP');return {cpu:Number(cpu[0])/Number(cpu[1]),memory};}
+function ownAux(c){
+  const rel=fs.readFileSync('/proc/self/cgroup','utf8').trim().split('\n').find(x=>x.startsWith('0::'))?.slice(3),current=rel&&path.resolve('/sys/fs/cgroup'+rel);
+  requireFact(current&&(current===c.auxiliary.cgroup||current.startsWith(c.auxiliary.cgroup+'/')),'AUX_CGROUP');
+  const row=actualCgroup(c.auxiliary.cgroup);requireFact(row.cpu<=c.auxiliary.cpu&&row.memory<=c.auxiliary.memory,'AUX_CGROUP');return row;
+}
+function frozenMetadata(row){
+  const item=fs.lstatSync(row.path);requireFact(!item.isSymbolicLink()&&item.uid===row.uid&&item.gid===row.gid&&(item.mode&0o777)===row.mode,'PERMISSIONS');
+  if(row.kind==='core-directory'||row.kind==='directory')requireFact(item.isDirectory(),'PERMISSIONS');else if(row.kind==='socket')requireFact(item.isSocket(),'PERMISSIONS');else requireFact(item.isFile()||item.isBlockDevice(),'PERMISSIONS');
+}
+function runtimeBoundaries(c){
+  requireFact(process.version==='v24.13.0'&&!process.env.NODE_OPTIONS&&!process.env.NODE_TLS_REJECT_UNAUTHORIZED&&!process.env.NODE_EXTRA_CA_CERTS,'NODE');
+  requireFact(crypto.createHash('sha256').update(fs.readFileSync(process.execPath)).digest('hex')===c.nodeSha256,'NODE');
+  requireFact(fs.readFileSync('/proc/sys/kernel/core_pattern','utf8').trim()===c.persistence.corePattern,'PERSISTENCE');
+  for(const row of [...c.persistence.locations,...c.logging.bypasses])frozenMetadata(row);
+  const swaps=fs.readFileSync('/proc/swaps','utf8').trim().split('\n').slice(1).map(x=>x.trim().split(/\s+/)[0]);
+  requireFact(swaps.every(name=>c.persistence.locations.some(x=>x.kind==='swap'&&x.path===name)),'PERSISTENCE');
+}
+function hostsText(c){return '127.0.0.1 localhost\n127.0.0.1 '+c.domain+'\n::1 localhost\n';}
+function compose(c,args,budget){return command('docker',['compose','--project-name',c.project,'--file',`${ROOT}/compose.yaml`,...args],{budget});}
+async function inspect(id,budget){return JSON.parse(await command('docker',['inspect',id],{budget}))[0];}
+async function ownContainers(c,budget){const ids=(await command('docker',['ps','-aq','--filter',`label=com.docker.compose.project=${c.project}`],{budget})).trim().split(/\s+/).filter(Boolean);const rows=[];for(const id of ids){const i=await inspect(id,budget);const service=i.Config.Labels['com.docker.compose.service'];assertOwned(i,c,service);rows.push(i);}requireFact(new Set(rows.map(x=>x.Config.Labels['com.docker.compose.service'])).size===rows.length,'UNKNOWN');return rows;}
+async function baseline(c,budget){
+  budget.remaining();
+  requireFact(os.freemem()>=c.thresholds.minFreeMemory&&os.loadavg()[0]<=c.thresholds.maxLoad,'BASELINE');
+  const disk=fs.statfsSync(ROOT);requireFact(disk.bavail*disk.bsize>=c.thresholds.minFreeDisk,'BASELINE');
+  const samples=[];
+  for(const b of c.baseline){const i=await inspect(b.id,budget);requireFact(i.Image===b.image&&i.State.Status===b.status&&JSON.stringify(i.Mounts)===JSON.stringify(b.mounts),'BASELINE');
+    requireFact(Number.isSafeInteger(b.memoryUsageBytes)&&b.memoryUsageBytes>=0,'BASELINE');
+    const rel=fs.readFileSync(`/proc/${i.State.Pid}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3).trim();requireFact(rel,'BASELINE');
+    const dir='/sys/fs/cgroup'+rel;const memory=Number(fs.readFileSync(`${dir}/memory.current`,'utf8'));requireFact(memory-b.memoryUsageBytes<=c.thresholds.maxOldMemoryGrowth,'BASELINE');
+    const usage=()=>Number(fs.readFileSync(dir+'/cpu.stat','utf8').match(/^usage_usec (\d+)$/m)?.[1]);samples.push({usage,start:usage(),at:Number(process.hrtime.bigint())/1000});
+  }
+  await new Promise(resolve=>setTimeout(resolve,budget.remaining(100)));
+  for(const sample of samples){const elapsed=Number(process.hrtime.bigint())/1000-sample.at,cpu=(sample.usage()-sample.start)/elapsed*100;requireFact(Number.isFinite(cpu)&&cpu>=0&&cpu<=c.thresholds.maxOldCpuPercent,'BASELINE');}budget.remaining();
+}
+async function cgroups(c,containers,budget){
+  budget.remaining();
+  const rows=[ownAux(c)];
+  for(const i of containers){assertOwned(i,c,i.Config.Labels['com.docker.compose.service']);requireFact(i.State.Running&&i.State.Pid>0&&!i.State.OOMKilled,'RESOURCES');
+    const rel=fs.readFileSync(`/proc/${i.State.Pid}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3);requireFact(rel,'RESOURCES');rows.push(actualCgroup('/sys/fs/cgroup'+rel.trim()));
+    const status=fs.readFileSync(`/proc/${i.State.Pid}/status`,'utf8');const parent=Number(status.match(/^PPid:\s+(\d+)/m)?.[1]);requireFact(parent>1,'SHIM');
+    const args=fs.readFileSync(`/proc/${parent}/cmdline`,'utf8').split('\0');requireFact(path.basename(args[0])==='containerd-shim-runc-v2'&&args[args.indexOf('-id')+1]===i.Id,'SHIM');
+    const shimRel=fs.readFileSync(`/proc/${parent}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3).trim();requireFact('/sys/fs/cgroup'+shimRel===c.auxiliary.cgroup||('/sys/fs/cgroup'+shimRel).startsWith(c.auxiliary.cgroup+'/'),'SHIM_BUDGET');
+  }
+  assertResources(rows);return rows;
+}
+async function preflight(c,budget,{port=true}={}){
+  budget.remaining();
+  for(const name of SOURCE_FILES){const file=`${ROOT}/${name}`;requireFact(!fs.lstatSync(file).isSymbolicLink()&&crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')===c.sourceHashes[name],'SOURCE');}
+  runtimeBoundaries(c);
+  requireFact(fs.readFileSync('/sys/class/dmi/id/product_uuid','utf8').trim()===c.machineUuid&&typeof c.machineUuid==='string','HOST');
+  ownAux(c);await baseline(c,budget);
+  privateDir(`${ROOT}/secrets`);privateDir(`${ROOT}/data`,991);privateDir(`${ROOT}/events`);
+  protectedFile(`${ROOT}/secrets/tls.key`);protectedFile(`${ROOT}/secrets/tls.crt`);
+  const cert=fs.readFileSync(`${ROOT}/secrets/tls.crt`);requireFact(crypto.createHash('sha256').update(cert).digest('hex')===c.certificateSha256,'TLS');
+  const x=new crypto.X509Certificate(cert);requireFact(x.checkHost(c.domain)&&Date.parse(x.validTo)>Date.now(),'TLS');
+  const info=JSON.parse(await command('docker',['info','--format','{{json .}}'],{budget}));requireFact(info.OSType==='linux'&&info.Architecture==='x86_64'&&info.CgroupVersion==='2','PLATFORM');
+  for(const p of Object.values(PINS)){const i=JSON.parse(await command('docker',['image','inspect',p.image],{budget}))[0];requireFact(i.Os==='linux'&&i.Architecture==='amd64'&&i.RepoDigests.includes(p.image),'IMAGE');}
+  if(port)await new Promise((resolve,reject)=>{const s=net.createServer();s.once('error',()=>reject(new Error('BUSY')));s.listen(c.port,'127.0.0.1',()=>s.close(resolve));});
+  budget.remaining();
+}
+function yamlString(x){return JSON.stringify(x);}
+function render(c,text,values){return text.replace(/\{\{([A-Z_]+)\}\}/g,(_,key)=>{requireFact(Object.hasOwn(values,key),'TEMPLATE');return values[key];});}
+export function templateValues(c,secrets){return {...Object.fromEntries(Object.entries(secrets).map(([k,v])=>[k,yamlString(v)])),DOMAIN:yamlString(c.domain),DOMAIN_RAW:c.domain,SERVER_NAME:yamlString(serverName(c)),SERVER_REGEX:serverName(c).replaceAll('.','\\.'),PORT:String(c.port),RUN_ID:c.runId,ROOT};}
+async function configure(c,budget){
+  await preflight(c,budget);requireFact((await ownContainers(c,budget)).length===0,'BUSY');
+  const fresh=()=>crypto.randomBytes(32).toString('hex');
+  const secrets={AS_TOKEN:fresh(),HS_TOKEN:fresh(),REGISTRATION_SECRET:fresh(),MACAROON_SECRET:fresh(),FORM_SECRET:fresh(),LIVEKIT_KEY:fresh(),LIVEKIT_SECRET:fresh()};
+  const values=templateValues(c,secrets);
+  const targets=[['homeserver.yaml.example','secrets/homeserver.yaml',991,991,0o400],['appservice-registration.yaml.example','secrets/appservice.yaml',0,991,0o440],['livekit.yaml.example','secrets/livekit.yaml',0,0,0o400],['Caddyfile','secrets/Caddyfile',0,0,0o400]];
+  for(const [,target] of targets)requireFact(!fs.existsSync(`${ROOT}/${target}`),'BUSY');
+  for(const [source,target,uid,gid,mode] of targets){const out=render(c,fs.readFileSync(`${ROOT}/${source}`,'utf8'),values);fs.writeFileSync(`${ROOT}/${target}`,out,{flag:'wx',mode});fs.chownSync(`${ROOT}/${target}`,uid,gid);}
+  fs.writeFileSync(ROOT+'/secrets/log.config',SYNAPSE_LOG,{flag:'wx',mode:0o400});fs.chownSync(ROOT+'/secrets/log.config',991,991);
+  fs.writeFileSync(`${ROOT}/secrets/livekit.key`,secrets.LIVEKIT_KEY,{flag:'wx',mode:0o400});fs.writeFileSync(`${ROOT}/secrets/livekit.secret`,secrets.LIVEKIT_SECRET,{flag:'wx',mode:0o400});
+  const env=`RTC_DOMAIN=${c.domain}\nRTC_PORT=${c.port}\nRTC_RUN_ID=${c.runId}\n`;fs.writeFileSync(`${ROOT}/.env`,env,{flag:'wx',mode:0o400});
+  fs.writeFileSync(ROOT+'/hosts',hostsText(c),{flag:'wx',mode:0o400});
+  await compose(c,['config','--quiet'],budget);
+}
+const SYNAPSE_LOG='version: 1\nhandlers:\n  stderr: {class: logging.StreamHandler, stream: ext://sys.stderr}\nroot: {level: WARNING, handlers: [stderr]}\ndisable_existing_loggers: false\n';
+function validateGenerated(c){
+  const files=[['homeserver.yaml',991],['appservice.yaml',0,0o440,991],['livekit.yaml',0],['Caddyfile',0],['livekit.key',0],['livekit.secret',0],['log.config',991]];
+  for(const [name,uid,mode,gid] of files)protectedFile(`${ROOT}/secrets/${name}`,uid,mode,gid);
+  requireFact(fs.readFileSync(ROOT+'/secrets/log.config','utf8')===SYNAPSE_LOG,'CONFIG');
+  protectedFile(ROOT+'/hosts');requireFact(fs.readFileSync(ROOT+'/hosts','utf8')===hostsText(c),'DNS');
+  protectedFile(`${ROOT}/.env`);requireFact(fs.readFileSync(`${ROOT}/.env`,'utf8')===`RTC_DOMAIN=${c.domain}\nRTC_PORT=${c.port}\nRTC_RUN_ID=${c.runId}\n`,'CONFIG');
+  const homeserver=fs.readFileSync(`${ROOT}/secrets/homeserver.yaml`,'utf8'),registration=fs.readFileSync(`${ROOT}/secrets/appservice.yaml`,'utf8');
+  const secrets={};for(const [key,yaml,text] of [['AS_TOKEN','as_token',registration],['HS_TOKEN','hs_token',registration],['REGISTRATION_SECRET','registration_shared_secret',homeserver],['MACAROON_SECRET','macaroon_secret_key',homeserver],['FORM_SECRET','form_secret',homeserver]]){
+    const value=JSON.parse(text.match(new RegExp('^'+yaml+': (.+)$','m'))?.[1]??'null');requireFact(typeof value==='string'&&/^[a-f0-9]{64}$/.test(value),'CONFIG');secrets[key]=yamlString(value);
+  }
+  for(const [key,name] of [['LIVEKIT_KEY','livekit.key'],['LIVEKIT_SECRET','livekit.secret']]){const value=fs.readFileSync(`${ROOT}/secrets/${name}`,'utf8');requireFact(/^[a-f0-9]{64}$/.test(value),'CONFIG');secrets[key]=yamlString(value);}
+  const values={...templateValues(c,{}),...secrets};
+  for(const [template,target] of [['homeserver.yaml.example','homeserver.yaml'],['appservice-registration.yaml.example','appservice.yaml'],['livekit.yaml.example','livekit.yaml'],['Caddyfile','Caddyfile']])requireFact(render(c,fs.readFileSync(`${ROOT}/${template}`,'utf8'),values)===fs.readFileSync(`${ROOT}/secrets/${target}`,'utf8'),'CONFIG');
+  return [...Object.values(secrets).map(x=>JSON.parse(x)),fs.readFileSync(ROOT+'/secrets/tls.key','utf8')];
+}
+
+function ownershipPath(c){return `${ROOT}/ownership-${c.runId}.json`;}
+function readOwnership(c){protectedFile(ownershipPath(c));return JSON.parse(fs.readFileSync(ownershipPath(c),'utf8'));}
+function writeOwnership(c,containers){
+  const receipt={version:1,host:c.host,machineUuid:c.machineUuid,project:c.project,runId:c.runId,containers:containers.map(i=>({id:i.Id,service:i.Config.Labels['com.docker.compose.service'],image:i.Config.Image,imageId:i.Image,created:i.Created}))};
+  const fd=fs.openSync(ownershipPath(c),'wx',0o400);try{fs.writeFileSync(fd,JSON.stringify(receipt)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+  const directory=fs.openSync(ROOT,'r');try{fs.fsyncSync(directory);}finally{fs.closeSync(directory);}return receipt;
+}
+const recoveryIO={machine:()=>fs.readFileSync('/sys/class/dmi/id/product_uuid','utf8').trim(),inspect,stop:(id,budget)=>command('docker',['stop','--time','3',id],{budget})};
+export async function stopOwned(c,receipt,budget,io=recoveryIO){
+  let unknown=false;
+  try{
+    budget.remaining();requireFact(receipt?.version===1&&receipt.host===c.host&&receipt.runId===c.runId&&receipt.project===c.project&&receipt.machineUuid===c.machineUuid&&io.machine()===c.machineUuid,'UNKNOWN');
+    requireFact(Array.isArray(receipt.containers)&&receipt.containers.length===4&&new Set(receipt.containers.map(x=>x.id)).size===4&&new Set(receipt.containers.map(x=>x.service)).size===4,'UNKNOWN');
+    for(const row of [...receipt.containers].reverse()){
+      budget.remaining();
+      try{
+        requireFact(SERVICES.includes(row.service)&&row.image===PINS[row.service].image&&/^[a-f0-9]{64}$/.test(row.id)&&/^sha256:[a-f0-9]{64}$/.test(row.imageId)&&typeof row.created==='string','UNKNOWN');
+        const verify=i=>{assertOwned(i,c,row.service);requireFact(i.Id===row.id&&i.Image===row.imageId&&i.Created===row.created,'UNKNOWN');};
+        const current=await io.inspect(row.id,budget);budget.remaining();verify(current);
+        if(current.State.Running){budget.remaining();await io.stop(row.id,budget);}
+        const after=await io.inspect(row.id,budget);budget.remaining();verify(after);requireFact(!after.State.Running,'UNKNOWN');
+      }catch(error){if(error.message==='DEADLINE')throw error;unknown=true;}
+    }
+    budget.remaining();return unknown?'UNKNOWN':'OK';
+  }catch(error){return error.message==='DEADLINE'?'DEADLINE':'UNKNOWN';}
+}
+export async function startExperiment(c,budget,io){
+  let launched=false;
+  try{
+    budget.remaining();await io.preflight(c,budget);budget.remaining();await io.launch(c,budget);launched=true;
+    while(true){budget.remaining();const status=await io.status(c,budget);budget.remaining();if(status.status==='OK')return;await new Promise(r=>setTimeout(r,budget.remaining(25)));}
+  }catch(error){if(launched)await io.recover(c);throw error;}
+}
+
+export function assertMembershipDenial(response){
+  const parsed=JSON.parse(response.body);requireFact(response.status===403&&parsed.errcode==='M_FORBIDDEN'&&!parsed.jwt,'DENIAL');return {status:response.status,errcode:parsed.errcode};
+}
+
+export function roomAlias(room){return crypto.createHash('sha256').update(JSON.stringify([room,'m.call#ROOM'])).digest('base64').replace(/=+$/,'');}
+function jwt(claims,secret){const h=Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url');const p=Buffer.from(JSON.stringify(claims)).toString('base64url');return `${h}.${p}.${crypto.createHmac('sha256',secret).update(`${h}.${p}`).digest('base64url')}`;}
+function decodeTicket(token,secret){const parts=token.split('.');requireFact(parts.length===3,'JWT');const signature=crypto.createHmac('sha256',secret).update(parts.slice(0,2).join('.')).digest();const received=Buffer.from(parts[2],'base64url');requireFact(received.length===signature.length&&crypto.timingSafeEqual(signature,received)&&JSON.parse(Buffer.from(parts[0],'base64url')).alg==='HS256','JWT');return JSON.parse(Buffer.from(parts[1],'base64url'));}
+
+function lookupLoopback(host,options,callback){callback(null,options.all?[{address:'127.0.0.1',family:4}]:'127.0.0.1',4);}
+function statePath(c){return ROOT+'/state-'+c.runId+'.json';}
+function writeState(c,phase,deadline){
+  requireFact(['READY','VERIFYING','VERIFIED','FAIL'].includes(phase),'STATE');
+  const file=statePath(c),temporary=file+'.new';
+  fs.writeFileSync(temporary,JSON.stringify({runId:c.runId,phase,deadline})+'\n',{flag:'wx',mode:0o400});fs.renameSync(temporary,file);
+}
+function readState(c){protectedFile(statePath(c));const state=JSON.parse(fs.readFileSync(statePath(c),'utf8'));requireFact(state.runId===c.runId&&['READY','VERIFYING','VERIFIED','FAIL'].includes(state.phase)&&Number.isFinite(state.deadline),'STATE');return state;}
+function cleanupBudget(c){
+  const file=ROOT+'/cleanup-'+c.runId+'.deadline';
+  if(!fs.existsSync(file))fs.writeFileSync(file,String(new Budget(60000).end),{flag:'wx',mode:0o400});
+  protectedFile(file);return Budget.fromDeadline(Number(fs.readFileSync(file,'utf8')));
+}
+class Runtime {
+  constructor(c,budget){this.c=c;this.budget=budget;this.attaches=new Map();this.connections=[];this.events=new SafeEvents(event=>{
+    fs.appendFileSync(ROOT+'/events/'+c.runId+'.jsonl',JSON.stringify({...event,time:new Date().toISOString()})+'\n',{mode:0o600,flag:'a'});
+  });}
+  async start(budget){
+    await preflight(this.c,budget);this.secrets=validateGenerated(this.c);
+    requireFact(fs.readFileSync('/etc/hosts','utf8')===hostsText(this.c),'DNS');
+    await compose(this.c,['create','--pull','never'],budget);
+    const containers=await ownContainers(this.c,budget);requireFact(containers.length===4,'OWNERSHIP');writeOwnership(this.c,containers);
+    for(const i of containers){assertContainerConfiguration(i,this.c,i.Config.Labels['com.docker.compose.service']);requireFact(i.HostConfig.MemorySwap===i.HostConfig.Memory&&i.HostConfig.Memory>0&&i.HostConfig.NanoCpus>0,'CONFIG');}
+    for(const service of SERVICES){
+      budget.remaining();const i=containers.find(x=>x.Config.Labels['com.docker.compose.service']===service);assertOwned(i,this.c,service);
+      const child=spawn('docker',['start','--attach',i.Id],{stdio:['ignore','pipe','pipe'],env:{PATH:process.env.PATH,HOME:process.env.HOME}});
+      const state={child,ended:false,id:i.Id};this.attaches.set(service,state);
+      child.stdout.on('data',b=>this.events.consume(service,b));child.stderr.on('data',b=>this.events.consume(service,b));
+      child.on('error',()=>{state.ended=true;});child.on('close',()=>{state.ended=true;});
+      while(!(await inspect(i.Id,budget)).State.Running){requireFact(!state.ended,'START');await new Promise(r=>setTimeout(r,budget.remaining(25)));}
+      await cgroups(this.c,[await inspect(i.Id,budget)],budget);this.events.event(service,'started');
+    }
+    await this.audit(budget);
+    while(true){try{await this.api('/_matrix/client/versions',{},budget);break;}catch{await new Promise(r=>setTimeout(r,budget.remaining(100)));}}
+    await this.sentinels(budget);
+    const livekit=await httpRequest('https://'+serverName(this.c)+'/twirp/livekit.RoomService/ListParticipants',{method:'POST',body:'{}',lookup:lookupLoopback,timeout:budget.remaining(8000),headers:{'Content-Type':'application/json'}});
+    requireFact(livekit.status===401,'READINESS');
+  }
+  async audit(budget){
+    budget.remaining();await baseline(this.c,budget);await cgroups(this.c,await ownContainers(this.c,budget),budget);
+    requireFact([...this.attaches.values()].every(x=>!x.ended),'ATTACH');
+    for(const connection of this.connections)connection.assertClean();
+  }
+  async api(route,{method='GET',body,token,expected=200}={},budget){
+    const r=await httpRequest('https://'+serverName(this.c)+route,{method,body:body===undefined?undefined:JSON.stringify(body),token,lookup:lookupLoopback,timeout:budget.remaining(8000),headers:body===undefined?{}:{'Content-Type':'application/json'}});
+    this.events.event('verifier','http',r.status,r.status===expected?'OK':'FAIL');requireFact(r.status===expected,'HTTP');
+    try{return JSON.parse(r.body);}catch{throw new Error('BODY');}
+  }
+  auth(body,budget){return httpRequest('https://'+serverName(this.c)+'/sfu/get',{method:'POST',body:JSON.stringify(body),lookup:lookupLoopback,timeout:budget.remaining(8000),headers:{'Content-Type':'application/json'}});}
+  async stop(){
+    for(const connection of this.connections)connection.socket.close();
+    const budget=cleanupBudget(this.c),result=await stopOwned(this.c,readOwnership(this.c),budget);requireFact(result==='OK',result);
+    await budget.waitFor(()=>[...this.attaches.values()].every(x=>x.ended));
+    for(const service of SERVICES)this.events.event(service,'stopped');
+    await baseline(this.c,budget);this.events.event('verifier','chunks',0,'OK',this.events.chunks);
+  }
+}
+
+// Only inspect the fixed protocol's JoinResponse; Node owns RFC6455 and TLS.
+// Protocol source: livekit/protocol 129001aa5ff0, livekit_rtc/models.proto.
+export function protobufFields(bytes){
+  const data=Buffer.from(bytes);requireFact(data.length<=1048576,'BODY_LIMIT');let p=0;
+  const variable=()=>{let n=0,scale=1;for(let i=0;i<8&&p<data.length;i++){const b=data[p++];n+=(b&127)*scale;requireFact(Number.isSafeInteger(n),'SIGNAL');if(!(b&128))return n;scale*=128;}throw new Error('SIGNAL');};
+  const fields=[];while(p<data.length){const tag=variable(),field=Math.floor(tag/8),wire=tag%8;requireFact(field>0,'SIGNAL');let value;
+    if(wire===0)value=variable();else{const length=wire===2?variable():wire===1?8:wire===5?4:-1;requireFact(length>=0&&p+length<=data.length,'SIGNAL');value=data.subarray(p,p+length);p+=length;}
+    fields.push({field,wire,value});
+  }return fields;
+}
+export function assertJoin(data,identity,room){
+  const response=protobufFields(data),joins=response.filter(x=>x.field===1&&x.wire===2);requireFact(joins.length===1&&response.length===1,'JOIN');
+  const join=protobufFields(joins[0].value),own=join.filter(x=>x.field===2&&x.wire===2);requireFact(own.length===1&&!join.some(x=>x.field===7),'JOIN');
+  const rooms=join.filter(x=>x.field===1&&x.wire===2);requireFact(rooms.length===1,'JOIN');
+  const roomNames=protobufFields(rooms[0].value).filter(x=>x.field===2&&x.wire===2);requireFact(roomNames.length===1&&roomNames[0].value.toString('utf8')===room,'JOIN');
+  for(const row of [...own,...join.filter(x=>x.field===3&&x.wire===2)])requireFact(!protobufFields(row.value).some(x=>x.field===4),'TRACKS');
+  const names=protobufFields(own[0].value).filter(x=>x.field===2&&x.wire===2);requireFact(names.length===1&&names[0].value.toString('utf8')===identity,'JOIN');return true;
+}
+export function signal(url,token,{timeout=8000,identity,room,allowWsFixture=false}={}){
+  const u=new URL(url);requireFact((u.protocol==='wss:'||(allowWsFixture&&u.protocol==='ws:'&&u.hostname==='127.0.0.1'))&&!u.search&&!u.hash&&!u.username&&!u.password&&['','/'].includes(u.pathname),'TLS');
+  requireFact(timeout>0&&timeout<=10000&&typeof identity==='string'&&identity.length>0&&typeof room==='string'&&room.length>0,'SIGNAL');u.pathname='/rtc';
+  return new Promise((resolve,reject)=>{
+    const socket=new WebSocket(u,{headers:{Authorization:`Bearer ${token}`}});socket.binaryType='arraybuffer';let joined=false,fault=false,settled=false;
+    const fail=code=>{fault=true;if(!settled){settled=true;clearTimeout(timer);reject(new Error(code));}socket.close();};
+    const timer=setTimeout(()=>fail('DEADLINE'),timeout);
+    socket.addEventListener('error',()=>fail('NETWORK'));
+    socket.addEventListener('close',()=>{if(!joined)fail('SIGNAL');});
+    socket.addEventListener('message',event=>{try{
+      requireFact(event.data instanceof ArrayBuffer,'SIGNAL');
+      if(!joined){assertJoin(new Uint8Array(event.data),identity,room);joined=true;settled=true;clearTimeout(timer);resolve({socket,joined,assertClean:()=>requireFact(!fault&&socket.readyState===WebSocket.OPEN,'SIGNAL')});}
+      else{const fields=protobufFields(new Uint8Array(event.data));requireFact(!fields.some(x=>x.field===6||x.field===8),'TRACKS');for(const update of fields.filter(x=>x.field===5&&x.wire===2))for(const person of protobufFields(update.value).filter(x=>x.field===1&&x.wire===2))requireFact(!protobufFields(person.value).some(x=>x.field===4),'TRACKS');}
+    }catch{fail('SIGNAL');}});
+  });
+}
+export function systemdArguments(c,budget=new Budget(120000)){
+  return ['--unit=rtc-r0-'+c.runId,'--description=BabaCom RTC '+c.runId,'--property=Type=exec','--property=RuntimeMaxSec='+budget.remaining()+'ms','--property=TimeoutStopSec=60s','--property=KillMode=control-group','--property=Slice='+c.auxiliary.unit,'--property=CPUQuota='+String(c.auxiliary.cpu*100)+'%','--property=MemoryMax='+c.auxiliary.memory,'--property=MemorySwapMax=0','--property=StandardOutput=null','--property=StandardError=null','--property=BindReadOnlyPaths='+ROOT+'/hosts:/etc/hosts','--property=ExecStopPost='+process.execPath+' '+ROOT+'/proof.mjs __cleanup',process.execPath,ROOT+'/proof.mjs','__run',String(budget.end)];
+}
+
+Runtime.prototype.register=async function(name,budget){
+  const endpoint='/_synapse/admin/v1/register';const {nonce}=await this.api(endpoint,{},budget);const password=crypto.randomBytes(32).toString('hex');
+  const config=fs.readFileSync(`${ROOT}/secrets/homeserver.yaml`,'utf8');const secret=JSON.parse(config.match(/^registration_shared_secret: (.+)$/m)[1]);
+  const mac=crypto.createHmac('sha1',secret).update([nonce,name,password,'notadmin'].join('\0')).digest('hex');
+  const result=await this.api(endpoint,{method:'POST',body:{nonce,username:name,password,admin:false,mac}},budget);
+  requireFact(result.user_id===`@${name}:${serverName(this.c)}`&&typeof result.access_token==='string'&&typeof result.device_id==='string','IDENTITY');this.secrets.push(password,secret);return result;
+};
+Runtime.prototype.admin=async function(method,body,budget){
+  const key=fs.readFileSync(`${ROOT}/secrets/livekit.key`,'utf8'),secret=fs.readFileSync(`${ROOT}/secrets/livekit.secret`,'utf8');
+  const token=jwt({iss:key,sub:'rtc-r0-verifier',nbf:Math.floor(Date.now()/1000)-1,exp:Math.floor(Date.now()/1000)+60,video:{roomAdmin:true,room:body.room}},secret);
+  const r=await httpRequest(`https://${this.c.domain}:${this.c.port}/twirp/livekit.RoomService/${method}`,{method:'POST',body:JSON.stringify(body),token,lookup:lookupLoopback,timeout:budget.remaining(8000),headers:{'Content-Type':'application/json'}});
+  const parsed=JSON.parse(r.body);if(method==='ListParticipants'&&r.status===404&&parsed.code==='not_found')return {participants:[]};requireFact(r.status===200,'ADMIN');return parsed;
+};
+Runtime.prototype.openid=async function(account,budget){
+  const result=await this.api(`/_matrix/client/v3/user/${encodeURIComponent(account.user_id)}/openid/request_token`,{method:'POST',token:account.access_token,body:{}},budget);
+  requireFact(result.matrix_server_name===serverName(this.c)&&typeof result.access_token==='string','OPENID');return result;
+};
+Runtime.prototype.denied=async function(body,budget){
+  const before=await this.admin('ListParticipants',{room:roomAlias(body.room)},budget);
+  const result=await this.auth(body,budget);const observed=assertMembershipDenial(result);
+  const after=await this.admin('ListParticipants',{room:roomAlias(body.room)},budget);
+  assertParticipants(after.participants??[],(before.participants??[]).map(x=>x.identity));this.events.event('auth','http',observed.status,observed.errcode);
+};
+Runtime.prototype.scan=async function(secrets,budget){
+  budget.remaining();
+  const file=`${ROOT}/events/${this.c.runId}.jsonl`;protectedFile(file);const content=fs.readFileSync(file,'utf8');
+  for(const secret of secrets){const forms=[secret,encodeURIComponent(secret),JSON.stringify(secret).slice(1,-1),[...secret].map(x=>'\\u'+x.charCodeAt(0).toString(16).padStart(4,'0')).join('')];requireFact(forms.every(x=>!content.includes(x)),'LEAK');}
+  requireFact(!fs.existsSync(`${ROOT}/data/homeserver.log`),'LOG_FILE');for(const i of await ownContainers(this.c,budget))requireFact(i.HostConfig.LogConfig.Type==='none','LOG_DRIVER');
+  this.events.event('verifier','scan',0,'OK',secrets.length);
+};
+Runtime.prototype.sentinels=async function(budget){
+  // The complete stock-service fault matrix remains a signed admission prerequisite.
+  const sentinel='incapable-'+crypto.randomBytes(24).toString('hex');
+  const body={room:'!incapable:'+serverName(this.c),device_id:'incapable-device',openid_token:{access_token:sentinel,token_type:'Bearer',expires_in:1,matrix_server_name:serverName(this.c)}};
+  const response=await this.auth(body,budget),parsed=JSON.parse(response.body);
+  requireFact(response.status===401&&parsed.errcode==='M_UNAUTHORIZED'&&!parsed.jwt,'INCAPABLE');
+  await this.scan([sentinel],budget);this.events.event('verifier','gate',401,'OK',1);
+};
+Runtime.prototype.verify=async function(budget){
+  await this.audit(budget);const secrets=this.secrets;const sockets=[];
+  try{
+    await this.sentinels(budget);
+    const a=await this.register('rtc-a',budget),b=await this.register('rtc-b',budget),outsider=await this.register('rtc-outsider',budget);
+    secrets.push(a.access_token,b.access_token,outsider.access_token);
+    const room=(await this.api('/_matrix/client/v3/createRoom',{method:'POST',token:a.access_token,body:{preset:'private_chat',visibility:'private',creation_content:{'m.federate':false}}},budget)).room_id;
+    const other=(await this.api('/_matrix/client/v3/createRoom',{method:'POST',token:outsider.access_token,body:{preset:'private_chat',visibility:'private',creation_content:{'m.federate':false}}},budget)).room_id;
+    const tokenA=await this.openid(a,budget),tokenB=await this.openid(b,budget),tokenOut=await this.openid(outsider,budget);secrets.push(tokenA.access_token,tokenB.access_token,tokenOut.access_token);
+    const request=(account,openid,roomId=room)=>({room:roomId,device_id:account.device_id,openid_token:openid});
+    await this.denied(request(outsider,tokenOut),budget);await this.denied(request(b,tokenB),budget);await this.denied(request(a,tokenA,other),budget);
+    const encoded=encodeURIComponent(room);await this.api(`/_matrix/client/v3/rooms/${encoded}/invite`,{method:'POST',body:{user_id:b.user_id},token:a.access_token},budget);await this.denied(request(b,tokenB),budget);
+    await this.api(`/_matrix/client/v3/join/${encoded}`,{method:'POST',body:{},token:b.access_token},budget);
+    for(const account of [a,b]){
+      const member=await this.api(`/_matrix/client/v3/rooms/${encoded}/state/m.room.member/${encodeURIComponent(account.user_id)}`,{token:a.access_token},budget);requireFact(member.membership==='join','MEMBERSHIP');
+    }
+    const key=fs.readFileSync(`${ROOT}/secrets/livekit.key`,'utf8'),secret=fs.readFileSync(`${ROOT}/secrets/livekit.secret`,'utf8');const expected=[];
+    for(const [account,openid] of [[a,tokenA],[b,tokenB]]){
+      const r=await this.auth(request(account,openid),budget);requireFact(r.status===200,'SFU');const ticket=JSON.parse(r.body);requireFact(ticket.url===`wss://${this.c.domain}:${this.c.port}`,'SFU_URL');secrets.push(ticket.jwt);
+      const subject=`${account.user_id}:${account.device_id}`;assertTicket(decodeTicket(ticket.jwt,secret),{subject,room:roomAlias(room),key});expected.push(subject);
+      const connection=await signal(ticket.url,ticket.jwt,{identity:subject,room:roomAlias(room),timeout:budget.remaining(8000)});this.connections.push(connection);sockets.push(connection.socket);
+      const participants=await this.admin('ListParticipants',{room:roomAlias(room)},budget);assertParticipants(participants.participants??[],expected);
+    }
+    const wrong=await httpRequest(`https://${this.c.domain}:${this.c.port}/get_token`,{method:'POST',lookup:lookupLoopback,timeout:budget.remaining(8000),body:JSON.stringify({room_id:room,slot_id:'m.call#ROOM',openid_token:tokenA,member:{id:'wrong-subject',claimed_user_id:outsider.user_id,claimed_device_id:a.device_id}}),headers:{'Content-Type':'application/json'}});
+    const wrongBody=JSON.parse(wrong.body);requireFact(wrong.status===401&&wrongBody.errcode==='M_UNAUTHORIZED'&&!wrongBody.jwt,'WRONG_SUBJECT');this.events.event('auth','http',wrong.status,wrongBody.errcode);
+    assertParticipants((await this.admin('ListParticipants',{room:roomAlias(room)},budget)).participants??[],expected);
+    await this.api(`/_matrix/client/v3/rooms/${encoded}/kick`,{method:'POST',body:{user_id:b.user_id},token:a.access_token},budget);const fresh=await this.openid(b,budget);secrets.push(fresh.access_token);await this.denied(request(b,fresh),budget);
+    // Existing participants and old JWT remain separate upstream behavior. Remove
+    // both own participants explicitly; do not claim kick revokes established RTC.
+    for(const identity of expected)await this.admin('RemoveParticipant',{room:roomAlias(room),identity},budget);
+    assertParticipants((await this.admin('ListParticipants',{room:roomAlias(room)},budget)).participants??[],[]);
+    this.connections=[]; // Removal was observed; subsequent socket close is expected.
+    for(const account of [a,b,outsider]){await this.api('/_matrix/client/v3/logout',{method:'POST',body:{},token:account.access_token},budget);const revoked=await this.api('/_matrix/client/v3/account/whoami',{token:account.access_token,expected:401},budget);requireFact(revoked.errcode==='M_UNKNOWN_TOKEN','LOGOUT');}
+    await this.scan(secrets,budget);await this.audit(budget);this.events.event('verifier','participants',200,'OK',2);this.events.event('verifier','gate',200,'OK',0);
+  }finally{for(const socket of sockets)socket.close();}
+};
+
+async function stopUnit(c,budget){
+  const unit='rtc-r0-'+c.runId+'.service';
+  const metadata=await command('systemctl',['show',unit,'--property=Description,Slice,Transient','--value'],{budget});
+  requireFact(metadata.split('\n').includes('BabaCom RTC '+c.runId)&&metadata.split('\n').includes(c.auxiliary.unit)&&metadata.split('\n').includes('yes'),'UNKNOWN');
+  await command('systemctl',['stop',unit],{budget});
+}
+export function assertUnitStopped(state){requireFact(['inactive','failed'].includes(state.ActiveState)&&state.MainPID==='0'&&state.ControlPID==='0','UNKNOWN');}
+async function unitStopped(c,budget){
+  const text=await command('systemctl',['show','rtc-r0-'+c.runId+'.service','--property=ActiveState,MainPID,ControlPID'],{budget});
+  assertUnitStopped(Object.fromEntries(text.trim().split('\n').map(line=>line.split('='))));
+  const group=c.auxiliary.cgroup+'/rtc-r0-'+c.runId+'.service';
+  if(fs.existsSync(group))requireFact(/^populated 0$/m.test(fs.readFileSync(group+'/cgroup.events','utf8')),'UNKNOWN');
+}
+async function runTask(c,budget){
+  const runtime=new Runtime(c,budget);let requested=false,ready=false;
+  process.once('SIGUSR1',()=>{if(ready)requested=true;});
+  try{
+    await runtime.start(budget);writeState(c,'READY',budget.end);ready=true;
+    while(!requested){await runtime.audit(budget);await new Promise(r=>setTimeout(r,budget.remaining(250)));}
+    writeState(c,'VERIFYING',budget.end);await runtime.verify(budget);await runtime.stop();writeState(c,'VERIFIED',budget.end);
+  }catch{writeState(c,'FAIL',budget.end);throw new Error('FAIL');}
+  // systemd ExecStopPost also runs after SIGKILL, timeout and synchronous failure.
+}
+export async function main(action){
+  requireFact(['preflight','config','up','verify','stop','__run','__cleanup'].includes(action),'COMMAND');
+  const c=readContract();let budget=action==='__run'?Budget.fromDeadline(Number(process.argv[3])):new Budget(action==='stop'?60000:120000);ownAux(c);
+  if(action==='preflight')await preflight(c,budget);
+  else if(action==='config')await configure(c,budget);
+  else if(action==='__run')await runTask(c,budget);
+  else if(action==='up'){
+    await startExperiment(c,budget,{
+      preflight:async()=>{await preflight(c,budget);validateGenerated(c);requireFact(!fs.existsSync(ownershipPath(c))&&!fs.existsSync(statePath(c)),'BUSY');requireFact((await ownContainers(c,budget)).length===0,'BUSY');},
+      launch:()=>command('systemd-run',systemdArguments(c,budget),{budget}),
+      status:async()=>{if(!fs.existsSync(statePath(c)))return{status:'BUSY'};const state=readState(c);requireFact(state.phase!=='FAIL','FAIL');return{status:state.phase==='READY'?'OK':'BUSY'};},
+      recover:()=>stopUnit(c,cleanupBudget(c))
+    });
+  }else if(action==='verify'){
+    const before=readState(c);requireFact(before.phase==='READY','BUSY');budget=Budget.fromDeadline(before.deadline);
+    fs.writeFileSync(ROOT+'/verify-'+c.runId+'.requested','requested\n',{flag:'wx',mode:0o400});
+    await command('systemctl',['kill','--kill-whom=main','--signal=USR1','rtc-r0-'+c.runId+'.service'],{budget});
+    try{while(true){budget.remaining();const state=readState(c);requireFact(state.phase!=='FAIL','FAIL');if(state.phase==='VERIFIED')break;await new Promise(r=>setTimeout(r,budget.remaining(25)));}}
+    catch(error){await stopUnit(c,cleanupBudget(c));throw error;}
+    await stopUnit(c,cleanupBudget(c));await unitStopped(c,cleanupBudget(c));
+  }else{
+    const stopBudget=cleanupBudget(c);if(action==='stop')await stopUnit(c,stopBudget);
+    const result=await stopOwned(c,readOwnership(c),stopBudget);requireFact(result==='OK',result);await baseline(c,stopBudget);
+    if(action==='stop')await unitStopped(c,stopBudget);
+  }
+}
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main(process.argv[2]).then(()=>process.stdout.write('{"service":"verifier","event":"command","errcode":"OK"}\n')).catch(()=>{process.stderr.write('{"service":"verifier","event":"command","errcode":"HOLD"}\n');process.exitCode=1;});

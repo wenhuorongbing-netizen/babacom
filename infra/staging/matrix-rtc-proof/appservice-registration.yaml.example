@@ -1,0 +1,15 @@
+id: rtc-r0
+as_token: {{AS_TOKEN}}
+hs_token: {{HS_TOKEN}}
+sender_localpart: _rtc_r0_service
+url: null
+rate_limited: true
+namespaces:
+  users:
+    - exclusive: false
+      regex: '^@rtc-(a|b|outsider):{{SERVER_REGEX}}$'
+  aliases: []
+  rooms: []
+io.element.msc4502.scopes: ['urn:matrix:client:io.element.msc4502:rooms:is_joined']
+io.element.msc4512.proxy_prefix: rtc/livekit
+io.element.msc4512.proxy_url: http://auth:8080

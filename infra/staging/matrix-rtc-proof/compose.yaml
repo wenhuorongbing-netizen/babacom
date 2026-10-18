@@ -1,0 +1,70 @@
+name: babacom-matrix-rtc-e1
+x-lab: &lab
+  platform: linux/amd64
+  cpus: 0.2
+  mem_limit: 288m
+  memswap_limit: 288m
+  pids_limit: 96
+  read_only: true
+  restart: 'no'
+  logging: {driver: none}
+  ulimits: {core: {soft: 0, hard: 0}}
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  tmpfs: ['/tmp:size=16777216,mode=1777']
+  networks: [isolated]
+  labels:
+    rtc.host: lhins-af0ntal8
+    rtc.run: ${RTC_RUN_ID:?exact approved run ID required}
+services:
+  synapse:
+    <<: *lab
+    # v1.162.0 / source 63dc0cbfe514f60743212566374ffeb5e9e295c2
+    image: ghcr.io/element-hq/synapse@sha256:43fd704aedef503a6fba2e5696439ef7bac24479a3472e364561973f550e4aad
+    user: '991:991'
+    environment: {SYNAPSE_CONFIG_PATH: /run/secrets/homeserver.yaml}
+    command: [run]
+    volumes:
+      - /opt/babacom-matrix-rtc-e1/data:/data
+      - /opt/babacom-matrix-rtc-e1/secrets/homeserver.yaml:/run/secrets/homeserver.yaml:ro
+      - /opt/babacom-matrix-rtc-e1/secrets/appservice.yaml:/run/secrets/appservice.yaml:ro
+      - /opt/babacom-matrix-rtc-e1/secrets/log.config:/run/secrets/log.config:ro
+  livekit:
+    <<: *lab
+    # v1.13.4 / source 0b3fd288e3ef3263ec475ba0d78cf3ad77459981
+    image: docker.io/livekit/livekit-server@sha256:f63579e294b6dbf38e0e6151a24a5b425e9293e75e6d41959f470c957248b8a7
+    command: [--config, /run/secrets/livekit.yaml]
+    volumes: [/opt/babacom-matrix-rtc-e1/secrets/livekit.yaml:/run/secrets/livekit.yaml:ro]
+  auth:
+    <<: *lab
+    # v0.9.0 / source 0e176b1eca44e67b11484d0bdf56999807bf2b8e
+    image: ghcr.io/element-hq/lk-jwt-service@sha256:2c985ab98de8da3b101c09fb597404dcb2723bb984b1ee20a430a8bb4f6a51a9
+    environment:
+      LIVEKIT_URL: wss://${RTC_DOMAIN:?approved domain required}:${RTC_PORT:?approved port required}
+      LIVEKIT_KEY_FROM_FILE: /run/secrets/livekit.key
+      LIVEKIT_SECRET_FROM_FILE: /run/secrets/livekit.secret
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: ${RTC_DOMAIN:?approved domain required}:${RTC_PORT:?approved port required}
+      LIVEKIT_HS_SERVER_NAME: ${RTC_DOMAIN:?approved domain required}:${RTC_PORT:?approved port required}
+      LIVEKIT_AS_REGISTRATION_FILE: /run/secrets/appservice.yaml
+      LIVEKIT_JWT_BIND: '[::]:8080'
+      LIVEKIT_LOG_LEVEL: warn
+    volumes:
+      - /opt/babacom-matrix-rtc-e1/secrets/appservice.yaml:/run/secrets/appservice.yaml:ro
+      - /opt/babacom-matrix-rtc-e1/secrets/livekit.key:/run/secrets/livekit.key:ro
+      - /opt/babacom-matrix-rtc-e1/secrets/livekit.secret:/run/secrets/livekit.secret:ro
+  caddy:
+    <<: *lab
+    # 2.11.7-alpine / source 72dd0fb067f6d7826c7f79907670ba4a713bfe37
+    image: docker.io/library/caddy@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229
+    command: [caddy, run, --config, /run/secrets/Caddyfile, --adapter, caddyfile]
+    ports: ['127.0.0.1:${RTC_PORT:?approved exact loopback port required}:${RTC_PORT:?approved exact loopback port required}']
+    networks:
+      isolated:
+        aliases: ['${RTC_DOMAIN:?approved domain required}']
+    volumes:
+      - /opt/babacom-matrix-rtc-e1/secrets/Caddyfile:/run/secrets/Caddyfile:ro
+      - /opt/babacom-matrix-rtc-e1/secrets/tls.crt:/run/secrets/tls.crt:ro
+      - /opt/babacom-matrix-rtc-e1/secrets/tls.key:/run/secrets/tls.key:ro
+    tmpfs: ['/tmp:size=16777216,mode=1777', '/data:size=1048576', '/config:size=1048576']
+networks:
+  isolated: {internal: true}
