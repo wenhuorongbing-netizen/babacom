@@ -22,6 +22,7 @@ if(process.argv[2]==='--fixture'){
   else if(mode==='fail'){process.stderr.write('incapable-child%2Fmarker');process.exitCode=7;}
   else if(mode==='failure-output'){try{await command(process.execPath,[fileURLToPath(import.meta.url),'--fixture','fail']);}catch(error){process.stdout.write(JSON.stringify({errcode:error.message}));}}
   else if(mode==='signal-hang'){await proof.signal(process.argv[4],'incapable-fixture',{allowWsFixture:true,identity:'@rtc-a:fixture:device',room:'fixture-room',timeout:50}).catch(()=>{});}
+  else if(mode==='public-error')process.exitCode=await proof.publicCommand('stop',async()=>{throw new Error(process.argv[4]);});
   else process.exitCode=1;
 }else{
 test('built-in WebSocket sends Bearer header with no query and observes a real JoinResponse', async () => {
@@ -58,6 +59,22 @@ test('JoinResponse rejects wrong rooms, identities, tracks and malformed protobu
   assert.throws(()=>proof.assertJoin(response,'other','room-a'));
   const tracked=field(1,Buffer.concat([field(1,room),field(2,Buffer.concat([participant,field(4,Buffer.alloc(0))]))]));assert.throws(()=>proof.assertJoin(tracked,'expected','room-a'));
   for(const bad of [Buffer.from([10,127,1]),Buffer.from([128]),Buffer.from([0]),Buffer.alloc(1048577)])assert.throws(()=>proof.assertJoin(bad,'expected','room-a'));
+});
+
+test('participant removal retains signal track faults through final gate while allowing expected socket close',async()=>{
+  for(const payload of [Buffer.from([0x32,0]),Buffer.from([0x2a,4,0x0a,2,0x22,0]),null]){
+    const server=http.createServer();let peer;
+    server.on('upgrade',(request,socket)=>{peer=socket;socket.on('error',()=>{});const accept=crypto.createHash('sha1').update(request.headers['sec-websocket-key']+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: '+accept+'\r\n\r\n');
+      const field=(n,value)=>Buffer.concat([Buffer.from([n*8+2,value.length]),value]),join=field(1,Buffer.concat([field(1,field(2,Buffer.from('room'))),field(2,field(2,Buffer.from('identity')))]));socket.write(Buffer.concat([Buffer.from([0x82,join.length]),join]));socket.on('data',()=>socket.destroy());});
+    server.listen(0,'127.0.0.1');await once(server,'listening');
+    try{
+      const connection=await proof.signal(`ws://127.0.0.1:${server.address().port}`,'incapable-fixture',{allowWsFixture:true,identity:'identity',room:'room',timeout:1000}),connections=[connection];let gate=false;
+      const remove=async()=>{const closed=once(connection.socket,'close');peer.write(payload?Buffer.concat([Buffer.from([0x82,payload.length]),payload]):Buffer.from([0x88,0]));await closed;};
+      const result=proof.retireParticipants(connections,['identity'],remove,async()=>[]).then(()=>{for(const current of connections)current.assertClean();gate=true;});
+      if(payload){await assert.rejects(result,/SIGNAL/);assert.equal(gate,false);assert.throws(()=>connection.assertClean(),/SIGNAL/);}else{await result;assert.equal(gate,true);}
+      assert.equal(connections.length,1);
+    }finally{peer?.destroy();server.close();}
+  }
 });
 
 test('public stop cannot accept an active unit or surviving worker and cleanup controller',()=>{
@@ -144,6 +161,23 @@ test('systemd inherits the already consumed public deadline instead of starting 
   let now=0;const budget=new Budget(120000,()=>now);now=90000;
   assert.ok(proof.systemdArguments(contract(),budget).includes('--property=RuntimeMaxSec=30000ms'));
   assert.ok(proof.systemdArguments(contract(),budget).includes('--property=Type=exec'));
+});
+
+test('unit stop receives the remaining cleanup budget instead of a separate ten-second command cap',async()=>{
+  const c=contract();let now=0,stopped=false;const budget=new Budget(60000,()=>now);now=45000;
+  await proof.stopUnit(c,budget,async(_executable,args,options)=>{
+    assert.equal(options.budget,budget);if(args[0]==='show'){now+=1000;return 'BabaCom RTC '+c.runId+'\n'+c.auxiliary.unit+'\nyes\n';}
+    assert.equal(options.timeout,14000);assert.equal(options.budget.end,60000);await command(process.execPath,[fileURLToPath(import.meta.url),'--fixture','json','stopped'],options);now+=11000;options.budget.remaining();stopped=true;
+  });
+  assert.equal(stopped,true);assert.equal(budget.remaining(),3000);
+});
+
+test('observed TTL events contain positive returned OpenID seconds and JWT remaining seconds only',()=>{
+  const rows=[],events=new SafeEvents(row=>rows.push(row));
+  proof.recordTtl(events,'openid_ttl',3600);proof.recordTtl(events,'jwt_remaining',299);
+  assert.deepEqual(rows.map(({event,count})=>({event,count})),[{event:'openid_ttl',count:3600},{event:'jwt_remaining',count:299}]);
+  for(const seconds of [0,-1,1.5,NaN,Infinity,'incapable-secret',{}])assert.throws(()=>proof.recordTtl(events,'openid_ttl',seconds));
+  assert.throws(()=>proof.recordTtl(events,'incapable-secret',1));assert.equal(JSON.stringify(rows).includes('incapable-secret'),false);
 });
 
 function contract() {
@@ -262,6 +296,13 @@ test('JWT and administrative observation must agree; any track is failure', () =
   assert.doesNotThrow(()=>assertParticipants([{identity:expected.subject,tracks:[]}],[expected.subject]));
   assert.throws(()=>assertParticipants([{identity:expected.subject,tracks:[{}]}],[expected.subject]));
   assert.throws(()=>assertParticipants([], [expected.subject]));
+});
+
+test('public error enums preserve UNKNOWN, BUSY and deadlines without exposing raw messages or stacks',async()=>{
+  for(const message of ['UNKNOWN','BUSY','DEADLINE','FAIL','HOLD','incapable-secret%2Fmarker\nraw stack/body']){
+    const child=spawn(process.execPath,[fileURLToPath(import.meta.url),'--fixture','public-error',message],{stdio:['ignore','pipe','pipe']});let stdout='',stderr='';child.stdout.on('data',b=>{stdout+=b;});child.stderr.on('data',b=>{stderr+=b;});
+    const [code]=await once(child,'close');assert.equal(code,1);assert.equal(stdout,'');assert.deepEqual(JSON.parse(stderr),{service:'verifier',event:'command',errcode:message.startsWith('incapable-')?'HOLD':message});assert.equal(stderr.includes('incapable-secret'),false);assert.equal(stderr.includes('raw stack/body'),false);
+  }
 });
 
 test('public commands fail closed on unapproved local runtime and print only fixed fields', async () => {

@@ -47,7 +47,7 @@ export function validateContract(c){
   requireFact(c.logging&&Array.isArray(c.logging.coverage)&&JSON.stringify([...c.logging.coverage].sort())===JSON.stringify(['connection','handshake','redirect','success','timeout','tls'])&&Array.isArray(c.logging.bypasses)&&c.logging.bypasses.length>0&&c.logging.bypasses.every(x=>metadata(x)&&['socket','file','directory'].includes(x.kind)&&x.writesRaw===false),'LOG_ADMISSION');
   return c;
 }
-const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','command','scan']);
+const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','command','scan','openid_ttl','jwt_remaining']);
 const ERRORS=new Set(['OK','M_FORBIDDEN','M_UNAUTHORIZED','M_UNKNOWN_TOKEN','FAIL','HOLD','UNKNOWN','DEADLINE','CONTRACT','BUSY']);
 export class SafeEvents {
   constructor(write){this.write=write;this.bytes=0;this.chunks=0;}
@@ -57,6 +57,7 @@ export class SafeEvents {
     this.write({service:SERVICES.includes(service)?service:'verifier',event:EVENTS.has(event)?event:'unknown',status:Number.isInteger(status)&&status>=0&&status<600?status:0,errcode:ERRORS.has(errcode)?errcode:'UNKNOWN',count:Number.isSafeInteger(count)&&count>=0?count:0});
   }
 }
+export function recordTtl(events,event,seconds){requireFact(['openid_ttl','jwt_remaining'].includes(event)&&Number.isSafeInteger(seconds)&&seconds>0,'TTL');events.event('verifier',event,200,'OK',seconds);}
 export function assertOwned(i,c,service){
   const l=i?.Config?.Labels;
   requireFact(/^[a-f0-9]{64}$/.test(i?.Id)&&SERVICES.includes(service)&&l?.['rtc.run']===c.runId&&l?.['rtc.host']===c.host&&l?.['com.docker.compose.project']===c.project&&l?.['com.docker.compose.service']===service&&i.Config.Image===PINS[service].image,'UNKNOWN');
@@ -303,11 +304,13 @@ class Runtime {
   }
   auth(body,budget){return httpRequest('https://'+serverName(this.c)+'/sfu/get',{method:'POST',body:JSON.stringify(body),lookup:lookupLoopback,timeout:budget.remaining(8000),headers:{'Content-Type':'application/json'}});}
   async stop(){
+    for(const connection of this.connections)connection.assertClean();
     for(const connection of this.connections)connection.socket.close();
     const budget=cleanupBudget(this.c),result=await stopOwned(this.c,readOwnership(this.c),budget);requireFact(result==='OK',result);
     await budget.waitFor(()=>[...this.attaches.values()].every(x=>x.ended));
+    await budget.waitFor(()=>this.connections.every(x=>x.socket.readyState===WebSocket.CLOSED));
     for(const service of SERVICES)this.events.event(service,'stopped');
-    await baseline(this.c,budget);this.events.event('verifier','chunks',0,'OK',this.events.chunks);
+    await baseline(this.c,budget);for(const connection of this.connections)connection.assertClean();this.events.event('verifier','chunks',0,'OK',this.events.chunks);
   }
 }
 
@@ -333,17 +336,22 @@ export function signal(url,token,{timeout=8000,identity,room,allowWsFixture=fals
   const u=new URL(url);requireFact((u.protocol==='wss:'||(allowWsFixture&&u.protocol==='ws:'&&u.hostname==='127.0.0.1'))&&!u.search&&!u.hash&&!u.username&&!u.password&&['','/'].includes(u.pathname),'TLS');
   requireFact(timeout>0&&timeout<=10000&&typeof identity==='string'&&identity.length>0&&typeof room==='string'&&room.length>0,'SIGNAL');u.pathname='/rtc';
   return new Promise((resolve,reject)=>{
-    const socket=new WebSocket(u,{headers:{Authorization:`Bearer ${token}`}});socket.binaryType='arraybuffer';let joined=false,fault=false,settled=false;
+    const socket=new WebSocket(u,{headers:{Authorization:`Bearer ${token}`}});socket.binaryType='arraybuffer';let joined=false,fault=false,settled=false,expectedRemoval=false;
     const fail=code=>{fault=true;if(!settled){settled=true;clearTimeout(timer);reject(new Error(code));}socket.close();};
     const timer=setTimeout(()=>fail('DEADLINE'),timeout);
     socket.addEventListener('error',()=>fail('NETWORK'));
     socket.addEventListener('close',()=>{if(!joined)fail('SIGNAL');});
     socket.addEventListener('message',event=>{try{
       requireFact(event.data instanceof ArrayBuffer,'SIGNAL');
-      if(!joined){assertJoin(new Uint8Array(event.data),identity,room);joined=true;settled=true;clearTimeout(timer);resolve({socket,joined,assertClean:()=>requireFact(!fault&&socket.readyState===WebSocket.OPEN,'SIGNAL')});}
+      if(!joined){assertJoin(new Uint8Array(event.data),identity,room);joined=true;settled=true;clearTimeout(timer);resolve({socket,joined,expectRemoval:()=>{expectedRemoval=true;},assertClean:()=>requireFact(!fault&&(expectedRemoval||socket.readyState===WebSocket.OPEN),'SIGNAL')});}
       else{const fields=protobufFields(new Uint8Array(event.data));requireFact(!fields.some(x=>x.field===6||x.field===8),'TRACKS');for(const update of fields.filter(x=>x.field===5&&x.wire===2))for(const person of protobufFields(update.value).filter(x=>x.field===1&&x.wire===2))requireFact(!protobufFields(person.value).some(x=>x.field===4),'TRACKS');}
     }catch{fail('SIGNAL');}});
   });
+}
+export async function retireParticipants(connections,identities,remove,list){
+  for(const connection of connections)connection.expectRemoval();
+  for(const identity of identities)await remove(identity);
+  assertParticipants(await list(),[]);for(const connection of connections)connection.assertClean();
 }
 export function systemdArguments(c,budget=new Budget(120000)){
   return ['--unit=rtc-r0-'+c.runId,'--description=BabaCom RTC '+c.runId,'--property=Type=exec','--property=RuntimeMaxSec='+budget.remaining()+'ms','--property=TimeoutStopSec=60s','--property=KillMode=control-group','--property=Slice='+c.auxiliary.unit,'--property=CPUQuota='+String(c.auxiliary.cpu*100)+'%','--property=MemoryMax='+c.auxiliary.memory,'--property=MemorySwapMax=0','--property=StandardOutput=null','--property=StandardError=null','--property=BindReadOnlyPaths='+ROOT+'/hosts:/etc/hosts','--property=ExecStopPost='+process.execPath+' '+ROOT+'/proof.mjs __cleanup',process.execPath,ROOT+'/proof.mjs','__run',String(budget.end)];
@@ -364,7 +372,7 @@ Runtime.prototype.admin=async function(method,body,budget){
 };
 Runtime.prototype.openid=async function(account,budget){
   const result=await this.api(`/_matrix/client/v3/user/${encodeURIComponent(account.user_id)}/openid/request_token`,{method:'POST',token:account.access_token,body:{}},budget);
-  requireFact(result.matrix_server_name===serverName(this.c)&&typeof result.access_token==='string','OPENID');return result;
+  requireFact(result.matrix_server_name===serverName(this.c)&&typeof result.access_token==='string','OPENID');recordTtl(this.events,'openid_ttl',result.expires_in);return result;
 };
 Runtime.prototype.denied=async function(body,budget){
   const before=await this.admin('ListParticipants',{room:roomAlias(body.room)},budget);
@@ -406,7 +414,7 @@ Runtime.prototype.verify=async function(budget){
     const key=fs.readFileSync(`${ROOT}/secrets/livekit.key`,'utf8'),secret=fs.readFileSync(`${ROOT}/secrets/livekit.secret`,'utf8');const expected=[];
     for(const [account,openid] of [[a,tokenA],[b,tokenB]]){
       const r=await this.auth(request(account,openid),budget);requireFact(r.status===200,'SFU');const ticket=JSON.parse(r.body);requireFact(ticket.url===`wss://${this.c.domain}:${this.c.port}`,'SFU_URL');secrets.push(ticket.jwt);
-      const subject=`${account.user_id}:${account.device_id}`;assertTicket(decodeTicket(ticket.jwt,secret),{subject,room:roomAlias(room),key});expected.push(subject);
+      const subject=`${account.user_id}:${account.device_id}`,claims=decodeTicket(ticket.jwt,secret);assertTicket(claims,{subject,room:roomAlias(room),key});recordTtl(this.events,'jwt_remaining',Math.floor(claims.exp-Date.now()/1000));expected.push(subject);
       const connection=await signal(ticket.url,ticket.jwt,{identity:subject,room:roomAlias(room),timeout:budget.remaining(8000)});this.connections.push(connection);sockets.push(connection.socket);
       const participants=await this.admin('ListParticipants',{room:roomAlias(room)},budget);assertParticipants(participants.participants??[],expected);
     }
@@ -416,19 +424,17 @@ Runtime.prototype.verify=async function(budget){
     await this.api(`/_matrix/client/v3/rooms/${encoded}/kick`,{method:'POST',body:{user_id:b.user_id},token:a.access_token},budget);const fresh=await this.openid(b,budget);secrets.push(fresh.access_token);await this.denied(request(b,fresh),budget);
     // Existing participants and old JWT remain separate upstream behavior. Remove
     // both own participants explicitly; do not claim kick revokes established RTC.
-    for(const identity of expected)await this.admin('RemoveParticipant',{room:roomAlias(room),identity},budget);
-    assertParticipants((await this.admin('ListParticipants',{room:roomAlias(room)},budget)).participants??[],[]);
-    this.connections=[]; // Removal was observed; subsequent socket close is expected.
+    await retireParticipants(this.connections,expected,identity=>this.admin('RemoveParticipant',{room:roomAlias(room),identity},budget),async()=>(await this.admin('ListParticipants',{room:roomAlias(room)},budget)).participants??[]);
     for(const account of [a,b,outsider]){await this.api('/_matrix/client/v3/logout',{method:'POST',body:{},token:account.access_token},budget);const revoked=await this.api('/_matrix/client/v3/account/whoami',{token:account.access_token,expected:401},budget);requireFact(revoked.errcode==='M_UNKNOWN_TOKEN','LOGOUT');}
-    await this.scan(secrets,budget);await this.audit(budget);this.events.event('verifier','participants',200,'OK',2);this.events.event('verifier','gate',200,'OK',0);
+    await this.scan(secrets,budget);await this.audit(budget);this.events.event('verifier','participants',200,'OK',2);
   }finally{for(const socket of sockets)socket.close();}
 };
 
-async function stopUnit(c,budget){
+export async function stopUnit(c,budget,run=command){
   const unit='rtc-r0-'+c.runId+'.service';
-  const metadata=await command('systemctl',['show',unit,'--property=Description,Slice,Transient','--value'],{budget});
+  const metadata=await run('systemctl',['show',unit,'--property=Description,Slice,Transient','--value'],{budget});
   requireFact(metadata.split('\n').includes('BabaCom RTC '+c.runId)&&metadata.split('\n').includes(c.auxiliary.unit)&&metadata.split('\n').includes('yes'),'UNKNOWN');
-  await command('systemctl',['stop',unit],{budget});
+  await run('systemctl',['stop',unit],{budget,timeout:budget.remaining(60000)});
 }
 export function assertUnitStopped(state){requireFact(['inactive','failed'].includes(state.ActiveState)&&state.MainPID==='0'&&state.ControlPID==='0','UNKNOWN');}
 async function unitStopped(c,budget){
@@ -443,7 +449,7 @@ async function runTask(c,budget){
   try{
     await runtime.start(budget);writeState(c,'READY',budget.end);ready=true;
     while(!requested){await runtime.audit(budget);await new Promise(r=>setTimeout(r,budget.remaining(250)));}
-    writeState(c,'VERIFYING',budget.end);await runtime.verify(budget);await runtime.stop();writeState(c,'VERIFIED',budget.end);
+    writeState(c,'VERIFYING',budget.end);await runtime.verify(budget);await runtime.stop();runtime.events.event('verifier','gate',200,'OK',0);writeState(c,'VERIFIED',budget.end);
   }catch{writeState(c,'FAIL',budget.end);throw new Error('FAIL');}
   // systemd ExecStopPost also runs after SIGKILL, timeout and synchronous failure.
 }
@@ -473,4 +479,8 @@ export async function main(action){
     if(action==='stop')await unitStopped(c,stopBudget);
   }
 }
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main(process.argv[2]).then(()=>process.stdout.write('{"service":"verifier","event":"command","errcode":"OK"}\n')).catch(()=>{process.stderr.write('{"service":"verifier","event":"command","errcode":"HOLD"}\n');process.exitCode=1;});
+export async function publicCommand(action,run=main){
+  try{await run(action);process.stdout.write('{"service":"verifier","event":"command","errcode":"OK"}\n');return 0;}
+  catch(error){const errcode=['UNKNOWN','BUSY','DEADLINE','FAIL','HOLD'].includes(error?.message)?error.message:'HOLD';process.stderr.write(JSON.stringify({service:'verifier',event:'command',errcode})+'\n');return 1;}
+}
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))process.exitCode=await publicCommand(process.argv[2]);
