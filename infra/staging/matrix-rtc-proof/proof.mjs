@@ -344,13 +344,13 @@ export function signal(url,token,{timeout=8000,identity,room,allowWsFixture=fals
     socket.addEventListener('message',event=>{try{
       requireFact(event.data instanceof ArrayBuffer,'SIGNAL');
       if(!joined){assertJoin(new Uint8Array(event.data),identity,room);joined=true;settled=true;clearTimeout(timer);resolve({socket,joined,expectRemoval:()=>{expectedRemoval=true;},assertClean:()=>requireFact(!fault&&(expectedRemoval||socket.readyState===WebSocket.OPEN),'SIGNAL')});}
-      else{const fields=protobufFields(new Uint8Array(event.data));requireFact(!fields.some(x=>x.field===6||x.field===8),'TRACKS');for(const update of fields.filter(x=>x.field===5&&x.wire===2))for(const person of protobufFields(update.value).filter(x=>x.field===1&&x.wire===2))requireFact(!protobufFields(person.value).some(x=>x.field===4),'TRACKS');}
+      else{const fields=protobufFields(new Uint8Array(event.data));requireFact(!fields.some(x=>x.field===6),'TRACKS');for(const leave of fields.filter(x=>x.field===8)){requireFact(expectedRemoval&&leave.wire===2,'SIGNAL');protobufFields(leave.value);}for(const update of fields.filter(x=>x.field===5&&x.wire===2))for(const person of protobufFields(update.value).filter(x=>x.field===1&&x.wire===2))requireFact(!protobufFields(person.value).some(x=>x.field===4),'TRACKS');}
     }catch{fail('SIGNAL');}});
   });
 }
 export async function retireParticipants(connections,identities,remove,list){
-  for(const connection of connections)connection.expectRemoval();
-  for(const identity of identities)await remove(identity);
+  requireFact(connections.length===identities.length,'SIGNAL');
+  for(let index=0;index<identities.length;index++){connections[index].expectRemoval();await remove(identities[index]);}
   assertParticipants(await list(),[]);for(const connection of connections)connection.assertClean();
 }
 export function systemdArguments(c,budget=new Budget(120000)){

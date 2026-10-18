@@ -77,6 +77,30 @@ test('participant removal retains signal track faults through final gate while a
   }
 });
 
+async function leaveFixture(identity='identity'){
+  const server=http.createServer();let peer;
+  server.on('upgrade',(request,socket)=>{peer=socket;socket.on('error',()=>{});const accept=crypto.createHash('sha1').update(request.headers['sec-websocket-key']+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: '+accept+'\r\n\r\n');
+    const field=(n,value)=>Buffer.concat([Buffer.from([n*8+2,value.length]),value]),join=field(1,Buffer.concat([field(1,field(2,Buffer.from('room'))),field(2,field(2,Buffer.from(identity)))]));socket.write(Buffer.concat([Buffer.from([0x82,join.length]),join]));socket.on('data',()=>socket.destroy());});
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  const close=async()=>{peer?.destroy();await new Promise(resolve=>server.close(resolve));};let connection;
+  try{connection=await proof.signal(`ws://127.0.0.1:${server.address().port}`,'incapable-fixture',{allowWsFixture:true,identity,room:'room',timeout:1000});}catch(error){await close();throw error;}
+  return {connection,send:async payload=>{const closed=once(connection.socket,'close');peer.write(Buffer.concat([Buffer.from([0x82,payload.length]),payload,Buffer.from([0x88,0])]));await closed;},close};
+}
+test('stock LeaveRequest is accepted only after that participant removal starts',async()=>{
+  for(const payload of [Buffer.from([0x42,0]),Buffer.from([0x42,2,0x10,0])]){
+    const fixture=await leaveFixture();try{await proof.retireParticipants([fixture.connection],['identity'],()=>fixture.send(payload),async()=>[]);assert.doesNotThrow(()=>fixture.connection.assertClean());}finally{await fixture.close();}
+  }
+});
+test('unexpected and malformed LeaveRequest permanently fault a joined connection',async()=>{
+  for(const [expected,payload] of [[false,Buffer.from([0x42,0])],[true,Buffer.from([0x40,0])],[true,Buffer.from([0x42,1,0x80])],[true,Buffer.from([0x42,2,0x10])]]){
+    const fixture=await leaveFixture();try{if(expected)fixture.connection.expectRemoval();await fixture.send(payload);assert.throws(()=>fixture.connection.assertClean(),/SIGNAL/);}finally{await fixture.close();}
+  }
+});
+test('removing one participant cannot authorize LeaveRequest on a participant whose removal has not started',async()=>{
+  const first=await leaveFixture('first'),second=await leaveFixture('second');
+  try{await assert.rejects(proof.retireParticipants([first.connection,second.connection],['first','second'],async identity=>{if(identity==='first'){await second.send(Buffer.from([0x42,0]));assert.throws(()=>second.connection.assertClean(),/SIGNAL/);await first.send(Buffer.from([0x42,0]));}},async()=>[]),/SIGNAL/);assert.throws(()=>second.connection.assertClean(),/SIGNAL/);}finally{await first.close();await second.close();}
+});
+
 test('public stop cannot accept an active unit or surviving worker and cleanup controller',()=>{
   assert.equal(typeof proof.assertUnitStopped,'function');
   for(const ActiveState of ['inactive','failed'])assert.doesNotThrow(()=>proof.assertUnitStopped({ActiveState,MainPID:'0',ControlPID:'0'}));
