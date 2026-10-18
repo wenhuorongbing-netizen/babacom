@@ -166,3 +166,11 @@ Jack 随后明确允许使用现有腾讯云实例做 RTC；这更新了 §4 中
 仅新R0的候选替代边界、精确OpenID query例外、验证器内存限制、受保护合成DB以及日志哨兵准入统一维护在[模块清单](../.agents/modules/matrix-rtc-proof.md#r0-凭据传输与日志准入修订候选待签认)。这是待签认修订，未解决日志实施方案，未运行或证明无泄漏；原实验及T1/T2凭据合同不因此改变。
 
 后续stock Call也不能沿用绝对URL禁令：固定[Call lockfile](https://github.com/element-hq/element-call/blob/71593f1a245b1afa971e3940596e1c500edf9548/pnpm-lock.yaml#L184)锁定livekit-client2.22.3，其[SignalClient](https://github.com/livekit/client-sdk-js/blob/v2.22.3/src/api/SignalClient.ts#L1360)在WSS `/rtc`或`/rtc/v1`及握手失败的HTTPS验证请求中使用query。R0验证器可用Bearer header，但不证明stock包路径；R1的端点例外、日志与实际包行为须另行审查签认，当前不授权执行。
+
+### 标准 R0 精简候选（2026-10-16）
+
+固定[auth v0.9.0](https://github.com/element-hq/lk-jwt-service/blob/v0.9.0/src/helper.rs#L595-L625)的OpenID请求硬编码30秒；客户端发现也是30秒，Twirp未证实总timeout。因此stock组件不满足旧“所有内部HTTP≤10秒”，客户端Abort也不证明上游已停止。候选保留客户端10秒与整个任务120秒外界期限，使用标准systemd/Compose并先验证失败/停止行为；具体修订见[模块修订](../.agents/modules/matrix-rtc-proof.md#标准组件精简修订已签认可信合并后生效)。
+
+本机Node为24.13.0；其[内置WebSocket](https://github.com/nodejs/node/blob/v24.13.0/deps/undici/src/lib/web/websocket/websocket.js)接受Undici扩展的第二参数 `{headers: {Authorization: 'Bearer …'}}`，[握手源码](https://github.com/nodejs/node/blob/v24.13.0/deps/undici/src/lib/web/websocket/connection.js)把header送入请求。可去掉手写RFC6455，不增加SDK或token query，也不启动ICE/媒体；默认TLS校验保持，仍须实测Bearer、零query、TLS负例及JoinResponse。公开 `close()` 不保证限时销毁socket，不能代替停止实证；这不是stock Element/Call或完整RTC客户端验收。
+
+现有专用WSL可响应归属检查、Docker29.9.0/cgroup v2查询，原控制面三容器均exited；观测到swap4GB和 `|/wsl-capture-crash %t %E %p %s`。微软[collector源码](https://github.com/microsoft/WSL/blob/b275ed2f6b66e3e0c515be781aafe4661900cd91/src/linux/init/init.cpp)会转送core，宿主[接收器](https://github.com/microsoft/WSL/blob/b275ed2f6b66e3e0c515be781aafe4661900cd91/src/windows/service/exe/WslCoreVm.cpp)可落盘；这是固定上游源码，未证明本机二进制版本完全对应。Linux管道core不受普通`LimitCORE=0`保护；`MemorySwapMax=0`也只约束对应cgroup，不能证明整个宿主零落盘。故不为补绝对memory-only承诺再造wrapper或全局修改WSL；是否接受合成实验OS持久化例外须Jack明确裁定，未知权限/路径仍HOLD。
