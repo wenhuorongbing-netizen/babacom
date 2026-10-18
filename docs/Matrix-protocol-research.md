@@ -169,7 +169,7 @@ Jack 随后明确允许使用现有腾讯云实例做 RTC；这更新了 §4 中
 
 ### 标准 R0 精简候选（2026-10-16）
 
-固定[auth v0.9.0](https://github.com/element-hq/lk-jwt-service/blob/v0.9.0/src/helper.rs#L595-L625)的OpenID请求硬编码30秒；客户端发现也是30秒，Twirp未证实总timeout。因此stock组件不满足旧“所有内部HTTP≤10秒”，客户端Abort也不证明上游已停止。候选保留客户端10秒与整个任务120秒外界期限，使用标准systemd/Compose并先验证失败/停止行为；具体修订见[模块候选](../.agents/modules/matrix-rtc-proof.md#标准组件精简修订proposed尚未替换原合同)。
+固定[auth v0.9.0](https://github.com/element-hq/lk-jwt-service/blob/v0.9.0/src/helper.rs#L595-L625)的OpenID请求硬编码30秒；客户端发现也是30秒，Twirp未证实总timeout。因此stock组件不满足旧“所有内部HTTP≤10秒”，客户端Abort也不证明上游已停止。候选保留客户端10秒与整个任务120秒外界期限，使用标准systemd/Compose并先验证失败/停止行为；具体修订见[模块修订](../.agents/modules/matrix-rtc-proof.md#标准组件精简修订已签认可信合并后生效)。
 
 本机Node为24.13.0；其[内置WebSocket](https://github.com/nodejs/node/blob/v24.13.0/deps/undici/src/lib/web/websocket/websocket.js)接受Undici扩展的第二参数 `{headers: {Authorization: 'Bearer …'}}`，[握手源码](https://github.com/nodejs/node/blob/v24.13.0/deps/undici/src/lib/web/websocket/connection.js)把header送入请求。可去掉手写RFC6455，不增加SDK或token query，也不启动ICE/媒体；默认TLS校验保持，仍须实测Bearer、零query、TLS负例及JoinResponse。公开 `close()` 不保证限时销毁socket，不能代替停止实证；这不是stock Element/Call或完整RTC客户端验收。
 
