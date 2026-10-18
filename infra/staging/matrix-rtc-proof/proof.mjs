@@ -4,9 +4,11 @@ import os from 'node:os';
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
+import tls from 'node:tls';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 
 const ROOT='/opt/babacom-matrix-rtc-e1', PROJECT='babacom-matrix-rtc-e1';
 const SERVICES=['synapse','livekit','auth','caddy'];
@@ -26,9 +28,10 @@ export class Budget {
   async waitFor(predicate){while(true){this.remaining();if(predicate())return;await new Promise(r=>setTimeout(r,this.remaining(25)));}}
 }
 export function serverName(c){return `${c.domain}:${c.port}`;}
-export function validateContract(c){
+export function validateContract(c,action){
   requireFact(c&&c.host==='lhins-af0ntal8'&&c.root===ROOT&&c.project===PROJECT);
-  requireFact(c.approved===true&&c.logAdmission===true&&/^[a-f0-9]{32}$/.test(c.runId));
+  // This Boolean describes the operator's plan, never an observed runtime gate.
+  requireFact(c.approved===true&&typeof c.logAdmission==='boolean'&&/^[a-f0-9]{32}$/.test(c.runId));
   requireFact(typeof c.domain==='string'&&/^(?=.{4,253}$)[a-z0-9]+(?:[-.][a-z0-9]+)*\.[a-z]{2,}$/.test(c.domain));
   requireFact(Number.isInteger(c.port)&&c.port>1024&&c.port<65536);
   requireFact(c.certificateSource==='operator-provisioned-public-chain'&&/^[a-f0-9]{64}$/.test(c.certificateSha256));
@@ -44,15 +47,37 @@ export function validateContract(c){
   requireFact(/^[a-f0-9]{64}$/.test(c.nodeSha256),'NODE');
   const metadata=row=>row&&typeof row.path==='string'&&path.isAbsolute(row.path)&&!row.path.split('/').includes('..')&&Number.isInteger(row.uid)&&row.uid>=0&&Number.isInteger(row.gid)&&row.gid>=0&&Number.isInteger(row.mode)&&row.mode>=0&&row.mode<=0o777&&Array.isArray(row.accessors)&&row.accessors.length>0&&row.accessors.every(x=>typeof x==='string'&&/^[a-zA-Z0-9_-]+$/.test(x));
   requireFact(c.persistence&&typeof c.persistence.corePattern==='string'&&c.persistence.corePattern.length>0&&c.persistence.corePattern.length<4096&&Array.isArray(c.persistence.locations)&&c.persistence.locations.length>0&&c.persistence.locations.every(x=>metadata(x)&&['swap','core-directory','core-handler'].includes(x.kind)),'PERSISTENCE');
-  requireFact(c.logging&&Array.isArray(c.logging.coverage)&&JSON.stringify([...c.logging.coverage].sort())===JSON.stringify(['connection','handshake','redirect','success','timeout','tls'])&&Array.isArray(c.logging.bypasses)&&c.logging.bypasses.length>0&&c.logging.bypasses.every(x=>metadata(x)&&['socket','file','directory'].includes(x.kind)&&x.writesRaw===false),'LOG_ADMISSION');
+  requireFact(c.logging&&Array.isArray(c.logging.coverage)&&['connection','handshake','success','timeout','tls'].every(name=>c.logging.coverage.includes(name))&&c.logging.coverage.every(name=>['connection','handshake','redirect','success','timeout','tls'].includes(name))&&new Set(c.logging.coverage).size===c.logging.coverage.length&&Array.isArray(c.logging.bypasses)&&c.logging.bypasses.length>0&&c.logging.bypasses.every(x=>metadata(x)&&['socket','file','directory'].includes(x.kind)&&x.writesRaw===false),'LOG_ADMISSION');
   validateSharedRuntime(c,[c.auxiliary.cgroup]);
   return c;
 }
-const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','command','scan','openid_ttl','jwt_remaining','shared_cpu_milli','shared_memory_bytes']);
+const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','command','scan','openid_ttl','jwt_remaining','shared_cpu_milli','shared_memory_bytes','log_connection','log_success','log_tls','log_handshake','log_timeout']);
 const ERRORS=new Set(['OK','M_FORBIDDEN','M_UNAUTHORIZED','M_UNKNOWN_TOKEN','FAIL','HOLD','UNKNOWN','DEADLINE','CONTRACT','BUSY']);
+function normalizedLog(text){return text.replace(/%([a-f\d]{2})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))).replace(/\\u([a-f\d]{4})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))).replace(/\\([\\/"bfnrt])/g,(_,value)=>({b:'\b',f:'\f',n:'\n',r:'\r',t:'\t'}[value]??value));}
 export class SafeEvents {
-  constructor(write){this.write=write;this.bytes=0;this.chunks=0;}
-  consume(service,chunk){this.bytes+=chunk.length;this.chunks++;}
+  constructor(write){this.write=write;this.bytes=0;this.chunks=0;this.markers=new Set();this.tails=new Map();this.observed=0;this.leak=false;this.unknownDiscarded=false;}
+  watch(marker){requireFact(typeof marker==='string'&&marker.length>0&&marker.length<=8192&&this.markers.size<512,'HOLD');if(this.markers.has(marker))return;requireFact(!this.unknownDiscarded,'HOLD');this.markers.add(marker);for(const [key,text] of this.tails)if(text.includes(marker)||normalizedLog(text).includes(marker)){this.observed++;if(key!=='auth:stderr')this.leak=true;}}
+  get bufferedBytes(){return [...this.tails.values()].reduce((sum,value)=>sum+Buffer.byteLength(value),0);}
+  consume(service,chunk,stream='stderr'){
+    this.bytes+=chunk.length;this.chunks++;const name=SERVICES.includes(service)?service:'verifier',channel=['stdout','stderr','retained','syslog'].includes(stream)?stream:'retained',key=name+':'+channel;
+    const text=(this.tails.get(key)??'')+chunk.toString('utf8');
+    const normalized=normalizedLog(text);
+    for(const marker of this.markers)if(text.includes(marker)||normalized.includes(marker)){this.observed++;if(name!=='auth'||channel!=='stderr')this.leak=true;}
+    // At most five services * four channels; enough for a fully escaped 8 KiB marker.
+    // A future issued token cannot be cleared against unknown bytes already dropped.
+    if(text.length>49168&&(name!=='auth'||channel!=='stderr'))this.unknownDiscarded=true;
+    this.tails.set(key,text.slice(-49168));
+  }
+  check(){requireFact(!this.leak,'LEAK');}
+  inspectFile(file,budget){
+    budget.remaining();const before=fs.lstatSync(file);requireFact(before.isFile()&&!before.isSymbolicLink()&&before.size<=1048576,'HOLD');
+    const fd=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));
+    try{
+      const opened=fs.fstatSync(fd);requireFact(opened.ino===before.ino&&opened.dev===before.dev,'HOLD');const buffer=Buffer.alloc(8192);let size,total=0;
+      while((size=fs.readSync(fd,buffer,0,buffer.length,null))>0){budget.remaining();total+=size;const chunk=buffer.subarray(0,size);requireFact(total<=1048576&&!chunk.includes(0),'HOLD');this.consume('verifier',chunk,'retained');}
+      const after=fs.fstatSync(fd),name=fs.lstatSync(file);requireFact(after.size===before.size&&after.mtimeMs===before.mtimeMs&&name.ino===opened.ino&&name.dev===opened.dev&&!name.isSymbolicLink(),'HOLD');budget.remaining();
+    }finally{fs.closeSync(fd);}
+  }
   event(service,event,status=0,errcode='OK',count=1){
     if(event==='chunks'&&this.chunks>1)return;
     this.write({service:SERVICES.includes(service)?service:'verifier',event:EVENTS.has(event)?event:'unknown',status:Number.isInteger(status)&&status>=0&&status<600?status:0,errcode:ERRORS.has(errcode)?errcode:'UNKNOWN',count:Number.isSafeInteger(count)&&count>=0?count:0});
@@ -77,18 +102,24 @@ export function assertContainerConfiguration(i,c,service){
   requireFact(Array.isArray(i.Mounts)&&i.Mounts.filter(x=>x.Type==='bind').length===targets.length&&i.Mounts.every(x=>x.Type==='bind'||x.Type==='tmpfs'&&['/tmp',...(service==='caddy'?['/data','/config']:[])].includes(x.Destination)),'MOUNTS');
   for(const name of targets){const data=name==='data',source=c.root+(data?'/data':'/secrets/'+name),destination=data?'/data':'/run/secrets/'+name;requireFact(i.Mounts.some(x=>x.Type==='bind'&&x.Source===source&&x.Destination===destination&&x.RW===data),'MOUNTS');}
 }
-export function httpRequest(url,{method='GET',body,token,timeout=8000,allowHttpFixture=false,lookup,headers={},signal}={}){
+export function assertPinnedImage(image,service){
+  const pin=PINS[service]?.image,alias=pin?.startsWith('docker.io/')?pin.slice('docker.io/'.length).replace(/^library\//,''):pin;
+  requireFact(pin&&image?.Os==='linux'&&image?.Architecture==='amd64'&&Array.isArray(image.RepoDigests)&&image.RepoDigests.some(digest=>digest===pin||digest===alias),'IMAGE');
+}
+export function httpRequest(url,{method='GET',body,token,timeout=8000,allowHttpFixture=false,lookup,headers={},signal,servername,expectedHostname}={}){
   const u=new URL(url);requireFact((u.protocol==='https:'||(allowHttpFixture&&u.protocol==='http:'&&u.hostname==='127.0.0.1'))&&!u.username&&!u.password,'TLS');
   requireFact(timeout>0&&timeout<=10000,'DEADLINE');
+  requireFact(expectedHostname===undefined||typeof expectedHostname==='string'&&expectedHostname.length>0,'TLS');
   return new Promise((resolve,reject)=>{
     let size=0;const chunks=[];
-    const req=(u.protocol==='https:'?https:http).request(u,{method,lookup,signal,rejectUnauthorized:true,headers:{...headers,...(token?{Authorization:`Bearer ${token}`}:{})}},res=>{
+    // A stricter probe needs a fresh TLS handshake, never a previously checked pooled socket.
+    const req=(u.protocol==='https:'?https:http).request(u,{method,lookup,signal,servername,...(expectedHostname===undefined?{}:{agent:false}),rejectUnauthorized:true,checkServerIdentity:(_hostname,certificate)=>tls.checkServerIdentity(u.hostname,certificate)||(expectedHostname===undefined?undefined:tls.checkServerIdentity(expectedHostname,certificate)),headers:{...headers,...(token?{Authorization:`Bearer ${token}`}:{})}},res=>{
       res.on('data',b=>{size+=b.length;if(size>1048576){req.destroy();reject(new Error('BODY_LIMIT'));}else chunks.push(b);});
       res.on('end',()=>{clearTimeout(timer);resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)});});
       res.on('error',()=>{clearTimeout(timer);reject(new Error('NETWORK'));});
     });
     const timer=setTimeout(()=>{req.destroy();reject(new Error('DEADLINE'));},timeout);
-    req.on('error',()=>{clearTimeout(timer);reject(new Error('NETWORK'));});
+    req.on('error',error=>{clearTimeout(timer);const code=error.code;reject(new Error(code==='ECONNREFUSED'?'CONNECTION':['ERR_TLS_CERT_ALTNAME_INVALID','DEPTH_ZERO_SELF_SIGNED_CERT','SELF_SIGNED_CERT_IN_CHAIN','UNABLE_TO_VERIFY_LEAF_SIGNATURE','UNABLE_TO_GET_ISSUER_CERT_LOCALLY','CERT_HAS_EXPIRED','CERT_NOT_YET_VALID'].includes(code)?'TLS':'NETWORK'));});
     req.end(body);
   });
 }
@@ -117,7 +148,7 @@ export function command(executable,args,{input,timeout=10000,budget}={}){
 }
 function protectedFile(file,uid=0,mode,gid=uid){const s=fs.lstatSync(file);requireFact(s.isFile()&&!s.isSymbolicLink()&&s.uid===uid&&(mode===undefined?(s.mode&0o077)===0:(s.mode&0o777)===mode&&s.gid===gid),'PERMISSIONS');return s;}
 function privateDir(dir,uid=0){const s=fs.lstatSync(dir);requireFact(s.isDirectory()&&!s.isSymbolicLink()&&s.uid===uid&&(s.mode&0o077)===0,'PERMISSIONS');}
-function readContract(){requireFact(process.platform==='linux'&&process.getuid()===0,'HOLD');privateDir(ROOT);protectedFile(`${ROOT}/runtime.json`);return validateContract(JSON.parse(fs.readFileSync(`${ROOT}/runtime.json`)));}
+function readContract(action){requireFact(process.platform==='linux'&&process.getuid()===0,'HOLD');privateDir(ROOT);protectedFile(`${ROOT}/runtime.json`);return validateContract(JSON.parse(fs.readFileSync(`${ROOT}/runtime.json`)),action);}
 function actualCgroup(dir){const cpu=fs.readFileSync(`${dir}/cpu.max`,'utf8').trim().split(/\s+/);const memory=Number(fs.readFileSync(`${dir}/memory.max`,'utf8').trim());requireFact(fs.readFileSync(`${dir}/memory.swap.max`,'utf8').trim()==='0','SWAP');return {cpu:Number(cpu[0])/Number(cpu[1]),memory};}
 function ownAux(c){
   const rel=fs.readFileSync('/proc/self/cgroup','utf8').trim().split('\n').find(x=>x.startsWith('0::'))?.slice(3),current=rel&&path.resolve('/sys/fs/cgroup'+rel);
@@ -172,12 +203,18 @@ export async function sampleResources(c,rows,budget,{read=sharedIO.read,now=()=>
   }
   requireFact(Number.isSafeInteger(sharedMemory)&&sharedCpu<=c.sharedRuntime.maxCpuPercent&&sharedMemory<=c.sharedRuntime.maxMemoryGrowth,'FAIL');return {sharedCpu,sharedMemory};
 }
+export function sameMounts(actual,frozen){
+  if(!Array.isArray(actual)||!Array.isArray(frozen)||actual.length!==frozen.length)return false;
+  const remaining=[...frozen];
+  for(const mount of actual){const index=remaining.findIndex(row=>isDeepStrictEqual(mount,row));if(index<0)return false;remaining.splice(index,1);}
+  return true;
+}
 async function baseline(c,budget){
   budget.remaining();
   requireFact(os.freemem()>=c.thresholds.minFreeMemory&&os.loadavg()[0]<=c.thresholds.maxLoad,'BASELINE');
   const disk=fs.statfsSync(ROOT);requireFact(disk.bavail*disk.bsize>=c.thresholds.minFreeDisk,'BASELINE');
   const samples=[];
-  for(const b of c.baseline){const i=await inspect(b.id,budget);requireFact(i.Image===b.image&&i.State.Status===b.status&&JSON.stringify(i.Mounts)===JSON.stringify(b.mounts),'BASELINE');
+  for(const b of c.baseline){const i=await inspect(b.id,budget);requireFact(i.Image===b.image&&i.State.Status===b.status&&sameMounts(i.Mounts,b.mounts),'BASELINE');
     requireFact(Number.isSafeInteger(b.memoryUsageBytes)&&b.memoryUsageBytes>=0,'BASELINE');
     const rel=fs.readFileSync(`/proc/${i.State.Pid}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3).trim();requireFact(rel,'BASELINE');
     samples.push({cgroup:'/sys/fs/cgroup'+rel,memoryUsageBytes:b.memoryUsageBytes,kind:'old'});
@@ -207,7 +244,7 @@ async function preflight(c,budget,{port=true}={}){
   const cert=fs.readFileSync(`${ROOT}/secrets/tls.crt`);requireFact(crypto.createHash('sha256').update(cert).digest('hex')===c.certificateSha256,'TLS');
   const x=new crypto.X509Certificate(cert);requireFact(x.checkHost(c.domain)&&Date.parse(x.validTo)>Date.now(),'TLS');
   const info=JSON.parse(await command('docker',['info','--format','{{json .}}'],{budget}));requireFact(info.OSType==='linux'&&info.Architecture==='x86_64'&&info.CgroupVersion==='2','PLATFORM');
-  for(const p of Object.values(PINS)){const i=JSON.parse(await command('docker',['image','inspect',p.image],{budget}))[0];requireFact(i.Os==='linux'&&i.Architecture==='amd64'&&i.RepoDigests.includes(p.image),'IMAGE');}
+  for(const [service,p] of Object.entries(PINS)){const i=JSON.parse(await command('docker',['image','inspect',p.image],{budget}))[0];assertPinnedImage(i,service);}
   if(port)await new Promise((resolve,reject)=>{const s=net.createServer();s.once('error',()=>reject(new Error('BUSY')));s.listen(c.port,'127.0.0.1',()=>s.close(resolve));});
   budget.remaining();
 }
@@ -228,7 +265,7 @@ async function configure(c,budget){
   fs.writeFileSync(ROOT+'/hosts',hostsText(c),{flag:'wx',mode:0o400});
   await compose(c,['config','--quiet'],budget);
 }
-const SYNAPSE_LOG='version: 1\nhandlers:\n  stderr: {class: logging.StreamHandler, stream: ext://sys.stderr}\nroot: {level: WARNING, handlers: [stderr]}\ndisable_existing_loggers: false\n';
+const SYNAPSE_LOG='version: 1\nhandlers:\n  stderr: {class: logging.StreamHandler, level: WARNING, stream: ext://sys.stderr}\nroot: {level: WARNING, handlers: [stderr]}\ndisable_existing_loggers: false\n';
 function validateGenerated(c){
   const files=[['homeserver.yaml',991],['appservice.yaml',0,0o440,991],['livekit.yaml',0],['Caddyfile',0],['livekit.key',0],['livekit.secret',0],['log.config',991]];
   for(const [name,uid,mode,gid] of files)protectedFile(`${ROOT}/secrets/${name}`,uid,mode,gid);
@@ -252,7 +289,7 @@ function writeOwnership(c,containers){
   const fd=fs.openSync(ownershipPath(c),'wx',0o400);try{fs.writeFileSync(fd,JSON.stringify(receipt)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
   const directory=fs.openSync(ROOT,'r');try{fs.fsyncSync(directory);}finally{fs.closeSync(directory);}return receipt;
 }
-const recoveryIO={machine:()=>fs.readFileSync('/sys/class/dmi/id/product_uuid','utf8').trim(),inspect,stop:(id,budget)=>command('docker',['stop','--time','3',id],{budget}),sample:async(c,budget)=>{await baseline(c,budget);await cgroups(c,(await ownContainers(c,budget)).filter(row=>row.State.Running),budget);}};
+const recoveryIO={machine:()=>fs.readFileSync('/sys/class/dmi/id/product_uuid','utf8').trim(),inspect,unpause:(id,budget)=>command('docker',['unpause',id],{budget}),stop:(id,budget)=>command('docker',['stop','--time','3',id],{budget}),sample:async(c,budget)=>{await baseline(c,budget);await cgroups(c,(await ownContainers(c,budget)).filter(row=>row.State.Running),budget);}};
 export async function stopOwned(c,receipt,budget,io=recoveryIO){
   let unknown=false,resourceFault;
   const sample=async()=>{try{await io.sample?.(c,budget);}catch(error){if(error.message==='DEADLINE')throw error;resourceFault??=['FAIL','HOLD','UNKNOWN'].includes(error.message)?error.message:'UNKNOWN';}};
@@ -264,7 +301,8 @@ export async function stopOwned(c,receipt,budget,io=recoveryIO){
       try{
         requireFact(SERVICES.includes(row.service)&&row.image===PINS[row.service].image&&/^[a-f0-9]{64}$/.test(row.id)&&/^sha256:[a-f0-9]{64}$/.test(row.imageId)&&typeof row.created==='string','UNKNOWN');
         const verify=i=>{assertOwned(i,c,row.service);requireFact(i.Id===row.id&&i.Image===row.imageId&&i.Created===row.created,'UNKNOWN');};
-        await sample();const current=await io.inspect(row.id,budget);budget.remaining();verify(current);
+        await sample();let current=await io.inspect(row.id,budget);budget.remaining();verify(current);
+        if(current.State.Paused){requireFact(row.service==='synapse'&&typeof io.unpause==='function','UNKNOWN');await io.unpause(row.id,budget);budget.remaining();current=await io.inspect(row.id,budget);budget.remaining();verify(current);requireFact(!current.State.Paused,'UNKNOWN');}
         if(current.State.Running){budget.remaining();await io.stop(row.id,budget);}
         const after=await io.inspect(row.id,budget);budget.remaining();verify(after);requireFact(!after.State.Running,'UNKNOWN');await sample();
       }catch(error){if(error.message==='DEADLINE')throw error;unknown=true;}
@@ -316,13 +354,16 @@ export class ResourceWatch {
   }
 }
 export class Runtime {
-  constructor(c,budget){this.c=c;this.budget=budget;this.attaches=new Map();this.connections=[];this.events=new SafeEvents(event=>{
+  constructor(c,budget){this.c=c;this.budget=budget;this.startedAt=new Date().toISOString();this.attaches=new Map();this.connections=[];this.logCases=new Set();this.loggingAdmitted=false;this.events=new SafeEvents(event=>{
     fs.appendFileSync(ROOT+'/events/'+c.runId+'.jsonl',JSON.stringify({...event,time:new Date().toISOString()})+'\n',{mode:0o600,flag:'a'});
   });}
   async start(budget){
-    await preflight(this.c,budget);this.secrets=validateGenerated(this.c);
+    await preflight(this.c,budget);this.secrets=validateGenerated(this.c);for(const secret of this.secrets)this.events.watch(secret);
     requireFact(fs.readFileSync('/etc/hosts','utf8')===hostsText(this.c),'DNS');
-    this.monitor=new ResourceWatch(async current=>{const measured=await baseline(this.c,current),containers=await ownContainers(this.c,current);if(this.ready)requireFact(containers.length===4&&containers.every(row=>row.State.Running),'FAIL');await cgroups(this.c,containers.filter(row=>row.State.Running),current);this.events.event('verifier','shared_cpu_milli',0,'OK',Math.ceil(measured.sharedCpu*10));this.events.event('verifier','shared_memory_bytes',0,'OK',measured.sharedMemory);},budget,this.c.sharedRuntime.sampleIntervalMs);await this.monitor.start();
+    this.freezeSyslog(budget);
+    this.sentinel='incapable-'+crypto.randomBytes(24).toString('hex');this.events.watch(this.sentinel);
+    await expectFailure(httpRequest('https://'+serverName(this.c)+'/_matrix/client/versions',{token:this.sentinel,lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal}),'CONNECTION',budget);this.logCases.add('connection');this.events.event('verifier','log_connection');
+    this.monitor=new ResourceWatch(async current=>{this.events.check();const measured=await baseline(this.c,current),containers=await ownContainers(this.c,current);if(this.ready)requireFact(containers.length===4&&containers.every(row=>row.State.Running),'FAIL');await cgroups(this.c,containers.filter(row=>row.State.Running),current);this.events.event('verifier','shared_cpu_milli',0,'OK',Math.ceil(measured.sharedCpu*10));this.events.event('verifier','shared_memory_bytes',0,'OK',measured.sharedMemory);},budget,this.c.sharedRuntime.sampleIntervalMs);await this.monitor.start();
     await compose(this.c,['create','--pull','never'],budget);
     const containers=await ownContainers(this.c,budget);requireFact(containers.length===4,'OWNERSHIP');writeOwnership(this.c,containers);
     for(const i of containers){assertContainerConfiguration(i,this.c,i.Config.Labels['com.docker.compose.service']);requireFact(i.HostConfig.MemorySwap===i.HostConfig.Memory&&i.HostConfig.Memory>0&&i.HostConfig.NanoCpus>0,'CONFIG');}
@@ -330,7 +371,7 @@ export class Runtime {
       budget.remaining();const i=containers.find(x=>x.Config.Labels['com.docker.compose.service']===service);assertOwned(i,this.c,service);
       const child=spawn('docker',['start','--attach',i.Id],{stdio:['ignore','pipe','pipe'],env:{PATH:process.env.PATH,HOME:process.env.HOME}});
       const state={child,ended:false,id:i.Id};this.attaches.set(service,state);
-      child.stdout.on('data',b=>this.events.consume(service,b));child.stderr.on('data',b=>this.events.consume(service,b));
+      child.stdout.on('data',b=>this.events.consume(service,b,'stdout'));child.stderr.on('data',b=>this.events.consume(service,b,'stderr'));
       child.on('error',()=>{state.ended=true;});child.on('close',()=>{state.ended=true;});
       while(!(await inspect(i.Id,budget)).State.Running){requireFact(!state.ended,'START');await new Promise(r=>setTimeout(r,budget.remaining(25)));}
       await this.monitor.sample();this.events.event(service,'started');
@@ -343,17 +384,19 @@ export class Runtime {
     requireFact(livekit.status===401,'READINESS');
   }
   async audit(budget){
-    budget.remaining();await this.monitor.sample();
+    budget.remaining();this.events.check();await this.monitor.sample();
     requireFact([...this.attaches.values()].every(x=>!x.ended),'ATTACH');
     for(const connection of this.connections)connection.assertClean();
   }
   async api(route,{method='GET',body,token,expected=200}={},budget){
+    if(token||body!==undefined)requireFact(this.loggingAdmitted===true,'LOG_ADMISSION');if(token)this.events.watch(token);
     const r=await httpRequest('https://'+serverName(this.c)+route,{method,body:body===undefined?undefined:JSON.stringify(body),token,lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,headers:body===undefined?{}:{'Content-Type':'application/json'}});budget.remaining();
     this.events.event('verifier','http',r.status,r.status===expected?'OK':'FAIL');requireFact(r.status===expected,'HTTP');
     try{return JSON.parse(r.body);}catch{throw new Error('BODY');}
   }
-  async auth(body,budget){const result=await httpRequest('https://'+serverName(this.c)+'/sfu/get',{method:'POST',body:JSON.stringify(body),lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,headers:{'Content-Type':'application/json'}});budget.remaining();return result;}
+  async auth(body,budget){requireFact(this.loggingAdmitted===true||this.sentinel===body?.openid_token?.access_token&&typeof this.sentinel==='string','LOG_ADMISSION');this.events.watch(body.openid_token.access_token);const result=await httpRequest('https://'+serverName(this.c)+'/sfu/get',{method:'POST',body:JSON.stringify(body),lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,headers:{'Content-Type':'application/json'}});budget.remaining();return result;}
   async stop(){
+    try{
     const budget=this.cleanup??=cleanupBudget(this.c);
     await this.monitor?.close(budget);budget.remaining();
     for(const connection of this.connections)connection.socket.close();
@@ -361,7 +404,8 @@ export class Runtime {
     await budget.waitFor(()=>[...this.attaches.values()].every(x=>x.ended));
     await budget.waitFor(()=>this.connections.every(x=>x.socket.readyState===WebSocket.CLOSED));
     for(const service of SERVICES)this.events.event(service,'stopped');
-    await baseline(this.c,budget);requireFact(result==='OK',result);this.monitor?.check();for(const connection of this.connections)connection.assertClean();this.events.event('verifier','chunks',0,'OK',this.events.chunks);
+    await baseline(this.c,budget);requireFact(result==='OK',result);this.monitor?.check();for(const connection of this.connections)connection.assertClean();await this.scan([this.sentinel,...this.secrets],budget);this.events.check();this.events.event('verifier','chunks',0,'OK',this.events.chunks);
+    }finally{this.closeSyslog?.();}
   }
 }
 
@@ -411,21 +455,26 @@ export function systemdArguments(c,budget=new Budget(120000)){
 }
 
 Runtime.prototype.register=async function(name,budget){
+  requireFact(this.loggingAdmitted===true,'LOG_ADMISSION');
   const endpoint='/_synapse/admin/v1/register';const {nonce}=await this.api(endpoint,{},budget);const password=crypto.randomBytes(32).toString('hex');
   const config=fs.readFileSync(`${ROOT}/secrets/homeserver.yaml`,'utf8');const secret=JSON.parse(config.match(/^registration_shared_secret: (.+)$/m)[1]);
   const mac=crypto.createHmac('sha1',secret).update([nonce,name,password,'notadmin'].join('\0')).digest('hex');
+  this.events.watch(password);this.events.watch(secret);
   const result=await this.api(endpoint,{method:'POST',body:{nonce,username:name,password,admin:false,mac}},budget);
-  requireFact(result.user_id===`@${name}:${serverName(this.c)}`&&typeof result.access_token==='string'&&typeof result.device_id==='string','IDENTITY');this.secrets.push(password,secret);return result;
+  requireFact(result.user_id===`@${name}:${serverName(this.c)}`&&typeof result.access_token==='string'&&typeof result.device_id==='string','IDENTITY');this.events.watch(result.access_token);this.secrets.push(password,secret);return result;
 };
 Runtime.prototype.admin=async function(method,body,budget){
+  requireFact(this.loggingAdmitted===true,'LOG_ADMISSION');
   const key=fs.readFileSync(`${ROOT}/secrets/livekit.key`,'utf8'),secret=fs.readFileSync(`${ROOT}/secrets/livekit.secret`,'utf8');
   const token=jwt({iss:key,sub:'rtc-r0-verifier',nbf:Math.floor(Date.now()/1000)-1,exp:Math.floor(Date.now()/1000)+60,video:{roomAdmin:true,room:body.room}},secret);
+  this.events.watch(token);
   const r=await httpRequest(`https://${this.c.domain}:${this.c.port}/twirp/livekit.RoomService/${method}`,{method:'POST',body:JSON.stringify(body),token,lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,headers:{'Content-Type':'application/json'}});budget.remaining();
   const parsed=JSON.parse(r.body);if(method==='ListParticipants'&&r.status===404&&parsed.code==='not_found')return {participants:[]};requireFact(r.status===200,'ADMIN');return parsed;
 };
 Runtime.prototype.openid=async function(account,budget){
+  requireFact(this.loggingAdmitted===true,'LOG_ADMISSION');
   const result=await this.api(`/_matrix/client/v3/user/${encodeURIComponent(account.user_id)}/openid/request_token`,{method:'POST',token:account.access_token,body:{}},budget);
-  requireFact(result.matrix_server_name===serverName(this.c)&&typeof result.access_token==='string','OPENID');recordTtl(this.events,'openid_ttl',result.expires_in);return result;
+  requireFact(result.matrix_server_name===serverName(this.c)&&typeof result.access_token==='string','OPENID');this.events.watch(result.access_token);recordTtl(this.events,'openid_ttl',result.expires_in);return result;
 };
 Runtime.prototype.denied=async function(body,budget){
   const before=await this.admin('ListParticipants',{room:roomAlias(body.room)},budget);
@@ -433,25 +482,81 @@ Runtime.prototype.denied=async function(body,budget){
   const after=await this.admin('ListParticipants',{room:roomAlias(body.room)},budget);
   assertParticipants(after.participants??[],(before.participants??[]).map(x=>x.identity));this.events.event('auth','http',observed.status,observed.errcode);
 };
+Runtime.prototype.freezeSyslog=function(budget,io=fs){
+  budget.remaining();requireFact(!this.syslog,'HOLD');const rows=this.c.logging.bypasses.filter(row=>row.path==='/var/log/syslog');requireFact(rows.length<=1,'HOLD');if(!rows.length)return;
+  const row=rows[0];requireFact(row.kind==='file','HOLD');let fd;
+  try{
+    const parents=['/var','/var/log'].map(name=>{const stat=io.lstatSync(name);requireFact(stat.isDirectory()&&!stat.isSymbolicLink()&&stat.uid===0&&(stat.mode&0o002)===0,'HOLD');return {name,stat};});
+    const initial=io.lstatSync(row.path),valid=stat=>stat.isFile()&&!stat.isSymbolicLink()&&stat.dev===initial.dev&&stat.ino===initial.ino&&stat.uid===row.uid&&stat.gid===row.gid&&(stat.mode&0o777)===row.mode;
+    requireFact(valid(initial)&&Number.isSafeInteger(initial.size)&&initial.size>=0,'HOLD');fd=io.openSync(row.path,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));
+    const check=()=>{
+      for(const {name,stat} of parents){const now=io.lstatSync(name);requireFact(now.isDirectory()&&!now.isSymbolicLink()&&['dev','ino','uid','gid','mode'].every(key=>now[key]===stat[key]),'HOLD');}
+      const opened=io.fstatSync(fd),named=io.lstatSync(row.path);requireFact(valid(opened)&&valid(named)&&[opened.size,named.size].every(size=>Number.isSafeInteger(size)&&size>=0)&&named.size>=opened.size,'HOLD');return {opened,named};
+    };
+    const state=check();requireFact(state.opened.size>=initial.size&&state.named.size>=initial.size,'HOLD');budget.remaining();this.syslog={fd,io,check,offset:initial.size};
+  }catch(error){if(fd!==undefined)io.closeSync(fd);if(['DEADLINE','FAIL','UNKNOWN'].includes(error.message))throw error;throw Error('HOLD');}
+};
+Runtime.prototype.scanSyslog=function(budget){
+  budget.remaining();const state=this.syslog;requireFact(state,'HOLD');
+  try{
+    const before=state.check(),end=before.opened.size;requireFact(end>=state.offset&&before.named.size>=state.offset&&end-state.offset<=1048576,'HOLD');
+    const buffer=Buffer.alloc(8192);let position=state.offset;
+    while(position<end){budget.remaining();const size=state.io.readSync(state.fd,buffer,0,Math.min(buffer.length,end-position),position);requireFact(size>0&&!buffer.subarray(0,size).includes(0),'HOLD');this.events.consume('verifier',buffer.subarray(0,size),'syslog');position+=size;}
+    const after=state.check();requireFact(after.opened.size===end&&after.named.size===end,'HOLD');budget.remaining();this.events.check();state.offset=end;
+  }catch(error){if(['DEADLINE','FAIL','UNKNOWN','LEAK'].includes(error.message))throw error;throw Error('HOLD');}
+};
+Runtime.prototype.closeSyslog=function(){const state=this.syslog;this.syslog=null;if(state)state.io.closeSync(state.fd);};
 Runtime.prototype.scan=async function(secrets,budget){
   budget.remaining();
-  const file=`${ROOT}/events/${this.c.runId}.jsonl`;protectedFile(file);const content=fs.readFileSync(file,'utf8');
-  for(const secret of secrets){const forms=[secret,encodeURIComponent(secret),JSON.stringify(secret).slice(1,-1),[...secret].map(x=>'\\u'+x.charCodeAt(0).toString(16).padStart(4,'0')).join('')];requireFact(forms.every(x=>!content.includes(x)),'LEAK');}
+  for(const secret of secrets)this.events.watch(secret);
+  const file=`${ROOT}/events/${this.c.runId}.jsonl`;protectedFile(file);this.events.inspectFile(file,budget);
+  for(const row of this.c.logging.bypasses){
+    budget.remaining();frozenMetadata(row);
+    if(row.kind==='socket'){
+      requireFact(['/run/systemd/journal/socket','/run/systemd/journal/stdout'].includes(row.path),'HOLD');
+      const output=await command('journalctl',['--no-pager','--quiet','--output=cat','--since',this.startedAt,'--until',new Date().toISOString(),'--unit=docker.service','--unit=containerd.service','--unit=rtc-r0-'+this.c.runId+'.service'],{budget});this.events.consume('verifier',Buffer.from(output),'retained');
+    }else if(row.path==='/var/log/syslog'&&row.kind==='file')requireFact(this.syslog,'HOLD');
+    else{
+      requireFact([ROOT+'/events',ROOT+'/logs'].some(root=>row.path===root||row.path.startsWith(root+'/')),'HOLD');
+      const files=row.kind==='file'?[row.path]:fs.readdirSync(row.path).map(name=>path.join(row.path,name));requireFact(files.length<=128,'HOLD');
+      for(const target of files)this.events.inspectFile(target,budget);
+    }
+    frozenMetadata(row);
+  }
   requireFact(!fs.existsSync(`${ROOT}/data/homeserver.log`),'LOG_FILE');for(const i of await ownContainers(this.c,budget))requireFact(i.HostConfig.LogConfig.Type==='none','LOG_DRIVER');
+  if(this.syslog)this.scanSyslog(budget);
+  this.events.check();
   this.events.event('verifier','scan',0,'OK',secrets.length);
 };
 Runtime.prototype.sentinels=async function(budget){
-  // The complete stock-service fault matrix remains a signed admission prerequisite.
-  const sentinel='incapable-'+crypto.randomBytes(24).toString('hex');
+  requireFact(this.loggingAdmitted===false&&this.logCases.has('connection')&&typeof this.sentinel==='string','LOG_ADMISSION');
+  const sentinel=this.sentinel;
   const body={room:'!incapable:'+serverName(this.c),device_id:'incapable-device',openid_token:{access_token:sentinel,token_type:'Bearer',expires_in:1,matrix_server_name:serverName(this.c)}};
   const response=await this.auth(body,budget),parsed=JSON.parse(response.body);
   requireFact(response.status===401&&parsed.errcode==='M_UNAUTHORIZED'&&!parsed.jwt,'INCAPABLE');
-  await this.scan([sentinel],budget);this.events.event('verifier','gate',401,'OK',1);
+  this.logCases.add('success');this.events.event('verifier','log_success',401);
+  await expectFailure(httpRequest('https://'+serverName(this.c)+'/_matrix/client/versions',{token:sentinel,servername:this.c.domain,expectedHostname:'incapable.invalid',lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal}),'TLS',budget);this.logCases.add('tls');this.events.event('verifier','log_tls');
+  const upgrade=await httpRequest('https://'+serverName(this.c)+'/rtc',{token:sentinel,lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,headers:{Connection:'Upgrade',Upgrade:'websocket','Sec-WebSocket-Version':'13','Sec-WebSocket-Key':crypto.randomBytes(16).toString('base64')}});budget.remaining();requireFact(upgrade.status===401,'LOG_ADMISSION');this.logCases.add('handshake');this.events.event('verifier','log_handshake',401);
+  const receipt=readOwnership(this.c);requireFact(receipt.host===this.c.host&&receipt.project===this.c.project&&receipt.runId===this.c.runId&&receipt.machineUuid===this.c.machineUuid,'UNKNOWN');const row=receipt.containers.find(item=>item.service==='synapse');requireFact(row,'UNKNOWN');
+  const owned=async current=>{const item=await inspect(row.id,current);assertOwned(item,this.c,'synapse');requireFact(item.Id===row.id&&item.Image===row.imageId&&item.Created===row.created&&item.State.Running,'UNKNOWN');return item;};
+  requireFact(!(await owned(budget)).State.Paused,'BUSY');
+  try{
+    await command('docker',['pause',row.id],{budget});requireFact((await owned(budget)).State.Paused,'UNKNOWN');
+    // This proves the verifier's client deadline, not auth's internal 30 s timer.
+    await expectFailure(this.auth(body,budget),'DEADLINE',budget);
+  }finally{
+    let restore=budget;try{restore.remaining();}catch{restore=this.cleanup??=cleanupBudget(this.c);}
+    if((await owned(restore)).State.Paused){await command('docker',['unpause',row.id],{budget:restore});requireFact(!(await owned(restore)).State.Paused,'UNKNOWN');}
+  }
+  const restored=await this.auth(body,budget),restoredBody=JSON.parse(restored.body);requireFact(restored.status===401&&restoredBody.errcode==='M_UNAUTHORIZED'&&!restoredBody.jwt,'LOG_ADMISSION');this.logCases.add('timeout');this.events.event('verifier','log_timeout');
+  await this.audit(budget);await this.scan([sentinel,...this.secrets],budget);
+  requireFact(['connection','success','tls','handshake','timeout'].every(name=>this.logCases.has(name)),'LOG_ADMISSION');this.events.check();budget.remaining();this.loggingAdmitted=true;this.events.event('verifier','gate',401,'OK',5);
 };
+async function expectFailure(work,expected,budget){let observed;try{await work;}catch(error){observed=error.message;}budget.remaining();requireFact(observed===expected,'LOG_ADMISSION');}
 Runtime.prototype.verify=async function(budget){
+  requireFact(this.loggingAdmitted===true,'LOG_ADMISSION');
   await this.audit(budget);const secrets=this.secrets;const sockets=[];
   try{
-    await this.sentinels(budget);
     const a=await this.register('rtc-a',budget),b=await this.register('rtc-b',budget),outsider=await this.register('rtc-outsider',budget);
     secrets.push(a.access_token,b.access_token,outsider.access_token);
     const room=(await this.api('/_matrix/client/v3/createRoom',{method:'POST',token:a.access_token,body:{preset:'private_chat',visibility:'private',creation_content:{'m.federate':false}}},budget)).room_id;
@@ -466,7 +571,7 @@ Runtime.prototype.verify=async function(budget){
     }
     const key=fs.readFileSync(`${ROOT}/secrets/livekit.key`,'utf8'),secret=fs.readFileSync(`${ROOT}/secrets/livekit.secret`,'utf8');const expected=[];
     for(const [account,openid] of [[a,tokenA],[b,tokenB]]){
-      const r=await this.auth(request(account,openid),budget);requireFact(r.status===200,'SFU');const ticket=JSON.parse(r.body);requireFact(ticket.url===`wss://${this.c.domain}:${this.c.port}`,'SFU_URL');secrets.push(ticket.jwt);
+      const r=await this.auth(request(account,openid),budget);requireFact(r.status===200,'SFU');const ticket=JSON.parse(r.body);requireFact(ticket.url===`wss://${this.c.domain}:${this.c.port}`,'SFU_URL');this.events.watch(ticket.jwt);secrets.push(ticket.jwt);
       const subject=`${account.user_id}:${account.device_id}`,claims=decodeTicket(ticket.jwt,secret);assertTicket(claims,{subject,room:roomAlias(room),key});recordTtl(this.events,'jwt_remaining',Math.floor(claims.exp-Date.now()/1000));expected.push(subject);
       const connection=await signal(ticket.url,ticket.jwt,{identity:subject,room:roomAlias(room),timeout:budget.remaining(8000),abortSignal:budget.signal});this.connections.push(connection);sockets.push(connection.socket);budget.remaining();
       const participants=await this.admin('ListParticipants',{room:roomAlias(room)},budget);assertParticipants(participants.participants??[],expected);
@@ -479,7 +584,7 @@ Runtime.prototype.verify=async function(budget){
     // both own participants explicitly; do not claim kick revokes established RTC.
     await retireParticipants(this.connections,expected,identity=>this.admin('RemoveParticipant',{room:roomAlias(room),identity},budget),async()=>(await this.admin('ListParticipants',{room:roomAlias(room)},budget)).participants??[]);
     for(const account of [a,b,outsider]){await this.api('/_matrix/client/v3/logout',{method:'POST',body:{},token:account.access_token},budget);const revoked=await this.api('/_matrix/client/v3/account/whoami',{token:account.access_token,expected:401},budget);requireFact(revoked.errcode==='M_UNKNOWN_TOKEN','LOGOUT');}
-    await this.scan(secrets,budget);await this.audit(budget);this.events.event('verifier','participants',200,'OK',2);
+    await this.audit(budget);await this.scan(secrets,budget);this.events.event('verifier','participants',200,'OK',2);
   }finally{for(const socket of sockets)socket.close();}
 };
 
@@ -509,7 +614,7 @@ async function runTask(c,budget){
 }
 export async function main(action){
   requireFact(['preflight','config','up','verify','stop','__run','__cleanup'].includes(action),'COMMAND');
-  const c=readContract();let budget=action==='__run'?Budget.fromDeadline(Number(process.argv[3])):new Budget(action==='stop'?60000:120000);ownAux(c);
+  const c=readContract(action);let budget=action==='__run'?Budget.fromDeadline(Number(process.argv[3])):new Budget(action==='stop'?60000:120000);ownAux(c);
   if(action==='preflight')await preflight(c,budget);
   else if(action==='config')await configure(c,budget);
   else if(action==='__run')await runTask(c,budget);

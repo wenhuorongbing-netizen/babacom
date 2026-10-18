@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import net from 'node:net';
 import crypto from 'node:crypto';
 import tls from 'node:tls';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateContract, SafeEvents, httpRequest, assertOwned, assertResources, assertTicket, assertParticipants, Budget, PINS, startExperiment, stopOwned, serverName, templateValues, assertMembershipDenial, command } from './proof.mjs';
 import * as proof from './proof.mjs';
@@ -23,6 +25,12 @@ if(process.argv[2]==='--fixture'){
   else if(mode==='failure-output'){try{await command(process.execPath,[fileURLToPath(import.meta.url),'--fixture','fail']);}catch(error){process.stdout.write(JSON.stringify({errcode:error.message}));}}
   else if(mode==='signal-hang'){await proof.signal(process.argv[4],'incapable-fixture',{allowWsFixture:true,identity:'@rtc-a:fixture:device',room:'fixture-room',timeout:50}).catch(()=>{});}
   else if(mode==='public-error')process.exitCode=await proof.publicCommand('stop',async()=>{throw new Error(process.argv[4]);});
+  else if(mode==='hostname-check'){try{const response=await httpRequest(process.argv[4],{servername:'localhost',expectedHostname:process.argv[5],lookup:(_name,options,callback)=>callback(null,options.all?[{address:'127.0.0.1',family:4}]:'127.0.0.1',4),timeout:1000});process.stdout.write(JSON.stringify({status:response.status}));}catch(error){process.stdout.write(JSON.stringify({errcode:error.message}));}}
+  else if(mode==='hostname-keepalive'){
+    https.globalAgent.keepAlive=true;https.globalAgent.maxSockets=1;
+    const attempt=async expectedHostname=>{try{const response=await httpRequest(process.argv[4],{servername:'localhost',expectedHostname,lookup:(_name,options,callback)=>callback(null,options.all?[{address:'127.0.0.1',family:4}]:'127.0.0.1',4),timeout:1000});return {status:response.status};}catch(error){return {errcode:error.message};}};
+    try{const results=[await attempt(undefined)];await new Promise(resolve=>setImmediate(resolve));results.push(await attempt('incapable.invalid'));process.stdout.write(JSON.stringify(results));}finally{https.globalAgent.destroy();}
+  }
   else process.exitCode=1;
 }else{
 test('built-in WebSocket sends Bearer header with no query and observes a real JoinResponse', async () => {
@@ -107,6 +115,16 @@ test('public stop cannot accept an active unit or surviving worker and cleanup c
   for(const state of [{ActiveState:'active',MainPID:'0',ControlPID:'0'},{ActiveState:'inactive',MainPID:'123',ControlPID:'0'},{ActiveState:'inactive',MainPID:'0',ControlPID:'123'},{}])assert.throws(()=>proof.assertUnitStopped(state));
 });
 
+test('pinned Linux amd64 images accept only their exact captured Docker Hub digest aliases',()=>{
+  const captured={synapse:PINS.synapse.image,auth:PINS.auth.image,livekit:'livekit/livekit-server@sha256:f63579e294b6dbf38e0e6151a24a5b425e9293e75e6d41959f470c957248b8a7',caddy:'caddy@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229'};
+  for(const [service,digest] of Object.entries(captured)){
+    const image={Os:'linux',Architecture:'amd64',RepoDigests:[digest]};assert.doesNotThrow(()=>proof.assertPinnedImage(image,service));assert.doesNotThrow(()=>proof.assertPinnedImage({...image,RepoDigests:[PINS[service].image]},service));
+    for(const changed of [digest.replace(/.$/,'0'),digest.replace('@sha256:',':latest@sha256:'),'untrusted.example/'+digest,'other/repository@'+digest.split('@')[1]])assert.throws(()=>proof.assertPinnedImage({...image,RepoDigests:[changed]},service),/^Error: IMAGE$/);
+    for(const changed of [{Os:'windows'},{Architecture:'arm64'},{RepoDigests:[]},{RepoDigests:['caddy:latest']}])assert.throws(()=>proof.assertPinnedImage({...image,...changed},service),/^Error: IMAGE$/);
+  }
+  assert.throws(()=>proof.assertPinnedImage({Os:'linux',Architecture:'amd64',RepoDigests:[PINS.synapse.image.replace('ghcr.io/','')]},'synapse'),/^Error: IMAGE$/);
+  assert.throws(()=>proof.assertPinnedImage({Os:'linux',Architecture:'amd64',RepoDigests:[PINS.caddy.image]},'unknown'),/^Error: IMAGE$/);
+});
 test('actual container bindings and mounts reject another project, public ports, raw log paths and old business mounts',()=>{
   assert.equal(typeof proof.assertContainerConfiguration,'function');
   const c=contract(),row=receipt(c).containers.find(x=>x.service==='caddy'),i=inspected(c,row);
@@ -114,6 +132,13 @@ test('actual container bindings and mounts reject another project, public ports,
   i.LogPath='';i.Mounts=['Caddyfile','tls.crt','tls.key'].map(name=>({Type:'bind',Source:c.root+'/secrets/'+name,Destination:'/run/secrets/'+name,RW:false}));
   assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,'caddy'));
   for(const change of [copy=>copy.HostConfig.PortBindings['18443/tcp'][0].HostIp='0.0.0.0',copy=>copy.Mounts[0].Source='/opt/business/config',copy=>copy.LogPath='/var/log/unsafe.log',copy=>copy.HostConfig.NetworkMode='host',copy=>copy.Mounts[0].RW=true]){const copy=structuredClone(i);change(copy);assert.throws(()=>proof.assertContainerConfiguration(copy,c,'caddy'));}
+});
+test('baseline mount comparison ignores only property and mount order while preserving every value and multiplicity',()=>{
+  const frozen=[{Type:'bind',Source:'/home/ubuntu/recordings',Destination:'/data',Mode:'ro',RW:false,Propagation:'rprivate'},{Type:'volume',Name:'recorder-cache',Source:'/var/lib/docker/volumes/recorder-cache/_data',Destination:'/cache',Driver:'local',Mode:'rw',RW:true,Propagation:'',Options:{Labels:{purpose:'cache',scope:'recorder'},Flags:['first','second']}}];
+  const reordered=frozen.toReversed().map(mount=>Object.fromEntries(Object.entries(mount).reverse()));reordered[0].Options=Object.fromEntries(Object.entries(reordered[0].Options).reverse());reordered[0].Options.Labels={scope:'recorder',purpose:'cache'};
+  const original=structuredClone(frozen);assert.equal(proof.sameMounts(reordered,frozen),true);assert.equal(proof.sameMounts([],[]),true);assert.equal(proof.sameMounts([frozen[1],frozen[0],frozen[1]],[frozen[1],frozen[1],frozen[0]]),true);
+  for(const change of [mounts=>mounts[0].Source='/other',mounts=>mounts[0].Destination='/elsewhere',mounts=>mounts[0].RW=true,mounts=>mounts[0].Type='volume',mounts=>mounts[0].Mode='rw',mounts=>mounts[0].Propagation='shared',mounts=>mounts[1].Name='other-volume',mounts=>mounts[1].Driver='other',mounts=>mounts[1].Options.Labels.scope='other',mounts=>mounts[1].Options.Flags.reverse(),mounts=>delete mounts[0].RW,mounts=>mounts[0].Extra='new',mounts=>mounts.pop(),mounts=>mounts.push(structuredClone(mounts[0]))]){const changed=structuredClone(frozen);change(changed);assert.equal(proof.sameMounts(changed,frozen),false);}
+  assert.equal(proof.sameMounts([frozen[0],frozen[0],frozen[1]],[frozen[0],frozen[1],frozen[1]]),false);assert.equal(proof.sameMounts(null,frozen),false);assert.deepEqual(frozen,original);
 });
 
 test('a WebSocket peer that ignores close cannot keep a bounded child alive',async()=>{
@@ -218,6 +243,44 @@ function contract() {
   };
 }
 
+test('configuration can prepare protected files before explicit log admission',()=>{
+  const c=contract();c.logAdmission=false;
+  assert.equal(validateContract(c,'config'),c);
+});
+
+test('pending log admission permits preparation and recovery but neither JSON Boolean unlocks credentials',async()=>{
+  for(const flag of [false,true]){
+    const c=contract();c.logAdmission=flag;
+    for(const action of ['preflight','config','up','verify','stop','__run','__cleanup'])assert.equal(validateContract(c,action),c);
+    const runtime=new proof.Runtime(c,new Budget(1000));let requests=0;
+    runtime.api=async()=>{requests++;throw Error('unexpected request');};
+    runtime.audit=async()=>{requests++;};
+    for(const attempt of [()=>runtime.register('rtc-a',new Budget(1000)),()=>runtime.openid({user_id:'synthetic'},new Budget(1000)),()=>runtime.admin('ListParticipants',{room:'synthetic'},new Budget(1000)),()=>runtime.verify(new Budget(1000))])await assert.rejects(attempt(),/LOG_ADMISSION/);
+    assert.equal(requests,0);
+    const guarded=new proof.Runtime(c,new Budget(1000));
+    await assert.rejects(guarded.api('/_matrix/client/v3/account/whoami',{token:'synthetic'},new Budget(1000)),/LOG_ADMISSION/);
+    await assert.rejects(guarded.api('/_synapse/admin/v1/register',{method:'POST',body:{username:'rtc-a'}},new Budget(1000)),/LOG_ADMISSION/);
+    await assert.rejects(guarded.auth({openid_token:{access_token:'synthetic'}},new Budget(1000)),/LOG_ADMISSION/);
+  }
+});
+test('one incapable 401 and claimed coverage cannot establish the in-memory log gate',async()=>{
+  const runtime=new proof.Runtime(contract(),new Budget(1000));
+  runtime.auth=async()=>({status:401,body:Buffer.from('{"errcode":"M_UNAUTHORIZED"}')});runtime.scan=async()=>{};runtime.events=new SafeEvents(()=>{});
+  await assert.rejects(runtime.sentinels(new Budget(1000)),/LOG_ADMISSION/);
+  assert.notEqual(runtime.loggingAdmitted,true);
+});
+
+test('configuration requires an explicit boolean log flag and an approved contract',()=>{
+  for(const flag of [undefined,null,0,1,'false','true',{}]){
+    const c=contract();c.logAdmission=flag;
+    assert.throws(()=>validateContract(c,'config'),/CONTRACT/);
+  }
+  for(const flag of [false,true]){
+    const c=contract();c.logAdmission=flag;c.approved=false;
+    assert.throws(()=>validateContract(c,'config'),/CONTRACT/);
+  }
+});
+
 test('shared runtime admission requires frozen identities, disjoint non-root groups and finite stop thresholds',()=>{
   assert.doesNotThrow(()=>validateContract(contract()));
   for(const change of [c=>delete c.sharedRuntime,c=>c.sharedRuntime.maxCpuPercent=Infinity,c=>c.sharedRuntime.maxMemoryGrowth=NaN,c=>delete c.sharedRuntime.services[0].invocationId,c=>c.sharedRuntime.services[0].cgroup='/sys/fs/cgroup',c=>c.sharedRuntime.services[1].cgroup=c.sharedRuntime.services[0].cgroup,c=>c.sharedRuntime.services[1].cgroup=c.sharedRuntime.services[0].cgroup+'/nested',c=>c.sharedRuntime.services[0].cgroup=c.auxiliary.cgroup]){const c=contract();change(c);assert.throws(()=>validateContract(c));}
@@ -287,6 +350,11 @@ test('new synthetic persistence and logging exceptions require frozen paths, per
   for(const key of ['persistence','logging','nodeSha256']){const c=contract();delete c[key];assert.throws(()=>validateContract(c));}
   for(const change of [{persistence:{corePattern:'core',locations:[]}},{logging:{coverage:['success'],bypasses:[]}},{auxiliary:{...contract().auxiliary,unit:'system.slice'}}]) assert.throws(()=>validateContract({...contract(),...change}));
 });
+test('aggregate signed fault coverage requires five real boundaries without making redirect an additional prerequisite',()=>{
+  const c=contract();c.logging.coverage=['success','timeout','tls','connection','handshake'];
+  assert.doesNotThrow(()=>validateContract(c));
+  c.logging.coverage.splice(2,1);assert.throws(()=>validateContract(c),/LOG_ADMISSION/);
+});
 test('contract has no domain, port, certificate, baseline, thresholds, log or authority fallback', () => {
   assert.doesNotThrow(() => validateContract(contract()));
   for (const key of ['domain','port','certificateSource','certificateSha256','baseline','thresholds','logAdmission','approved','auxiliary','source','sourceHashes']) {
@@ -316,6 +384,15 @@ test('cleanup uses receipt ownership and fresh checks without depending on a con
   const result=await stopOwned(c,r,new Budget(60000,()=>now),io);assert.equal(result,'UNKNOWN');assert.equal(stopped.length,3);assert.equal(stopped.includes(r.containers[1].id),false);
   assert.equal(states.get(r.containers[1].id).State.Running,true);
 });
+test('receipt recovery unpauses only its paused Synapse before stopping and rechecks identity within the same deadline',async()=>{
+  const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),paused=r.containers[0].id,mutations=[],budget=new Budget(1000);
+  states.get(paused).State.Paused=true;
+  const io={machine:()=>r.machineUuid,inspect:async id=>structuredClone(states.get(id)),unpause:async(id,current)=>{assert.equal(current,budget);assert.equal(id,paused);mutations.push('unpause');states.get(id).State.Paused=false;},stop:async(id,current)=>{assert.equal(current,budget);assert.notEqual(states.get(id).State.Paused,true);mutations.push(id);states.get(id).State.Running=false;}};
+  assert.equal(await stopOwned(c,r,budget,io),'OK');assert.ok(mutations.indexOf('unpause')<mutations.indexOf(paused));
+  states.get(paused).State.Running=true;states.get(paused).State.Paused=true;mutations.length=0;
+  io.unpause=async()=>{mutations.push('unpause');states.get(paused).Created='replacement';states.get(paused).State.Paused=false;};
+  assert.equal(await stopOwned(c,r,new Budget(1000),{...io,stop:async id=>mutations.push(id)}),'UNKNOWN');assert.equal(mutations.includes(paused),false);
+});
 test('slow Docker inspections exhaust one stop deadline without starting late mutations', async () => {
   const c=contract(),r=receipt(c);let now=0;const states=new Map(r.containers.map(x=>[x.id,inspected(c,x)]));const stopped=[];
   const io={machine:()=>r.machineUuid,inspect:async(id,b)=>{now+=9000;b.remaining();return structuredClone(states.get(id));},stop:async(id,b)=>{b.remaining();stopped.push(id);states.get(id).State.Running=false;}};
@@ -341,10 +418,10 @@ test('valid-identity membership denials require observed 403/M_FORBIDDEN; authen
 
 test('receipt cleanup works after actual worker SIGKILL with delayed process-backed Docker fixtures', {timeout:10000}, async()=>{
   const controller=spawn(process.execPath,[fileURLToPath(import.meta.url),'--fixture','idle'],{stdio:['ignore','pipe','pipe']});await once(controller.stdout,'data');controller.kill('SIGKILL');const [code,signal]=await once(controller,'close');assert.ok(code!==0||signal);
-  const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),stopped=[];
+  const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),stopped=[],unpaused=[];states.get(r.containers[0].id).State.Paused=true;
   const delayed=async(value,budget)=>JSON.parse(await command(process.execPath,[fileURLToPath(import.meta.url),'--fixture','json',JSON.stringify(value)],{budget}));
-  const io={machine:()=>r.machineUuid,inspect:(id,budget)=>delayed(states.get(id),budget),stop:async(id,budget)=>{await delayed({status:'stopped'},budget);stopped.push(id);states.get(id).State.Running=false;}};
-  assert.equal(await stopOwned(c,r,new Budget(5000),io),'OK');assert.equal(stopped.length,4);assert.ok([...states.values()].every(i=>!i.State.Running));
+  const io={machine:()=>r.machineUuid,inspect:(id,budget)=>delayed(states.get(id),budget),unpause:async(id,budget)=>{await delayed({status:'unpaused'},budget);unpaused.push(id);states.get(id).State.Paused=false;},stop:async(id,budget)=>{assert.notEqual(states.get(id).State.Paused,true);await delayed({status:'stopped'},budget);stopped.push(id);states.get(id).State.Running=false;}};
+  assert.equal(await stopOwned(c,r,new Budget(5000),io),'OK');assert.equal(stopped.length,4);assert.deepEqual(unpaused,[r.containers[0].id]);assert.ok([...states.values()].every(i=>!i.State.Running));
 });
 test('actual delayed Docker child cannot outlive its inherited operation budget', {timeout:3000}, async()=>{
   const start=performance.now();await assert.rejects(command(process.execPath,[fileURLToPath(import.meta.url),'--fixture','late'],{budget:new Budget(40)}),/DEADLINE/);assert.ok(performance.now()-start<500);
@@ -359,6 +436,99 @@ test('unknown log chunks never pass through; split/encoded secrets only become c
   assert.equal(JSON.stringify(lines).includes('sentinel'), false);
   assert.equal(lines[1].event, 'unknown');
   assert.ok(events.bytes > 100000);
+});
+test('observed markers distinguish permitted auth stderr RAM from forbidden streams and retained output across chunks',()=>{
+  const marker='incapable/a"b',rows=[],allowed=new SafeEvents(row=>rows.push(row));
+  assert.equal(typeof allowed.watch,'function');allowed.watch(marker);
+  for(const chunk of ['incapable%2','Fa%22b','incapable\\u002','fa\\"b'])allowed.consume('auth',Buffer.from(chunk),'stderr');
+  assert.doesNotThrow(()=>allowed.check());assert.ok(allowed.observed>=2);
+  for(const [service,stream] of [['caddy','stderr'],['synapse','stdout'],['auth','stdout']]){
+    const events=new SafeEvents(row=>rows.push(row));events.watch(marker);
+    events.consume(service,Buffer.from('incapable%2'),stream);events.consume(service,Buffer.from('Fa%22b'),stream);
+    assert.throws(()=>events.check(),/LEAK/);
+  }
+  allowed.consume('auth',Buffer.from('incapable/a"b'),'retained');assert.throws(()=>allowed.check(),/LEAK/);
+  allowed.event('verifier','scan',0,'FAIL',allowed.observed);assert.equal(JSON.stringify(rows).includes('incapable'),false);
+  const bounded=new SafeEvents(()=>{});bounded.watch(marker);bounded.consume('auth',Buffer.from('x'.repeat(100000)),'stderr');
+  assert.ok(bounded.bufferedBytes<=65536);
+});
+test('actual retained files are scanned across read boundaries and oversized or opaque files remain HOLD',()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'babacom-rtc-log-')),file=path.join(directory,'retained.txt'),budget=new Budget(1000),events=new SafeEvents(()=>{});
+  try{
+    assert.equal(typeof events.inspectFile,'function');events.watch('incapable/retained');
+    fs.writeFileSync(file,'safe event\n');events.inspectFile(file,budget);assert.doesNotThrow(()=>events.check());
+    fs.writeFileSync(file,'x'.repeat(8190)+'incapable%2Fretained');events.inspectFile(file,budget);assert.throws(()=>events.check(),/LEAK/);
+    fs.writeFileSync(file,Buffer.from([0,1,2]));assert.throws(()=>new SafeEvents(()=>{}).inspectFile(file,budget),/HOLD/);
+    fs.writeFileSync(file,Buffer.alloc(1048577,120));assert.throws(()=>new SafeEvents(()=>{}).inspectFile(file,budget),/HOLD/);
+  }finally{if(fs.existsSync(file))fs.unlinkSync(file);fs.rmdirSync(directory);}
+});
+function syslogFixture(content='historical\n'){
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'babacom-rtc-syslog-')),file=path.join(directory,'syslog');fs.writeFileSync(file,content);const stat=fs.lstatSync(file),parent={uid:0,gid:104,dev:stat.dev,ino:stat.ino,mode:0o40775,isDirectory:()=>true,isSymbolicLink:()=>false};
+  const io={...fs,lstatSync:name=>name==='/var'||name==='/var/log'?parent:fs.lstatSync(name==='/var/log/syslog'?file:name),openSync:(name,flags)=>{assert.equal(name,'/var/log/syslog');return fs.openSync(file,flags);}};
+  const runtime={c:{logging:{bypasses:[{path:'/var/log/syslog',kind:'file',uid:stat.uid,gid:stat.gid,mode:stat.mode&0o777}]}},events:new SafeEvents(()=>{}),...Object.fromEntries(['freezeSyslog','scanSyslog','closeSyslog'].map(name=>[name,proof.Runtime.prototype[name]]))};
+  return {runtime,io,file,directory,dispose:()=>{runtime.closeSyslog?.();for(const name of fs.readdirSync(directory))fs.unlinkSync(path.join(directory,name));fs.rmdirSync(directory);}};
+}
+test('exact syslog observation starts at frozen EOF and preserves split markers across monotonic scans',()=>{
+  const fixture=syslogFixture('old'.repeat(400000)),{runtime,io,file}=fixture,budget=new Budget(1000);runtime.events.watch('incapable/syslog');
+  try{
+    runtime.freezeSyslog(budget,io);runtime.scanSyslog(budget);assert.equal(runtime.events.bytes,0);
+    fs.appendFileSync(file,'incapable%2Fsys');runtime.scanSyslog(budget);const bytes=runtime.events.bytes;runtime.scanSyslog(budget);assert.equal(runtime.events.bytes,bytes);
+    runtime.events.consume('verifier',Buffer.from('unrelated retained file'),'retained');fs.appendFileSync(file,'log');assert.throws(()=>runtime.scanSyslog(budget),/LEAK/);
+  }finally{fixture.dispose();}
+});
+test('syslog concurrent append cannot admit credentials or sign off exit beyond the captured EOF',async()=>{
+  for(const phase of ['admission','exit']){
+    const fixture=syslogFixture(),{runtime,io,file}=fixture,budget=new Budget(1000);runtime.events.watch('incapable/syslog');runtime.loggingAdmitted=false;let signedOff=false;
+    try{
+      runtime.freezeSyslog(budget,io);const offset=runtime.syslog.offset;fs.appendFileSync(file,'safe\n');let appended=false;io.readSync=(...args)=>{const count=fs.readSync(...args);if(!appended){appended=true;fs.appendFileSync(file,'incapable/syslog');}return count;};
+      assert.throws(()=>{runtime.scanSyslog(budget);if(phase==='admission')runtime.loggingAdmitted=true;else runtime.closeSyslog();signedOff=true;},/^Error: HOLD$/);
+      assert.equal(runtime.syslog.offset,offset);assert.equal(runtime.loggingAdmitted,false);assert.equal(signedOff,false);await assert.rejects(proof.Runtime.prototype.register.call(runtime,'rtc-a',budget),/LOG_ADMISSION/);
+      assert.throws(()=>runtime.scanSyslog(budget),/LEAK/);
+    }finally{fixture.dispose();}
+  }
+});
+test('syslog rotation, truncation, metadata drift, unreadability and oversized or opaque appends stay HOLD',()=>{
+  for(const fault of ['rotate','truncate','metadata','parent','unreadable','oversize','opaque']){
+    const fixture=syslogFixture(),{runtime,io,file}=fixture,budget=new Budget(1000);
+    try{
+      runtime.freezeSyslog(budget,io);
+      if(fault==='rotate'){fs.renameSync(file,file+'.1');fs.writeFileSync(file,'replacement');}
+      if(fault==='truncate')fs.truncateSync(file,0);
+      if(fault==='metadata'){const read=io.lstatSync;io.lstatSync=name=>{const stat=read(name);return name==='/var/log/syslog'?{...stat,uid:stat.uid+1,isFile:()=>true,isSymbolicLink:()=>false}:stat;};}
+      if(fault==='parent'){const read=io.lstatSync;io.lstatSync=name=>{const stat=read(name);return name==='/var/log'?{...stat,gid:stat.gid+1}:stat;};}
+      if(fault==='unreadable')io.readSync=()=>{throw Error('raw private filesystem error');};
+      if(fault==='oversize')fs.appendFileSync(file,Buffer.alloc(1048577,120));
+      if(fault==='opaque')fs.appendFileSync(file,Buffer.from([0,1]));
+      if(fault==='unreadable')fs.appendFileSync(file,'new');
+      assert.throws(()=>runtime.scanSyslog(budget),/^Error: HOLD$/);
+    }finally{fixture.dispose();}
+  }
+});
+test('syslog deadline and partial freeze failures close descriptors without advancing the captured cursor',async()=>{
+  const fixture=syslogFixture(),{runtime,io,file}=fixture;let now=0,opened;
+  try{
+    const budget=new Budget(1000,()=>now);runtime.freezeSyslog(budget,io);const fd=runtime.syslog.fd,offset=runtime.syslog.offset;fs.appendFileSync(file,'safe\n');
+    io.readSync=(...args)=>{const count=fs.readSync(...args);now=1001;return count;};assert.throws(()=>runtime.scanSyslog(budget),/^Error: DEADLINE$/);assert.equal(runtime.syslog.offset,offset);
+    runtime.cleanup=budget;await assert.rejects(proof.Runtime.prototype.stop.call(runtime),/^Error: DEADLINE$/);assert.equal(runtime.syslog,null);assert.throws(()=>fs.fstatSync(fd));
+    now=0;const open=io.openSync;io.openSync=(...args)=>{opened=open(...args);return opened;};io.fstatSync=()=>{throw Error('raw private filesystem error');};assert.throws(()=>runtime.freezeSyslog(budget,io),/^Error: HOLD$/);assert.throws(()=>fs.fstatSync(opened));
+  }finally{fixture.dispose();}
+});
+test('syslog descriptor closes even when cleanup budget acquisition fails before stop work',async()=>{
+  const fixture=syslogFixture(),{runtime,io}=fixture;
+  try{runtime.freezeSyslog(new Budget(1000),io);const fd=runtime.syslog.fd;Object.defineProperty(runtime,'cleanup',{get:()=>{throw Error('HOLD');}});await assert.rejects(proof.Runtime.prototype.stop.call(runtime),/^Error: HOLD$/);assert.throws(()=>fs.fstatSync(fd));}
+  finally{fixture.dispose();}
+});
+test('newly returned secrets are checked against bounded already observed stream tails',()=>{
+  const events=new SafeEvents(()=>{});events.consume('caddy',Buffer.from('incapable%2Freturned'),'stderr');events.watch('incapable/returned');assert.throws(()=>events.check(),/LEAK/);
+});
+test('discarded unknown output cannot falsely pass a newly issued secret while allowed auth RAM remains separate',()=>{
+  const marker='incapable/newly-issued',padding='x'.repeat(100000);
+  for(const [service,stream] of [['caddy','stderr'],['synapse','stdout'],['auth','stdout']]){
+    const events=new SafeEvents(()=>{});events.consume(service,Buffer.from(marker+padding),stream);
+    assert.throws(()=>events.watch(marker),/HOLD/);assert.ok(events.bufferedBytes<=65536);
+  }
+  const allowed=new SafeEvents(()=>{});allowed.consume('auth',Buffer.from(marker+padding),'stderr');assert.doesNotThrow(()=>allowed.watch(marker));
+  const known=new SafeEvents(()=>{});known.watch(marker);known.consume('caddy',Buffer.from(padding),'stderr');assert.doesNotThrow(()=>known.watch(marker));
 });
 test('ownership excludes another run, image, host and project', () => {
   const c=contract(); const i={ Id:'e'.repeat(64), Config:{ Image:PINS.auth.image, Labels:{ 'com.docker.compose.project':c.project, 'rtc.run':c.runId, 'rtc.host':c.host, 'com.docker.compose.service':'auth' } } };
@@ -375,6 +545,33 @@ test('request classifies HTTP denial separately and never follows a redirect', a
   let destination=0; const server=http.createServer((req,res)=>{ if(req.url==='/destination') destination++; res.writeHead(req.url==='/deny'?403:302,{Location:'/destination',Refresh:'0; /destination'}); res.end('sensitive'); });
   server.listen(0,'127.0.0.1'); await once(server,'listening');
   try { const base=`http://127.0.0.1:${server.address().port}`; assert.equal((await httpRequest(base+'/deny',{allowHttpFixture:true})).status,403); assert.equal((await httpRequest(base+'/redirect',{allowHttpFixture:true})).status,302); assert.equal(destination,0); } finally { server.close(); }
+});
+test('real requests distinguish refused connection, untrusted TLS and client deadline without raw errors',async()=>{
+  const certificate=memoryTlsCertificate(),server=https.createServer(certificate,()=>{});server.on('tlsClientError',()=>{});
+  server.listen(0,'127.0.0.1');await once(server,'listening');const port=server.address().port;
+  try{await assert.rejects(httpRequest(`https://127.0.0.1:${port}`,{timeout:500}),/^Error: TLS$/);}finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+  await assert.rejects(httpRequest(`https://127.0.0.1:${port}`,{timeout:500}),/^Error: CONNECTION$/);
+  const hanging=http.createServer(()=>{});hanging.listen(0,'127.0.0.1');await once(hanging,'listening');
+  try{await assert.rejects(httpRequest(`http://127.0.0.1:${hanging.address().port}`,{timeout:40,allowHttpFixture:true}),/^Error: DEADLINE$/);}finally{hanging.closeAllConnections();await new Promise(resolve=>hanging.close(resolve));}
+});
+test('strict additional hostname rejection uses the approved SNI on an actual trusted HTTPS fixture',async()=>{
+  const certificate=memoryTlsCertificate(),directory=fs.mkdtempSync(path.join(os.tmpdir(),'babacom-rtc-tls-')),file=path.join(directory,'fixture-ca.pem'),names=[];let requests=0;
+  fs.writeFileSync(file,certificate.cert);
+  const server=https.createServer({...certificate,SNICallback:(name,callback)=>{names.push(name);callback(null,tls.createSecureContext(certificate));}},(_request,response)=>{requests++;response.end('ok');});server.on('tlsClientError',()=>{});
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  const attempt=async(expected,url=`https://localhost:${server.address().port}`)=>{const child=spawn(process.execPath,[fileURLToPath(import.meta.url),'--fixture','hostname-check',url,expected],{env:{...process.env,NODE_EXTRA_CA_CERTS:file},stdio:['ignore','pipe','pipe']});let output='',stderr='';child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>stderr+=chunk);const [code]=await once(child,'close');assert.equal(code,0);assert.equal(stderr,'');return JSON.parse(output);};
+  try{assert.deepEqual(await attempt('localhost'),{status:200});assert.deepEqual(await attempt('incapable.invalid'),{errcode:'TLS'});assert.deepEqual(await attempt('localhost',`https://127.0.0.1:${server.address().port}`),{errcode:'TLS'});assert.equal(requests,1);assert.deepEqual(names,['localhost','localhost','localhost']);}
+  finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));fs.unlinkSync(file);fs.rmdirSync(directory);}
+});
+test('stricter hostname probe cannot reuse a preceding positive HTTPS keepalive connection',async()=>{
+  const certificate=memoryTlsCertificate(),directory=fs.mkdtempSync(path.join(os.tmpdir(),'babacom-rtc-tls-')),file=path.join(directory,'fixture-ca.pem');let requests=0;
+  fs.writeFileSync(file,certificate.cert);
+  const server=https.createServer(certificate,(_request,response)=>{requests++;response.end('ok');});server.on('tlsClientError',()=>{});server.keepAliveTimeout=5000;
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  try{
+    const child=spawn(process.execPath,[fileURLToPath(import.meta.url),'--fixture','hostname-keepalive',`https://localhost:${server.address().port}`],{env:{...process.env,NODE_EXTRA_CA_CERTS:file},stdio:['ignore','pipe','pipe']});let output='',stderr='';child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>stderr+=chunk);const [code]=await once(child,'close');
+    assert.equal(code,0);assert.equal(stderr,'');assert.deepEqual(JSON.parse(output),[{status:200},{errcode:'TLS'}]);assert.equal(requests,1);
+  }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));fs.unlinkSync(file);fs.rmdirSync(directory);}
 });
 test('JWT and administrative observation must agree; any track is failure', () => {
   const expected={subject:'@rtc-a:rtc.example.org:DEVICE',room:'!private:rtc.example.org',key:'key'};
