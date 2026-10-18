@@ -126,7 +126,7 @@ Owner: 8.1
 | D17 | Digo 资料整合与多人工作入口 | **DECIDED 文档整合；运行/组织/许可独立** | Jack 授权本轮；A 串行集成；独立 Reviewer | #102 精确 24 路径；原提交保全、05 唯一指南、逐票 AC 归 GitHub；不变更权限/契约/产品 |
 | D16-E | 原版 Matrix 隔离实验执行 | **DECIDED 签认；PR99 审查合并后生效** | Jack 授权；A 实施；独立 Reviewer | 更新 D16/下文历史待签认状态；#98 四文件、本机回环、合成数据；运行结果待实测 |
 | D16-G1 | Windows 产物与隔离安装启动 | **PR107/108 已合并，#105/#106 已关闭；#109 安装启动精确范围待签认** | Jack 最终签认；A 协调；子代理研究/独立审查 | 只读核验已通过；下一批仅新 Sandbox 离线 install/start/Quit；运行 NOT_RUN，G1 仍未通过 |
-| D16-RTC | 标准 Matrix RTC 最小链路 | **原范围PR119已合并；精简修订Jack已签认，可信合并后生效；真实R0 NOT_RUN** | Jack最终裁定；A协调；独立Reviewer | [现有模块](../.agents/modules/matrix-rtc-proof.md#标准组件精简修订已签认可信合并后生效)；#124旧候选保留，具体运行细节仍HOLD |
+| D16-RTC | 标准 Matrix RTC 最小链路 | **PR119/125已合并；资源核算修订Jack已签认，独立审查/可信合并后生效；真实R0 NOT_RUN** | Jack最终裁定；A协调；独立Reviewer | [现有模块](../.agents/modules/matrix-rtc-proof.md#标准组件精简修订已签认可信合并后生效)；#126草稿未合并，#124旧候选保留，运行细节仍HOLD |
 
 **本 fork 发布阶段校准：DECIDED（2026-10-04，用户授权修正并合并基线 PR）。**
 沿用 [01-scope-v2.md](01-scope-v2.md) 的既有 R04 范围：完整每频道权限、
@@ -438,3 +438,5 @@ PR119已合并；#124原实现 `ff4cd0933950dfb8e3afb8bef8b5d5eb7e9684e8` 完整
 本机Node临时假令牌fixture因lean-ctx误拆PowerShell here-string而整条拒绝执行（`lean-ctx split your command line wrongly`），标记NOT_RUN；未启动listener、没有Bearer/TLS/退出运行证据，不以源码核对或旧测试替代。三文件候选仍待签认，未推送；原实现`ff4cd093`保持。
 
 2026-10-18签认：Jack明确回复“签认候选，授权文档PR检查通过后合并及七文件实施”，对象为本地`ef6e143`三文件候选及其中明确列出的期限、合成凭据OS持久化/受信管道内存例外和TLS候选。授权推送本fork、独立文档PR托管检查通过后合并，再实施原七文件；产品PR合并另行裁定。此前“待签认”记录保留为历史；实际权限、TLS、日志和退出负例未核定仍HOLD，签认不等于真实R0通过。
+
+2026-10-18资源核算签认：精简文档PR125已合并（`b22786123641fba52a99dbb8b5c31e7688372356`）；七文件候选`a3291804`通过37/37本地测试及独立规格/规范审查，Jack授权推送并建立草稿产品PR126，保持未合并。共享Docker的shim无法证明从创建起受实验cgroup硬限额约束，Jack因此明确签认并授权仅本文件与现有模块的最小资源修订，经独立文档PR审查和托管检查后合并，再按原七文件调整。四容器与Node/CLI仍合计硬限≤1 CPU/≤1.5GiB；共享Docker/containerd及shim开销另测、按冻结基线门槛止损，具体规则只在[模块修订表](../.agents/modules/matrix-rtc-proof.md#标准组件精简修订已签认可信合并后生效)维护。未合并前不以新口径运行；其余运行条件及产品合并裁定不变，真实R0仍HOLD/NOT_RUN，历史证据、旧服务与原分支保留。
