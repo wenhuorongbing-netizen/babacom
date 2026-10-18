@@ -133,6 +133,13 @@ test('actual container bindings and mounts reject another project, public ports,
   assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,'caddy'));
   for(const change of [copy=>copy.HostConfig.PortBindings['18443/tcp'][0].HostIp='0.0.0.0',copy=>copy.Mounts[0].Source='/opt/business/config',copy=>copy.LogPath='/var/log/unsafe.log',copy=>copy.HostConfig.NetworkMode='host',copy=>copy.Mounts[0].RW=true]){const copy=structuredClone(i);change(copy);assert.throws(()=>proof.assertContainerConfiguration(copy,c,'caddy'));}
 });
+test('baseline mount comparison ignores only property and mount order while preserving every value and multiplicity',()=>{
+  const frozen=[{Type:'bind',Source:'/home/ubuntu/recordings',Destination:'/data',Mode:'ro',RW:false,Propagation:'rprivate'},{Type:'volume',Name:'recorder-cache',Source:'/var/lib/docker/volumes/recorder-cache/_data',Destination:'/cache',Driver:'local',Mode:'rw',RW:true,Propagation:'',Options:{Labels:{purpose:'cache',scope:'recorder'},Flags:['first','second']}}];
+  const reordered=frozen.toReversed().map(mount=>Object.fromEntries(Object.entries(mount).reverse()));reordered[0].Options=Object.fromEntries(Object.entries(reordered[0].Options).reverse());reordered[0].Options.Labels={scope:'recorder',purpose:'cache'};
+  const original=structuredClone(frozen);assert.equal(proof.sameMounts(reordered,frozen),true);assert.equal(proof.sameMounts([],[]),true);assert.equal(proof.sameMounts([frozen[1],frozen[0],frozen[1]],[frozen[1],frozen[1],frozen[0]]),true);
+  for(const change of [mounts=>mounts[0].Source='/other',mounts=>mounts[0].Destination='/elsewhere',mounts=>mounts[0].RW=true,mounts=>mounts[0].Type='volume',mounts=>mounts[0].Mode='rw',mounts=>mounts[0].Propagation='shared',mounts=>mounts[1].Name='other-volume',mounts=>mounts[1].Driver='other',mounts=>mounts[1].Options.Labels.scope='other',mounts=>mounts[1].Options.Flags.reverse(),mounts=>delete mounts[0].RW,mounts=>mounts[0].Extra='new',mounts=>mounts.pop(),mounts=>mounts.push(structuredClone(mounts[0]))]){const changed=structuredClone(frozen);change(changed);assert.equal(proof.sameMounts(changed,frozen),false);}
+  assert.equal(proof.sameMounts([frozen[0],frozen[0],frozen[1]],[frozen[0],frozen[1],frozen[1]]),false);assert.equal(proof.sameMounts(null,frozen),false);assert.deepEqual(frozen,original);
+});
 
 test('a WebSocket peer that ignores close cannot keep a bounded child alive',async()=>{
   const server=http.createServer(),sockets=new Set();let closed=false;

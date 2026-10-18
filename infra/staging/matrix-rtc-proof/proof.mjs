@@ -8,6 +8,7 @@ import tls from 'node:tls';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 
 const ROOT='/opt/babacom-matrix-rtc-e1', PROJECT='babacom-matrix-rtc-e1';
 const SERVICES=['synapse','livekit','auth','caddy'];
@@ -202,12 +203,18 @@ export async function sampleResources(c,rows,budget,{read=sharedIO.read,now=()=>
   }
   requireFact(Number.isSafeInteger(sharedMemory)&&sharedCpu<=c.sharedRuntime.maxCpuPercent&&sharedMemory<=c.sharedRuntime.maxMemoryGrowth,'FAIL');return {sharedCpu,sharedMemory};
 }
+export function sameMounts(actual,frozen){
+  if(!Array.isArray(actual)||!Array.isArray(frozen)||actual.length!==frozen.length)return false;
+  const remaining=[...frozen];
+  for(const mount of actual){const index=remaining.findIndex(row=>isDeepStrictEqual(mount,row));if(index<0)return false;remaining.splice(index,1);}
+  return true;
+}
 async function baseline(c,budget){
   budget.remaining();
   requireFact(os.freemem()>=c.thresholds.minFreeMemory&&os.loadavg()[0]<=c.thresholds.maxLoad,'BASELINE');
   const disk=fs.statfsSync(ROOT);requireFact(disk.bavail*disk.bsize>=c.thresholds.minFreeDisk,'BASELINE');
   const samples=[];
-  for(const b of c.baseline){const i=await inspect(b.id,budget);requireFact(i.Image===b.image&&i.State.Status===b.status&&JSON.stringify(i.Mounts)===JSON.stringify(b.mounts),'BASELINE');
+  for(const b of c.baseline){const i=await inspect(b.id,budget);requireFact(i.Image===b.image&&i.State.Status===b.status&&sameMounts(i.Mounts,b.mounts),'BASELINE');
     requireFact(Number.isSafeInteger(b.memoryUsageBytes)&&b.memoryUsageBytes>=0,'BASELINE');
     const rel=fs.readFileSync(`/proc/${i.State.Pid}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3).trim();requireFact(rel,'BASELINE');
     samples.push({cgroup:'/sys/fs/cgroup'+rel,memoryUsageBytes:b.memoryUsageBytes,kind:'old'});
