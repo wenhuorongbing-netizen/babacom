@@ -4,7 +4,14 @@
     persist_config off
     log {
         output stderr
-        format json
+        format filter {
+            wrap json
+            fields {
+                request>uri query {
+                    delete access_token
+                }
+            }
+        }
         level WARN
     }
 }
