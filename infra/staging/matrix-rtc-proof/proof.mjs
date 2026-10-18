@@ -21,8 +21,8 @@ function requireFact(ok,code='CONTRACT'){if(!ok) throw new Error(code);}
 export class Budget {
   constructor(ms,clock=()=>Number(process.hrtime.bigint())/1e6){requireFact(Number.isFinite(ms)&&ms>0);this.clock=clock;this.end=clock()+ms;}
   static fromDeadline(end){const budget=new Budget(1);requireFact(Number.isFinite(end),'DEADLINE');budget.end=end;budget.remaining();return budget;}
-  remaining(cap=Infinity){const n=Math.min(this.end-this.clock(),cap);requireFact(n>0,'DEADLINE');return Math.ceil(n);}
-  child(ms){this.remaining();const child=new Budget(ms,this.clock);child.end=Math.min(child.end,this.end);return child;}
+  remaining(cap=Infinity){this.guard?.();const n=Math.min(this.end-this.clock(),cap);requireFact(n>0,'DEADLINE');return Math.ceil(n);}
+  child(ms){this.remaining();const child=new Budget(ms,this.clock);child.end=Math.min(child.end,this.end);child.guard=this.guard;child.signal=this.signal;return child;}
   async waitFor(predicate){while(true){this.remaining();if(predicate())return;await new Promise(r=>setTimeout(r,this.remaining(25)));}}
 }
 export function serverName(c){return `${c.domain}:${c.port}`;}
@@ -45,9 +45,10 @@ export function validateContract(c){
   const metadata=row=>row&&typeof row.path==='string'&&path.isAbsolute(row.path)&&!row.path.split('/').includes('..')&&Number.isInteger(row.uid)&&row.uid>=0&&Number.isInteger(row.gid)&&row.gid>=0&&Number.isInteger(row.mode)&&row.mode>=0&&row.mode<=0o777&&Array.isArray(row.accessors)&&row.accessors.length>0&&row.accessors.every(x=>typeof x==='string'&&/^[a-zA-Z0-9_-]+$/.test(x));
   requireFact(c.persistence&&typeof c.persistence.corePattern==='string'&&c.persistence.corePattern.length>0&&c.persistence.corePattern.length<4096&&Array.isArray(c.persistence.locations)&&c.persistence.locations.length>0&&c.persistence.locations.every(x=>metadata(x)&&['swap','core-directory','core-handler'].includes(x.kind)),'PERSISTENCE');
   requireFact(c.logging&&Array.isArray(c.logging.coverage)&&JSON.stringify([...c.logging.coverage].sort())===JSON.stringify(['connection','handshake','redirect','success','timeout','tls'])&&Array.isArray(c.logging.bypasses)&&c.logging.bypasses.length>0&&c.logging.bypasses.every(x=>metadata(x)&&['socket','file','directory'].includes(x.kind)&&x.writesRaw===false),'LOG_ADMISSION');
+  validateSharedRuntime(c,[c.auxiliary.cgroup]);
   return c;
 }
-const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','command','scan','openid_ttl','jwt_remaining']);
+const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','command','scan','openid_ttl','jwt_remaining','shared_cpu_milli','shared_memory_bytes']);
 const ERRORS=new Set(['OK','M_FORBIDDEN','M_UNAUTHORIZED','M_UNKNOWN_TOKEN','FAIL','HOLD','UNKNOWN','DEADLINE','CONTRACT','BUSY']);
 export class SafeEvents {
   constructor(write){this.write=write;this.bytes=0;this.chunks=0;}
@@ -76,12 +77,12 @@ export function assertContainerConfiguration(i,c,service){
   requireFact(Array.isArray(i.Mounts)&&i.Mounts.filter(x=>x.Type==='bind').length===targets.length&&i.Mounts.every(x=>x.Type==='bind'||x.Type==='tmpfs'&&['/tmp',...(service==='caddy'?['/data','/config']:[])].includes(x.Destination)),'MOUNTS');
   for(const name of targets){const data=name==='data',source=c.root+(data?'/data':'/secrets/'+name),destination=data?'/data':'/run/secrets/'+name;requireFact(i.Mounts.some(x=>x.Type==='bind'&&x.Source===source&&x.Destination===destination&&x.RW===data),'MOUNTS');}
 }
-export function httpRequest(url,{method='GET',body,token,timeout=8000,allowHttpFixture=false,lookup,headers={}}={}){
+export function httpRequest(url,{method='GET',body,token,timeout=8000,allowHttpFixture=false,lookup,headers={},signal}={}){
   const u=new URL(url);requireFact((u.protocol==='https:'||(allowHttpFixture&&u.protocol==='http:'&&u.hostname==='127.0.0.1'))&&!u.username&&!u.password,'TLS');
   requireFact(timeout>0&&timeout<=10000,'DEADLINE');
   return new Promise((resolve,reject)=>{
     let size=0;const chunks=[];
-    const req=(u.protocol==='https:'?https:http).request(u,{method,lookup,rejectUnauthorized:true,headers:{...headers,...(token?{Authorization:`Bearer ${token}`}:{})}},res=>{
+    const req=(u.protocol==='https:'?https:http).request(u,{method,lookup,signal,rejectUnauthorized:true,headers:{...headers,...(token?{Authorization:`Bearer ${token}`}:{})}},res=>{
       res.on('data',b=>{size+=b.length;if(size>1048576){req.destroy();reject(new Error('BODY_LIMIT'));}else chunks.push(b);});
       res.on('end',()=>{clearTimeout(timer);resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)});});
       res.on('error',()=>{clearTimeout(timer);reject(new Error('NETWORK'));});
@@ -107,10 +108,11 @@ export function command(executable,args,{input,timeout=10000,budget}={}){
   if(budget)timeout=budget.remaining(timeout);
   return new Promise((resolve,reject)=>{
     const p=spawn(executable,args,{stdio:['pipe','pipe','pipe'],env:{PATH:process.env.PATH,HOME:process.env.HOME}});const out=[];let size=0,failed;
-    const kill=code=>{failed=code;if(!p.kill('SIGKILL'))reject(new Error('UNKNOWN'));};
+    const kill=code=>{failed=code;if(p.exitCode===null&&p.signalCode===null&&!p.kill('SIGKILL'))reject(new Error('UNKNOWN'));};
     const timer=setTimeout(()=>kill('DEADLINE'),timeout);
+    const aborted=()=>kill(budget.signal.reason==='CLEANUP'?'CANCELLED':'FAIL');budget?.signal?.addEventListener('abort',aborted,{once:true});
     p.stdout.on('data',b=>{size+=b.length;if(size>4194304)kill('OUTPUT_LIMIT');else out.push(b);});p.stderr.on('data',()=>{});
-    p.on('error',()=>{clearTimeout(timer);reject(new Error('COMMAND'));});p.on('close',code=>{clearTimeout(timer);try{if(failed)throw new Error(failed);budget?.remaining();code===0?resolve(Buffer.concat(out).toString()):reject(new Error('COMMAND'));}catch(error){reject(new Error(failed||'DEADLINE'));}});p.stdin.end(input);
+    p.on('error',()=>{clearTimeout(timer);reject(new Error('COMMAND'));});p.on('close',code=>{clearTimeout(timer);budget?.signal?.removeEventListener('abort',aborted);try{if(failed)throw new Error(failed);budget?.remaining();code===0?resolve(Buffer.concat(out).toString()):reject(new Error('COMMAND'));}catch(error){reject(new Error(failed||'DEADLINE'));}});p.stdin.end(input);
   });
 }
 function protectedFile(file,uid=0,mode,gid=uid){const s=fs.lstatSync(file);requireFact(s.isFile()&&!s.isSymbolicLink()&&s.uid===uid&&(mode===undefined?(s.mode&0o077)===0:(s.mode&0o777)===mode&&s.gid===gid),'PERMISSIONS');return s;}
@@ -138,6 +140,38 @@ function hostsText(c){return '127.0.0.1 localhost\n127.0.0.1 '+c.domain+'\n::1 l
 function compose(c,args,budget){return command('docker',['compose','--project-name',c.project,'--file',`${ROOT}/compose.yaml`,...args],{budget});}
 async function inspect(id,budget){return JSON.parse(await command('docker',['inspect',id],{budget}))[0];}
 async function ownContainers(c,budget){const ids=(await command('docker',['ps','-aq','--filter',`label=com.docker.compose.project=${c.project}`],{budget})).trim().split(/\s+/).filter(Boolean);const rows=[];for(const id of ids){const i=await inspect(id,budget);const service=i.Config.Labels['com.docker.compose.service'];assertOwned(i,c,service);rows.push(i);}requireFact(new Set(rows.map(x=>x.Config.Labels['com.docker.compose.service'])).size===rows.length,'UNKNOWN');return rows;}
+function overlaps(a,b){return a===b||a.startsWith(b+'/')||b.startsWith(a+'/');}
+export function validateSharedRuntime(c,workload){
+  const shared=c.sharedRuntime,validGroup=value=>typeof value==='string'&&/^\/sys\/fs\/cgroup\/[\w.@:-]+(?:\/[\w.@:-]+)*$/.test(value)&&!value.split('/').some(part=>part==='.'||part==='..');
+  requireFact(shared&&Number.isSafeInteger(shared.sampleIntervalMs)&&shared.sampleIntervalMs>0&&shared.sampleIntervalMs<=1000&&Number.isFinite(shared.maxCpuPercent)&&shared.maxCpuPercent>0&&Number.isFinite(shared.maxMemoryGrowth)&&shared.maxMemoryGrowth>0,'HOLD');
+  const services=shared.services;requireFact(Array.isArray(services)&&services.length===2&&new Set(services.map(row=>row.unit)).size===2,'HOLD');
+  for(const row of services)requireFact(['docker.service','containerd.service'].includes(row.unit)&&validGroup(row.cgroup)&&row.cgroup.endsWith('/'+row.unit)&&/^[a-f0-9]{32}$/.test(row.invocationId)&&Number.isSafeInteger(row.pid)&&row.pid>1&&typeof row.startTime==='string'&&/^[1-9]\d*$/.test(row.startTime)&&Number.isSafeInteger(row.inode)&&row.inode>0&&Number.isSafeInteger(row.cpuUsageUsec)&&row.cpuUsageUsec>=0&&Number.isSafeInteger(row.memoryUsageBytes)&&row.memoryUsageBytes>=0,'HOLD');
+  const groups=[...workload,...services.map(row=>row.cgroup)];requireFact(groups.every(validGroup)&&groups.every((group,index)=>groups.slice(index+1).every(other=>!overlaps(group,other))),'UNKNOWN');
+}
+export function assertSharedShim(c,id,args,group,workload){
+  validateSharedRuntime(c,workload);requireFact(path.basename(args[0])==='containerd-shim-runc-v2'&&args[args.indexOf('-namespace')+1]==='moby'&&args[args.indexOf('-id')+1]===id,'UNKNOWN');
+  requireFact(c.sharedRuntime.services.some(row=>group===row.cgroup||group.startsWith(row.cgroup+'/')),'UNKNOWN');
+}
+const sharedIO={
+  show:async(row,budget)=>Object.fromEntries((await command('systemctl',['show',row.unit,'--property=ActiveState,SubState,MainPID,InvocationID,ControlGroup'],{budget})).trim().split('\n').map(line=>line.split('='))),
+  read:(file)=>fs.readFileSync(file,'utf8'),stat:group=>fs.lstatSync(group),realpath:group=>fs.realpathSync(group)
+};
+export async function sharedServiceRows(c,budget,io=sharedIO){
+  const rows=[];for(const row of c.sharedRuntime.services){budget.remaining();const state=await io.show(row,budget),stat=io.stat(row.cgroup),proc=io.read('/proc/'+row.pid+'/stat');
+    requireFact(state.ActiveState==='active'&&state.SubState==='running'&&state.MainPID===String(row.pid)&&state.InvocationID===row.invocationId&&'/sys/fs/cgroup'+state.ControlGroup===row.cgroup&&stat.isDirectory()&&!stat.isSymbolicLink()&&stat.ino===row.inode&&io.realpath(row.cgroup)===row.cgroup,'UNKNOWN');
+    requireFact(proc.slice(proc.lastIndexOf(')')+2).trim().split(/\s+/)[19]===row.startTime&&path.basename(io.read('/proc/'+row.pid+'/cmdline').split('\0')[0])===(row.unit==='docker.service'?'dockerd':'containerd')&&io.read('/proc/'+row.pid+'/cgroup').trim()==='0::'+row.cgroup.slice('/sys/fs/cgroup'.length),'UNKNOWN');rows.push({...row,kind:'shared'});
+  }return rows;
+}
+const resourceCounters=new Map();
+export async function sampleResources(c,rows,budget,{read=sharedIO.read,now=()=>Number(process.hrtime.bigint())/1000,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),previous=resourceCounters}={}){
+  const counters=row=>{try{const cpu=read(row.cgroup+'/cpu.stat'),usage=cpu.match(/^usage_usec (\d+)$/m)?.[1],memory=read(row.cgroup+'/memory.current').trim();requireFact(usage!==undefined&&cpu.split('\n').filter(line=>line.startsWith('usage_usec')).length===1&&/^\d+$/.test(memory),'HOLD');const result={usage:Number(usage),memory:Number(memory)};requireFact(Number.isSafeInteger(result.usage)&&Number.isSafeInteger(result.memory),'HOLD');return result;}catch(error){throw new Error(['FAIL','UNKNOWN','DEADLINE'].includes(error.message)?error.message:'HOLD');}};
+  const before=rows.map(row=>{const start=counters(row);requireFact(start.usage>=(row.cpuUsageUsec??0)&&start.usage>=(previous.get(row.cgroup)??0),'UNKNOWN');return {row,start,at:now()};});
+  await sleep(budget.remaining(100));let sharedCpu=0,sharedMemory=0;
+  for(const {row,start,at} of before){budget.remaining();const end=counters(row),elapsed=now()-at;requireFact(Number.isFinite(elapsed)&&elapsed>0&&end.usage>=start.usage,'UNKNOWN');const cpu=(end.usage-start.usage)/elapsed*100,growth=Math.max(0,Math.max(start.memory,end.memory)-row.memoryUsageBytes);requireFact(Number.isFinite(cpu)&&Number.isFinite(growth),'HOLD');previous.set(row.cgroup,end.usage);
+    if(row.kind==='shared'){sharedCpu+=cpu;sharedMemory+=growth;}else requireFact(cpu<=c.thresholds.maxOldCpuPercent&&growth<=c.thresholds.maxOldMemoryGrowth,'FAIL');
+  }
+  requireFact(Number.isSafeInteger(sharedMemory)&&sharedCpu<=c.sharedRuntime.maxCpuPercent&&sharedMemory<=c.sharedRuntime.maxMemoryGrowth,'FAIL');return {sharedCpu,sharedMemory};
+}
 async function baseline(c,budget){
   budget.remaining();
   requireFact(os.freemem()>=c.thresholds.minFreeMemory&&os.loadavg()[0]<=c.thresholds.maxLoad,'BASELINE');
@@ -146,21 +180,20 @@ async function baseline(c,budget){
   for(const b of c.baseline){const i=await inspect(b.id,budget);requireFact(i.Image===b.image&&i.State.Status===b.status&&JSON.stringify(i.Mounts)===JSON.stringify(b.mounts),'BASELINE');
     requireFact(Number.isSafeInteger(b.memoryUsageBytes)&&b.memoryUsageBytes>=0,'BASELINE');
     const rel=fs.readFileSync(`/proc/${i.State.Pid}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3).trim();requireFact(rel,'BASELINE');
-    const dir='/sys/fs/cgroup'+rel;const memory=Number(fs.readFileSync(`${dir}/memory.current`,'utf8'));requireFact(memory-b.memoryUsageBytes<=c.thresholds.maxOldMemoryGrowth,'BASELINE');
-    const usage=()=>Number(fs.readFileSync(dir+'/cpu.stat','utf8').match(/^usage_usec (\d+)$/m)?.[1]);samples.push({usage,start:usage(),at:Number(process.hrtime.bigint())/1000});
+    samples.push({cgroup:'/sys/fs/cgroup'+rel,memoryUsageBytes:b.memoryUsageBytes,kind:'old'});
   }
-  await new Promise(resolve=>setTimeout(resolve,budget.remaining(100)));
-  for(const sample of samples){const elapsed=Number(process.hrtime.bigint())/1000-sample.at,cpu=(sample.usage()-sample.start)/elapsed*100;requireFact(Number.isFinite(cpu)&&cpu>=0&&cpu<=c.thresholds.maxOldCpuPercent,'BASELINE');}budget.remaining();
+  samples.push(...await sharedServiceRows(c,budget));return sampleResources(c,samples,budget);
 }
 async function cgroups(c,containers,budget){
   budget.remaining();
-  const rows=[ownAux(c)];
+  const rows=[ownAux(c)],groups=[c.auxiliary.cgroup],shims=[];
   for(const i of containers){assertOwned(i,c,i.Config.Labels['com.docker.compose.service']);requireFact(i.State.Running&&i.State.Pid>0&&!i.State.OOMKilled,'RESOURCES');
-    const rel=fs.readFileSync(`/proc/${i.State.Pid}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3);requireFact(rel,'RESOURCES');rows.push(actualCgroup('/sys/fs/cgroup'+rel.trim()));
+    const rel=fs.readFileSync(`/proc/${i.State.Pid}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3);requireFact(rel,'RESOURCES');const group='/sys/fs/cgroup'+rel.trim();groups.push(group);rows.push(actualCgroup(group));
     const status=fs.readFileSync(`/proc/${i.State.Pid}/status`,'utf8');const parent=Number(status.match(/^PPid:\s+(\d+)/m)?.[1]);requireFact(parent>1,'SHIM');
-    const args=fs.readFileSync(`/proc/${parent}/cmdline`,'utf8').split('\0');requireFact(path.basename(args[0])==='containerd-shim-runc-v2'&&args[args.indexOf('-id')+1]===i.Id,'SHIM');
-    const shimRel=fs.readFileSync(`/proc/${parent}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3).trim();requireFact('/sys/fs/cgroup'+shimRel===c.auxiliary.cgroup||('/sys/fs/cgroup'+shimRel).startsWith(c.auxiliary.cgroup+'/'),'SHIM_BUDGET');
+    const args=fs.readFileSync(`/proc/${parent}/cmdline`,'utf8').split('\0');
+    const shimRel=fs.readFileSync(`/proc/${parent}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3).trim();shims.push({id:i.Id,args,group:'/sys/fs/cgroup'+shimRel});
   }
+  validateSharedRuntime(c,groups);for(const shim of shims)assertSharedShim(c,shim.id,shim.args,shim.group,groups);
   assertResources(rows);return rows;
 }
 async function preflight(c,budget,{port=true}={}){
@@ -219,9 +252,10 @@ function writeOwnership(c,containers){
   const fd=fs.openSync(ownershipPath(c),'wx',0o400);try{fs.writeFileSync(fd,JSON.stringify(receipt)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
   const directory=fs.openSync(ROOT,'r');try{fs.fsyncSync(directory);}finally{fs.closeSync(directory);}return receipt;
 }
-const recoveryIO={machine:()=>fs.readFileSync('/sys/class/dmi/id/product_uuid','utf8').trim(),inspect,stop:(id,budget)=>command('docker',['stop','--time','3',id],{budget})};
+const recoveryIO={machine:()=>fs.readFileSync('/sys/class/dmi/id/product_uuid','utf8').trim(),inspect,stop:(id,budget)=>command('docker',['stop','--time','3',id],{budget}),sample:async(c,budget)=>{await baseline(c,budget);await cgroups(c,(await ownContainers(c,budget)).filter(row=>row.State.Running),budget);}};
 export async function stopOwned(c,receipt,budget,io=recoveryIO){
-  let unknown=false;
+  let unknown=false,resourceFault;
+  const sample=async()=>{try{await io.sample?.(c,budget);}catch(error){if(error.message==='DEADLINE')throw error;resourceFault??=['FAIL','HOLD','UNKNOWN'].includes(error.message)?error.message:'UNKNOWN';}};
   try{
     budget.remaining();requireFact(receipt?.version===1&&receipt.host===c.host&&receipt.runId===c.runId&&receipt.project===c.project&&receipt.machineUuid===c.machineUuid&&io.machine()===c.machineUuid,'UNKNOWN');
     requireFact(Array.isArray(receipt.containers)&&receipt.containers.length===4&&new Set(receipt.containers.map(x=>x.id)).size===4&&new Set(receipt.containers.map(x=>x.service)).size===4,'UNKNOWN');
@@ -230,12 +264,12 @@ export async function stopOwned(c,receipt,budget,io=recoveryIO){
       try{
         requireFact(SERVICES.includes(row.service)&&row.image===PINS[row.service].image&&/^[a-f0-9]{64}$/.test(row.id)&&/^sha256:[a-f0-9]{64}$/.test(row.imageId)&&typeof row.created==='string','UNKNOWN');
         const verify=i=>{assertOwned(i,c,row.service);requireFact(i.Id===row.id&&i.Image===row.imageId&&i.Created===row.created,'UNKNOWN');};
-        const current=await io.inspect(row.id,budget);budget.remaining();verify(current);
+        await sample();const current=await io.inspect(row.id,budget);budget.remaining();verify(current);
         if(current.State.Running){budget.remaining();await io.stop(row.id,budget);}
-        const after=await io.inspect(row.id,budget);budget.remaining();verify(after);requireFact(!after.State.Running,'UNKNOWN');
+        const after=await io.inspect(row.id,budget);budget.remaining();verify(after);requireFact(!after.State.Running,'UNKNOWN');await sample();
       }catch(error){if(error.message==='DEADLINE')throw error;unknown=true;}
     }
-    budget.remaining();return unknown?'UNKNOWN':'OK';
+    budget.remaining();return unknown?'UNKNOWN':resourceFault??'OK';
   }catch(error){return error.message==='DEADLINE'?'DEADLINE':'UNKNOWN';}
 }
 export async function startExperiment(c,budget,io){
@@ -267,6 +301,17 @@ function cleanupBudget(c){
   if(!fs.existsSync(file))fs.writeFileSync(file,String(new Budget(60000).end),{flag:'wx',mode:0o400});
   protectedFile(file);return Budget.fromDeadline(Number(fs.readFileSync(file,'utf8')));
 }
+export class ResourceWatch {
+  constructor(sample,budget,interval){this.read=sample;this.budget=budget;this.interval=interval;this.controller=new AbortController();this.timer=null;this.pending=null;this.fault=null;this.closed=false;budget.guard=()=>{this.check();requireFact(!this.closed,'CANCELLED');};budget.signal=this.controller.signal;}
+  check(){if(this.fault)throw this.fault;}
+  async sample(){
+    this.check();requireFact(!this.closed,'FAIL');if(!this.pending)this.pending=(async()=>{try{await this.read(this.budget);this.budget.remaining();}catch(error){if(!(this.closed&&error.message==='CANCELLED')){this.fault??=new Error(['FAIL','HOLD','UNKNOWN','DEADLINE'].includes(error.message)?error.message:'HOLD');this.controller.abort();}}finally{this.pending=null;}})();
+    await this.pending;this.check();
+  }
+  schedule(){if(this.closed||this.fault)return;try{this.timer=setTimeout(()=>{this.timer=null;this.sample().catch(()=>{}).finally(()=>this.schedule());},this.budget.remaining(this.interval));}catch(error){this.fault??=new Error(error.message==='DEADLINE'?'DEADLINE':'HOLD');this.controller.abort();}}
+  async start(){await this.sample();this.schedule();}
+  async close(){this.closed=true;clearTimeout(this.timer);this.timer=null;this.controller.abort('CLEANUP');await this.pending;}
+}
 class Runtime {
   constructor(c,budget){this.c=c;this.budget=budget;this.attaches=new Map();this.connections=[];this.events=new SafeEvents(event=>{
     fs.appendFileSync(ROOT+'/events/'+c.runId+'.jsonl',JSON.stringify({...event,time:new Date().toISOString()})+'\n',{mode:0o600,flag:'a'});
@@ -274,6 +319,7 @@ class Runtime {
   async start(budget){
     await preflight(this.c,budget);this.secrets=validateGenerated(this.c);
     requireFact(fs.readFileSync('/etc/hosts','utf8')===hostsText(this.c),'DNS');
+    this.monitor=new ResourceWatch(async current=>{const measured=await baseline(this.c,current),containers=await ownContainers(this.c,current);if(this.ready)requireFact(containers.length===4&&containers.every(row=>row.State.Running),'FAIL');await cgroups(this.c,containers.filter(row=>row.State.Running),current);this.events.event('verifier','shared_cpu_milli',0,'OK',Math.ceil(measured.sharedCpu*10));this.events.event('verifier','shared_memory_bytes',0,'OK',measured.sharedMemory);},budget,this.c.sharedRuntime.sampleIntervalMs);await this.monitor.start();
     await compose(this.c,['create','--pull','never'],budget);
     const containers=await ownContainers(this.c,budget);requireFact(containers.length===4,'OWNERSHIP');writeOwnership(this.c,containers);
     for(const i of containers){assertContainerConfiguration(i,this.c,i.Config.Labels['com.docker.compose.service']);requireFact(i.HostConfig.MemorySwap===i.HostConfig.Memory&&i.HostConfig.Memory>0&&i.HostConfig.NanoCpus>0,'CONFIG');}
@@ -284,33 +330,34 @@ class Runtime {
       child.stdout.on('data',b=>this.events.consume(service,b));child.stderr.on('data',b=>this.events.consume(service,b));
       child.on('error',()=>{state.ended=true;});child.on('close',()=>{state.ended=true;});
       while(!(await inspect(i.Id,budget)).State.Running){requireFact(!state.ended,'START');await new Promise(r=>setTimeout(r,budget.remaining(25)));}
-      await cgroups(this.c,[await inspect(i.Id,budget)],budget);this.events.event(service,'started');
+      await this.monitor.sample();this.events.event(service,'started');
     }
+    this.ready=true;
     await this.audit(budget);
     while(true){try{await this.api('/_matrix/client/versions',{},budget);break;}catch{await new Promise(r=>setTimeout(r,budget.remaining(100)));}}
     await this.sentinels(budget);
-    const livekit=await httpRequest('https://'+serverName(this.c)+'/twirp/livekit.RoomService/ListParticipants',{method:'POST',body:'{}',lookup:lookupLoopback,timeout:budget.remaining(8000),headers:{'Content-Type':'application/json'}});
+    const livekit=await httpRequest('https://'+serverName(this.c)+'/twirp/livekit.RoomService/ListParticipants',{method:'POST',body:'{}',lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,headers:{'Content-Type':'application/json'}});budget.remaining();
     requireFact(livekit.status===401,'READINESS');
   }
   async audit(budget){
-    budget.remaining();await baseline(this.c,budget);await cgroups(this.c,await ownContainers(this.c,budget),budget);
+    budget.remaining();await this.monitor.sample();
     requireFact([...this.attaches.values()].every(x=>!x.ended),'ATTACH');
     for(const connection of this.connections)connection.assertClean();
   }
   async api(route,{method='GET',body,token,expected=200}={},budget){
-    const r=await httpRequest('https://'+serverName(this.c)+route,{method,body:body===undefined?undefined:JSON.stringify(body),token,lookup:lookupLoopback,timeout:budget.remaining(8000),headers:body===undefined?{}:{'Content-Type':'application/json'}});
+    const r=await httpRequest('https://'+serverName(this.c)+route,{method,body:body===undefined?undefined:JSON.stringify(body),token,lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,headers:body===undefined?{}:{'Content-Type':'application/json'}});budget.remaining();
     this.events.event('verifier','http',r.status,r.status===expected?'OK':'FAIL');requireFact(r.status===expected,'HTTP');
     try{return JSON.parse(r.body);}catch{throw new Error('BODY');}
   }
-  auth(body,budget){return httpRequest('https://'+serverName(this.c)+'/sfu/get',{method:'POST',body:JSON.stringify(body),lookup:lookupLoopback,timeout:budget.remaining(8000),headers:{'Content-Type':'application/json'}});}
+  async auth(body,budget){const result=await httpRequest('https://'+serverName(this.c)+'/sfu/get',{method:'POST',body:JSON.stringify(body),lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,headers:{'Content-Type':'application/json'}});budget.remaining();return result;}
   async stop(){
-    for(const connection of this.connections)connection.assertClean();
+    await this.monitor?.close();
     for(const connection of this.connections)connection.socket.close();
-    const budget=cleanupBudget(this.c),result=await stopOwned(this.c,readOwnership(this.c),budget);requireFact(result==='OK',result);
+    const budget=cleanupBudget(this.c),result=await stopOwned(this.c,readOwnership(this.c),budget);
     await budget.waitFor(()=>[...this.attaches.values()].every(x=>x.ended));
     await budget.waitFor(()=>this.connections.every(x=>x.socket.readyState===WebSocket.CLOSED));
     for(const service of SERVICES)this.events.event(service,'stopped');
-    await baseline(this.c,budget);for(const connection of this.connections)connection.assertClean();this.events.event('verifier','chunks',0,'OK',this.events.chunks);
+    await baseline(this.c,budget);requireFact(result==='OK',result);this.monitor?.check();for(const connection of this.connections)connection.assertClean();this.events.event('verifier','chunks',0,'OK',this.events.chunks);
   }
 }
 
@@ -332,15 +379,17 @@ export function assertJoin(data,identity,room){
   for(const row of [...own,...join.filter(x=>x.field===3&&x.wire===2)])requireFact(!protobufFields(row.value).some(x=>x.field===4),'TRACKS');
   const names=protobufFields(own[0].value).filter(x=>x.field===2&&x.wire===2);requireFact(names.length===1&&names[0].value.toString('utf8')===identity,'JOIN');return true;
 }
-export function signal(url,token,{timeout=8000,identity,room,allowWsFixture=false}={}){
+export function signal(url,token,{timeout=8000,identity,room,allowWsFixture=false,abortSignal}={}){
   const u=new URL(url);requireFact((u.protocol==='wss:'||(allowWsFixture&&u.protocol==='ws:'&&u.hostname==='127.0.0.1'))&&!u.search&&!u.hash&&!u.username&&!u.password&&['','/'].includes(u.pathname),'TLS');
   requireFact(timeout>0&&timeout<=10000&&typeof identity==='string'&&identity.length>0&&typeof room==='string'&&room.length>0,'SIGNAL');u.pathname='/rtc';
+  requireFact(!abortSignal?.aborted,'FAIL');
   return new Promise((resolve,reject)=>{
     const socket=new WebSocket(u,{headers:{Authorization:`Bearer ${token}`}});socket.binaryType='arraybuffer';let joined=false,fault=false,settled=false,expectedRemoval=false;
     const fail=code=>{fault=true;if(!settled){settled=true;clearTimeout(timer);reject(new Error(code));}socket.close();};
     const timer=setTimeout(()=>fail('DEADLINE'),timeout);
+    const aborted=()=>{if(expectedRemoval&&abortSignal.reason==='CLEANUP')socket.close();else fail('FAIL');};abortSignal?.addEventListener('abort',aborted,{once:true});
     socket.addEventListener('error',()=>fail('NETWORK'));
-    socket.addEventListener('close',()=>{if(!joined)fail('SIGNAL');});
+    socket.addEventListener('close',()=>{abortSignal?.removeEventListener('abort',aborted);if(!joined)fail('SIGNAL');});
     socket.addEventListener('message',event=>{try{
       requireFact(event.data instanceof ArrayBuffer,'SIGNAL');
       if(!joined){assertJoin(new Uint8Array(event.data),identity,room);joined=true;settled=true;clearTimeout(timer);resolve({socket,joined,expectRemoval:()=>{expectedRemoval=true;},assertClean:()=>requireFact(!fault&&(expectedRemoval||socket.readyState===WebSocket.OPEN),'SIGNAL')});}
@@ -367,7 +416,7 @@ Runtime.prototype.register=async function(name,budget){
 Runtime.prototype.admin=async function(method,body,budget){
   const key=fs.readFileSync(`${ROOT}/secrets/livekit.key`,'utf8'),secret=fs.readFileSync(`${ROOT}/secrets/livekit.secret`,'utf8');
   const token=jwt({iss:key,sub:'rtc-r0-verifier',nbf:Math.floor(Date.now()/1000)-1,exp:Math.floor(Date.now()/1000)+60,video:{roomAdmin:true,room:body.room}},secret);
-  const r=await httpRequest(`https://${this.c.domain}:${this.c.port}/twirp/livekit.RoomService/${method}`,{method:'POST',body:JSON.stringify(body),token,lookup:lookupLoopback,timeout:budget.remaining(8000),headers:{'Content-Type':'application/json'}});
+  const r=await httpRequest(`https://${this.c.domain}:${this.c.port}/twirp/livekit.RoomService/${method}`,{method:'POST',body:JSON.stringify(body),token,lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,headers:{'Content-Type':'application/json'}});budget.remaining();
   const parsed=JSON.parse(r.body);if(method==='ListParticipants'&&r.status===404&&parsed.code==='not_found')return {participants:[]};requireFact(r.status===200,'ADMIN');return parsed;
 };
 Runtime.prototype.openid=async function(account,budget){
@@ -415,10 +464,10 @@ Runtime.prototype.verify=async function(budget){
     for(const [account,openid] of [[a,tokenA],[b,tokenB]]){
       const r=await this.auth(request(account,openid),budget);requireFact(r.status===200,'SFU');const ticket=JSON.parse(r.body);requireFact(ticket.url===`wss://${this.c.domain}:${this.c.port}`,'SFU_URL');secrets.push(ticket.jwt);
       const subject=`${account.user_id}:${account.device_id}`,claims=decodeTicket(ticket.jwt,secret);assertTicket(claims,{subject,room:roomAlias(room),key});recordTtl(this.events,'jwt_remaining',Math.floor(claims.exp-Date.now()/1000));expected.push(subject);
-      const connection=await signal(ticket.url,ticket.jwt,{identity:subject,room:roomAlias(room),timeout:budget.remaining(8000)});this.connections.push(connection);sockets.push(connection.socket);
+      const connection=await signal(ticket.url,ticket.jwt,{identity:subject,room:roomAlias(room),timeout:budget.remaining(8000),abortSignal:budget.signal});this.connections.push(connection);sockets.push(connection.socket);budget.remaining();
       const participants=await this.admin('ListParticipants',{room:roomAlias(room)},budget);assertParticipants(participants.participants??[],expected);
     }
-    const wrong=await httpRequest(`https://${this.c.domain}:${this.c.port}/get_token`,{method:'POST',lookup:lookupLoopback,timeout:budget.remaining(8000),body:JSON.stringify({room_id:room,slot_id:'m.call#ROOM',openid_token:tokenA,member:{id:'wrong-subject',claimed_user_id:outsider.user_id,claimed_device_id:a.device_id}}),headers:{'Content-Type':'application/json'}});
+    const wrong=await httpRequest(`https://${this.c.domain}:${this.c.port}/get_token`,{method:'POST',lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,body:JSON.stringify({room_id:room,slot_id:'m.call#ROOM',openid_token:tokenA,member:{id:'wrong-subject',claimed_user_id:outsider.user_id,claimed_device_id:a.device_id}}),headers:{'Content-Type':'application/json'}});budget.remaining();
     const wrongBody=JSON.parse(wrong.body);requireFact(wrong.status===401&&wrongBody.errcode==='M_UNAUTHORIZED'&&!wrongBody.jwt,'WRONG_SUBJECT');this.events.event('auth','http',wrong.status,wrongBody.errcode);
     assertParticipants((await this.admin('ListParticipants',{room:roomAlias(room)},budget)).participants??[],expected);
     await this.api(`/_matrix/client/v3/rooms/${encoded}/kick`,{method:'POST',body:{user_id:b.user_id},token:a.access_token},budget);const fresh=await this.openid(b,budget);secrets.push(fresh.access_token);await this.denied(request(b,fresh),budget);
@@ -450,7 +499,8 @@ async function runTask(c,budget){
     await runtime.start(budget);writeState(c,'READY',budget.end);ready=true;
     while(!requested){await runtime.audit(budget);await new Promise(r=>setTimeout(r,budget.remaining(250)));}
     writeState(c,'VERIFYING',budget.end);await runtime.verify(budget);await runtime.stop();runtime.events.event('verifier','gate',200,'OK',0);writeState(c,'VERIFIED',budget.end);
-  }catch{writeState(c,'FAIL',budget.end);throw new Error('FAIL');}
+  }catch{await runtime.stop().catch(()=>{});writeState(c,'FAIL',budget.end);throw new Error('FAIL');}
+  finally{await runtime.monitor?.close();}
   // systemd ExecStopPost also runs after SIGKILL, timeout and synchronous failure.
 }
 export async function main(action){

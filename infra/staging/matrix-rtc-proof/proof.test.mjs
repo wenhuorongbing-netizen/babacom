@@ -210,12 +210,66 @@ function contract() {
     approved: true, logAdmission: true, machineUuid:'machine', fullAccessHomeservers: ['rtc.example.org:18443'], asHomeserver: 'rtc.example.org:18443',
     platform: 'linux/amd64', source: PINS, sourceHashes: Object.fromEntries(['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'].map(name=>[name,'f'.repeat(64)])), auxiliary: { unit: 'babacomrtc'+ 'a'.repeat(32)+'.slice', cgroup: '/sys/fs/cgroup/babacomrtc'+ 'a'.repeat(32)+'.slice', cpu: .1, memory: 134217728 },
     thresholds: { minFreeMemory: 2000000000, minFreeDisk: 3000000000, maxLoad: 2, maxOldCpuPercent: 80, maxOldMemoryGrowth: 100000000 },
+    sharedRuntime:{sampleIntervalMs:250,maxCpuPercent:100,maxMemoryGrowth:100000000,services:['docker','containerd'].map((name,index)=>({unit:name+'.service',invocationId:String(index+1).repeat(32),pid:100+index,startTime:'1000',cgroup:'/sys/fs/cgroup/system.slice/'+name+'.service',inode:100+index,cpuUsageUsec:1000,memoryUsageBytes:1000000}))},
     baseline: [{ id: 'b'.repeat(64), image: 'sha256:' + 'c'.repeat(64), status: 'running', mounts: [] }],
     accessors: ['operator-loopback'], certificateSha256: 'd'.repeat(64), nodeSha256:'e'.repeat(64),
     persistence:{corePattern:'core',locations:[{path:'/var/crash',kind:'core-directory',uid:0,gid:0,mode:448,accessors:['root']}]},
     logging:{coverage:['success','timeout','tls','connection','handshake','redirect'],bypasses:[{path:'/var/run/docker.sock',uid:0,gid:0,mode:384,kind:'socket',writesRaw:false,accessors:['root']}]}
   };
 }
+
+test('shared runtime admission requires frozen identities, disjoint non-root groups and finite stop thresholds',()=>{
+  assert.doesNotThrow(()=>validateContract(contract()));
+  for(const change of [c=>delete c.sharedRuntime,c=>c.sharedRuntime.maxCpuPercent=Infinity,c=>c.sharedRuntime.maxMemoryGrowth=NaN,c=>delete c.sharedRuntime.services[0].invocationId,c=>c.sharedRuntime.services[0].cgroup='/sys/fs/cgroup',c=>c.sharedRuntime.services[1].cgroup=c.sharedRuntime.services[0].cgroup,c=>c.sharedRuntime.services[1].cgroup=c.sharedRuntime.services[0].cgroup+'/nested',c=>c.sharedRuntime.services[0].cgroup=c.auxiliary.cgroup]){const c=contract();change(c);assert.throws(()=>validateContract(c));}
+});
+test('recognized experiment shims may use an admitted shared group but cannot escape into another or own workload group',()=>{
+  const c=contract(),id='1'.repeat(64),args=['/usr/bin/containerd-shim-runc-v2','-namespace','moby','-id',id],groups=[c.auxiliary.cgroup,'/sys/fs/cgroup/system.slice/docker-'+id+'.scope'];
+  assert.doesNotThrow(()=>proof.assertSharedShim(c,id,args,c.sharedRuntime.services[1].cgroup,groups));
+  for(const [changed,group] of [[args,'/sys/fs/cgroup/system.slice/other.service'],[[...args.slice(0,-1),'2'.repeat(64)],c.sharedRuntime.services[1].cgroup],[[...args.slice(0,2),'other',...args.slice(3)],c.sharedRuntime.services[1].cgroup],[args,c.auxiliary.cgroup]])assert.throws(()=>proof.assertSharedShim(c,id,changed,group,groups));
+});
+test('shared cpu.stat and memory.current samples enforce aggregate growth and reject resets, invalid counters or unreadable groups',async()=>{
+  const c=contract(),rows=c.sharedRuntime.services.map(row=>({...row,kind:'shared'}));
+  const sample=async({cpu=2000,memory=1001000,bad,fail=false}={})=>{let now=0;return proof.sampleResources(c,rows,new Budget(1000,()=>now/1000),{now:()=>now,sleep:async()=>{now=100000;},read:file=>{if(fail)throw Error('incapable-read-error');return file.endsWith('/cpu.stat')?(bad??'usage_usec '+(now?cpu:1000)+'\nuser_usec 0\n'):String(memory);},previous:new Map()});};
+  await assert.doesNotReject(sample());await assert.rejects(sample({cpu:200000}));await assert.rejects(sample({memory:1000000000}));await assert.rejects(sample({cpu:999}));
+  for(const bad of ['usage_usec NaN','usage_usec 9007199254740992','usage_usec -1','user_usec 1','usage_usec 1000\nusage_usec NaN'])await assert.rejects(sample({bad}));await assert.rejects(sample({fail:true}));
+  await assert.rejects(sample({memory:'NaN'}));await assert.rejects(sample({memory:9007199254740992}));
+});
+test('shared service restart, PID reuse and cgroup identity drift cannot pass measurement admission',async()=>{
+  const c=contract();
+  const io={show:async row=>({ActiveState:'active',SubState:'running',MainPID:String(row.pid),InvocationID:row.invocationId,ControlGroup:row.cgroup.slice('/sys/fs/cgroup'.length)}),read:file=>file.endsWith('/cmdline')?(file.includes('/100/')?'dockerd\0':'containerd\0'):file.endsWith('/stat')?'100 (daemon name) S '+'0 '.repeat(18)+'1000':'0::'+c.sharedRuntime.services.find(row=>file.includes('/'+row.pid+'/')).cgroup.slice('/sys/fs/cgroup'.length),stat:group=>({ino:c.sharedRuntime.services.find(row=>row.cgroup===group).inode,isDirectory:()=>true,isSymbolicLink:()=>false}),realpath:group=>group};
+  await assert.doesNotReject(proof.sharedServiceRows(c,new Budget(1000),io));
+  for(const change of [state=>state.InvocationID='f'.repeat(32),state=>state.MainPID='999',state=>state.ControlGroup='/system.slice/other.service'])await assert.rejects(proof.sharedServiceRows(c,new Budget(1000),{...io,show:async row=>{const state=await io.show(row);change(state);return state;}}));
+  await assert.rejects(proof.sharedServiceRows(c,new Budget(1000),{...io,read:file=>file.endsWith('/stat')?'100 (daemon name) S '+'0 '.repeat(18)+'2000':io.read(file)}));
+  await assert.rejects(proof.sharedServiceRows(c,new Budget(1000),{...io,stat:group=>({...io.stat(group),ino:999})}));
+});
+test('serialized resource sampling latches a mid-verification fault, aborts work and leaves no timer or reset deadline',async()=>{
+  const budget=new Budget(2000);let active=0,maxActive=0,samples=0;const watch=new proof.ResourceWatch(async()=>{active++;maxActive=Math.max(maxActive,active);await new Promise(resolve=>setTimeout(resolve,10));active--;if(++samples===2)throw Error('FAIL');},budget,5);const deadline=budget.end;
+  await watch.start();const pending=watch.sample();await assert.rejects(pending,/FAIL/);assert.equal(watch.controller.signal.aborted,true);assert.throws(()=>budget.remaining(),/FAIL/);assert.throws(()=>watch.check(),/FAIL/);await watch.close();assert.equal(maxActive,1);assert.equal(watch.timer,null);assert.equal(watch.pending,null);assert.equal(budget.end,deadline);
+  const calls=samples;await new Promise(resolve=>setTimeout(resolve,20));assert.equal(samples,calls);
+});
+test('resource failure during cleanup cannot stop old containers or prevent receipt-owned stops',async()=>{
+  const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),stopped=[];let samples=0;
+  const result=await stopOwned(c,r,new Budget(1000),{machine:()=>r.machineUuid,sample:async()=>{samples++;throw Error('FAIL');},inspect:async id=>structuredClone(states.get(id)),stop:async id=>{stopped.push(id);states.get(id).State.Running=false;}});
+  assert.equal(result,'FAIL');assert.equal(samples>0,true);assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));assert.equal(stopped.includes(c.baseline[0].id),false);
+});
+test('a latched resource fault cancels a real verifier child and prohibits subsequent commands and VERIFIED',async()=>{
+  const server=net.createServer();server.listen(0,'127.0.0.1');await once(server,'listening');let samples=0,closed=false;const budget=new Budget(2000),deadline=budget.end,watch=new proof.ResourceWatch(async()=>{if(++samples===2)throw Error('FAIL');},budget,1000);
+  await watch.start();const result=command(process.execPath,[fileURLToPath(import.meta.url),'--fixture','hold',String(server.address().port)],{budget}).catch(error=>error);const [socket]=await once(server,'connection');socket.on('error',()=>{});socket.once('close',()=>{closed=true;});const [data]=await once(socket,'data'),pid=Number(data.toString());
+  try{await assert.rejects(watch.sample(),/FAIL/);assert.equal((await result).message,'FAIL');assert.throws(()=>process.kill(pid,0));await new Budget(500).waitFor(()=>closed);assert.throws(()=>command(process.execPath,[fileURLToPath(import.meta.url),'--fixture','idle'],{budget}),/FAIL/);let verified=false;try{watch.check();verified=true;}catch{}assert.equal(verified,false);assert.equal(budget.end,deadline);}
+  finally{await watch.close();socket.destroy();server.close();}assert.equal(watch.timer,null);assert.equal(watch.pending,null);
+});
+test('resource failure aborts an actual pending HTTP request before the client timeout',async()=>{
+  const server=http.createServer();server.listen(0,'127.0.0.1');await once(server,'listening');let count=0;const budget=new Budget(2000),watch=new proof.ResourceWatch(async()=>{if(++count===2)throw Error('FAIL');},budget,1000);await watch.start();
+  const observed=once(server,'request'),result=httpRequest(`http://127.0.0.1:${server.address().port}`,{allowHttpFixture:true,signal:budget.signal,timeout:2000}).catch(error=>error);const [request]=await observed;let closed=false;request.socket.once('close',()=>{closed=true;});
+  try{await assert.rejects(watch.sample(),/FAIL/);assert.equal((await result).message,'NETWORK');await new Budget(500).waitFor(()=>closed);}finally{await watch.close();server.closeAllConnections();server.close();}
+});
+test('normal sampler shutdown waits for its outstanding real child without creating a resource fault or leaving work',async()=>{
+  const server=net.createServer();server.listen(0,'127.0.0.1');await once(server,'listening');let calls=0,closed=false;const budget=new Budget(2000),watch=new proof.ResourceWatch(async current=>{if(++calls===2)await command(process.execPath,[fileURLToPath(import.meta.url),'--fixture','hold',String(server.address().port)],{budget:current});},budget,1000);await watch.start();const sampling=watch.sample();const [socket]=await once(server,'connection');socket.on('error',()=>{});socket.once('close',()=>{closed=true;});const [data]=await once(socket,'data'),pid=Number(data.toString());
+  try{await watch.close();await sampling;assert.throws(()=>process.kill(pid,0));await new Budget(500).waitFor(()=>closed);assert.doesNotThrow(()=>watch.check());assert.equal(watch.timer,null);assert.equal(watch.pending,null);}finally{socket.destroy();server.close();}
+});
+test('shutdown cannot erase a measurement fault already produced by its outstanding sample',async()=>{
+  let calls=0,release;const watch=new proof.ResourceWatch(async()=>{if(++calls===2){await new Promise(resolve=>{release=resolve;});throw Error('FAIL');}},new Budget(1000),500);await watch.start();const sampling=watch.sample(),closing=watch.close();release();await closing;await assert.rejects(sampling,/FAIL/);assert.throws(()=>watch.check(),/FAIL/);assert.equal(watch.pending,null);assert.equal(watch.timer,null);
+});
 
 test('new synthetic persistence and logging exceptions require frozen paths, permissions, accessors and every fault boundary',()=>{
   assert.doesNotThrow(()=>validateContract(contract()));
