@@ -1,0 +1,11 @@
+port: 7880
+bind_addresses: ['0.0.0.0']
+rtc:
+  tcp_port: 0
+  port_range_start: 50000
+  port_range_end: 50001
+  use_external_ip: false
+turn: {enabled: false}
+logging: {level: warn, json: true}
+keys:
+  {{LIVEKIT_KEY}}: {{LIVEKIT_SECRET}}
