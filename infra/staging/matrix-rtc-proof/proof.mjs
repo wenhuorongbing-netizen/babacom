@@ -310,9 +310,12 @@ export class ResourceWatch {
   }
   schedule(){if(this.closed||this.fault)return;try{this.timer=setTimeout(()=>{this.timer=null;this.sample().catch(()=>{}).finally(()=>this.schedule());},this.budget.remaining(this.interval));}catch(error){this.fault??=new Error(error.message==='DEADLINE'?'DEADLINE':'HOLD');this.controller.abort();}}
   async start(){await this.sample();this.schedule();}
-  async close(){this.closed=true;clearTimeout(this.timer);this.timer=null;this.controller.abort('CLEANUP');await this.pending;}
+  async close(budget){
+    this.closed=true;clearTimeout(this.timer);this.timer=null;this.controller.abort('CLEANUP');
+    let timer;try{if(budget){await Promise.race([this.pending,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('DEADLINE')),budget.remaining());})]);budget.remaining();}else await this.pending;}finally{clearTimeout(timer);}
+  }
 }
-class Runtime {
+export class Runtime {
   constructor(c,budget){this.c=c;this.budget=budget;this.attaches=new Map();this.connections=[];this.events=new SafeEvents(event=>{
     fs.appendFileSync(ROOT+'/events/'+c.runId+'.jsonl',JSON.stringify({...event,time:new Date().toISOString()})+'\n',{mode:0o600,flag:'a'});
   });}
@@ -351,9 +354,10 @@ class Runtime {
   }
   async auth(body,budget){const result=await httpRequest('https://'+serverName(this.c)+'/sfu/get',{method:'POST',body:JSON.stringify(body),lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,headers:{'Content-Type':'application/json'}});budget.remaining();return result;}
   async stop(){
-    await this.monitor?.close();
+    const budget=this.cleanup??=cleanupBudget(this.c);
+    await this.monitor?.close(budget);budget.remaining();
     for(const connection of this.connections)connection.socket.close();
-    const budget=cleanupBudget(this.c),result=await stopOwned(this.c,readOwnership(this.c),budget);
+    const result=await stopOwned(this.c,readOwnership(this.c),budget);
     await budget.waitFor(()=>[...this.attaches.values()].every(x=>x.ended));
     await budget.waitFor(()=>this.connections.every(x=>x.socket.readyState===WebSocket.CLOSED));
     for(const service of SERVICES)this.events.event(service,'stopped');
@@ -500,7 +504,7 @@ async function runTask(c,budget){
     while(!requested){await runtime.audit(budget);await new Promise(r=>setTimeout(r,budget.remaining(250)));}
     writeState(c,'VERIFYING',budget.end);await runtime.verify(budget);await runtime.stop();runtime.events.event('verifier','gate',200,'OK',0);writeState(c,'VERIFIED',budget.end);
   }catch{await runtime.stop().catch(()=>{});writeState(c,'FAIL',budget.end);throw new Error('FAIL');}
-  finally{await runtime.monitor?.close();}
+  finally{if(runtime.monitor&&!runtime.monitor.closed&&runtime.cleanup)await runtime.monitor.close(runtime.cleanup);}
   // systemd ExecStopPost also runs after SIGKILL, timeout and synchronous failure.
 }
 export async function main(action){

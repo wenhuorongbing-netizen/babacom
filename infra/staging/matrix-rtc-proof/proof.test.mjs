@@ -270,6 +270,17 @@ test('normal sampler shutdown waits for its outstanding real child without creat
 test('shutdown cannot erase a measurement fault already produced by its outstanding sample',async()=>{
   let calls=0,release;const watch=new proof.ResourceWatch(async()=>{if(++calls===2){await new Promise(resolve=>{release=resolve;});throw Error('FAIL');}},new Budget(1000),500);await watch.start();const sampling=watch.sample(),closing=watch.close();release();await closing;await assert.rejects(sampling,/FAIL/);assert.throws(()=>watch.check(),/FAIL/);assert.equal(watch.pending,null);assert.equal(watch.timer,null);
 });
+test('Runtime stop freezes cleanup deadline before watcher shutdown and prevents any later mutation or VERIFIED',async()=>{
+  let now=0,mutations=0,verified=false;const budget=new Budget(60000,()=>now),runtime={cleanup:budget,monitor:{close:async received=>{assert.equal(received,budget);now+=60001;received.remaining();}},connections:[{socket:{close:()=>{mutations++;}}}]};
+  await assert.rejects(proof.Runtime.prototype.stop.call(runtime).then(()=>{verified=true;}),/DEADLINE/);assert.equal(mutations,0);assert.equal(verified,false);assert.equal(budget.end,60000);
+});
+test('watcher pending work is bounded by the same consumed cleanup deadline',async()=>{
+  let calls=0;const watch=new proof.ResourceWatch(async()=>{if(++calls===2)await new Promise(resolve=>setTimeout(resolve,100));},new Budget(1000),500);await watch.start();const pending=watch.sample(),cleanup=new Budget(40);await assert.rejects(watch.close(cleanup),/DEADLINE/);await pending;assert.equal(watch.pending,null);assert.equal(watch.timer,null);
+});
+test('watcher shutdown consumption is not reset before receipt-owned cleanup mutations',async()=>{
+  let now=0,mutations=0;const c=contract(),r=receipt(c),budget=new Budget(60000,()=>now),watch=new proof.ResourceWatch(async()=>{},new Budget(120000),500);await watch.start();const closing=watch.close(budget);now=100;await closing;
+  const result=await stopOwned(c,r,budget,{machine:()=>r.machineUuid,inspect:async id=>{now+=59950;return inspected(c,r.containers.find(row=>row.id===id));},stop:async()=>{mutations++;}});assert.equal(result,'DEADLINE');assert.equal(mutations,0);assert.equal(budget.end,60000);
+});
 
 test('new synthetic persistence and logging exceptions require frozen paths, permissions, accessors and every fault boundary',()=>{
   assert.doesNotThrow(()=>validateContract(contract()));
