@@ -1,6 +1,6 @@
 # matrix-rtc-proof — 同机零媒体 R0 候选
 
-状态：**原范围 PR119 与精简修订 PR125 已合并；资源核算修订Jack已签认，独立审查和可信合并后生效；真实 R0 NOT_RUN**。Jack于2026-10-18签认`ef6e143`精简候选，随后签认下文资源核算窄修订并授权独立两文件文档PR检查通过后合并及原七文件调整；产品PR合并另行裁定。实施票 #124 的原候选保留在 `feat/matrix-rtc-r0-proof`（`ff4cd0933950dfb8e3afb8bef8b5d5eb7e9684e8`）。本次资源修订可信合并前，PR125的运行合同继续有效；合并后仅替代明确的资源核算差异，其余条款保持。具体运行细节及负例未核定仍HOLD；关联 M04 #63、M10 #69、M29 #88。
+状态：**范围与实现 PR119、PR125–128 已合并；真实 R0 启动 FAIL，原实验已停止。Caddy 最小能力修订已由 Jack 签认，独立审查和可信合并后生效。** 实施票 #124 的原候选保留在 `feat/matrix-rtc-r0-proof`（`ff4cd0933950dfb8e3afb8bef8b5d5eb7e9684e8`）。具体运行细节及负例未核定仍HOLD；关联 M04 #63、M10 #69、M29 #88。
 
 ## 目标与范围
 
@@ -48,6 +48,7 @@ infra/staging/matrix-rtc-proof/proof.test.mjs
 
 | Jack已签认的窄变化 | 边界 |
 |---|---|
+| Caddy 能力（2026-10-19签认；本修订可信合并后生效） | 仅固定官方 Caddy 容器的 CapAdd 必须恰为 `NET_BIND_SERVICE`；其文件能力要求由实际容器核验。Synapse、auth、LiveKit 的 CapAdd 仍为空；全部保留 cap_drop ALL、no-new-privileges、只读文件系统及现有资源、网络、日志限制。缺失、重复或额外能力均拒绝，不改官方映像或用特权模式替代。 |
 | 资源核算（2026-10-18签认；本修订可信合并后生效） | 四个实验容器与Node/CLI及其验证辅助进程仍合计硬限≤1 CPU、≤1610612736字节。共享Docker/containerd及shim开销单独实测，冻结测量范围、基线与止损门槛，启动、验证及清理期间按此检查；超限或旧服务异常即停止确认归属的实验，无法测量或归属不明即HOLD/UNKNOWN。不得声称共享运行时或shim从创建起受实验cgroup硬封顶，不迁移共享进程、不调整共享daemon或旧服务的限额。其余权限、TLS、日志、退出与期限要求不变。 |
 | 期限 | 验证客户端单 HTTP 仍≤10秒；不再承诺 stock auth 内部 socket≤10秒。仅已核定的 OpenID/客户端发现请求为30秒，Twirp总期限未证实；整个启动/验证任务由标准 systemd/Compose 在120秒外界期限内终止，清理≤60秒。进程死亡、卡住及退出负例未实证即HOLD，不把 `WebSocket.close()` 当作 socket 已销毁。 |
 | 合成凭据持久化例外 | 仅本实验合成凭据可受操作系统常规内存管理影响，可能进入受保护的 swap/core；stock auth 原始 stderr 可暂存于受信运行时管道内存。这是对旧 memory-only/原始输出禁令的新例外，不追认旧验收。必须先冻结实际路径、权限和可访问主体；未知即HOLD，不修改宿主或旧业务监控。验证器不额外落盘；凭据仍不得进入持久日志、Git、命令行、导航URL、终端或证据。 |
@@ -55,6 +56,8 @@ infra/staging/matrix-rtc-proof/proof.test.mjs
 | TLS候选 | `rtc-r0.beidi.games:18443`，仅loopback；新独立密钥与公信证书，DNS-01仅新增本次 `_acme-challenge.rtc-r0` TXT，不改旧A记录、代理、防火墙或公网端口。域名使用/证书取得及具体运行细节仍待签认，未核定不运行。 |
 
 Matrix登录token注销必须独立验证；注销/停服不等于已签发OpenID或LiveKit JWT立即失效。记录固定栈的实际TTL，停止后不重启复用该实验状态。上述例外不覆盖真实账号、产品、R1–R3或其他主机；保留原分支、数据库、秘密及全部历史证据。
+
+本次能力修复先独立合并现有模块与 `docs/04-open-decisions.md`，再只改 `compose.yaml`、`proof.mjs`、`proof.test.mjs`；独立审查和托管检查通过后合并。随后最多两个全新固定官方 Caddy 诊断容器：先 validate，成功且独立超时清理实证有效后才以另一个容器 run≤5秒。仅只读现有实验 TLS、network=none、无发布端口、原始输出仅受限 RAM；诊断容器、Node/CLI与辅助进程合计仍硬限≤0.2 CPU/268435456字节，总期限≤120秒、清理≤60秒；只向既有 `/opt/babacom-matrix-rtc-e1/events/caddy-startup-diagnostic-20261019.jsonl` 追加脱敏归属与结果。失败即停，保留旧 FAIL 实验及业务；诊断通过不能代替完整 R0、可信 TLS 链路或媒体验收。
 
 ## Validation（原候选接口；精简实现与真实运行尚未验证）
 
