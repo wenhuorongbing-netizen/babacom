@@ -54,6 +54,7 @@ services:
       - /opt/babacom-matrix-rtc-e1/secrets/livekit.secret:/run/secrets/livekit.secret:ro
   caddy:
     <<: *lab
+    cap_add: [NET_BIND_SERVICE]
     # 2.11.7-alpine / source 72dd0fb067f6d7826c7f79907670ba4a713bfe37
     image: docker.io/library/caddy@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229
     command: [caddy, run, --config, /run/secrets/Caddyfile, --adapter, caddyfile]

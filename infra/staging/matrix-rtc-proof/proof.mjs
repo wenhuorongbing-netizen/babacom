@@ -95,7 +95,10 @@ export function assertResources(rows){
 }
 export function assertContainerConfiguration(i,c,service){
   assertOwned(i,c,service);const h=i.HostConfig;
-  requireFact(h?.LogConfig?.Type==='none'&&i.LogPath===''&&h.ReadonlyRootfs===true&&h.Privileged===false&&h.NetworkMode===c.project+'_isolated'&&h.CapDrop?.includes('ALL')&&(!h.CapAdd||h.CapAdd.length===0),'CONFIG');
+  requireFact(h?.LogConfig?.Type==='none'&&i.LogPath===''&&h.ReadonlyRootfs===true&&h.Privileged===false&&h.NetworkMode===c.project+'_isolated'&&h.CapDrop?.includes('ALL'),'CONFIG');
+  const added=h.CapAdd??[],security=h.SecurityOpt;
+  requireFact(Array.isArray(added)&&(service==='caddy'?added.length===1&&['NET_BIND_SERVICE','CAP_NET_BIND_SERVICE'].includes(added[0]):added.length===0),'CONFIG');
+  requireFact(Array.isArray(security)&&security.length===1&&['no-new-privileges','no-new-privileges:true','no-new-privileges=true'].includes(security[0]),'CONFIG');
   const ports=h.PortBindings??{},expected=service==='caddy'?{[c.port+'/tcp']:[{HostIp:'127.0.0.1',HostPort:String(c.port)}]}:{};
   requireFact(JSON.stringify(ports)===JSON.stringify(expected),'PORT');
   const targets={synapse:['data','homeserver.yaml','appservice.yaml','log.config'],livekit:['livekit.yaml'],auth:['appservice.yaml','livekit.key','livekit.secret'],caddy:['Caddyfile','tls.crt','tls.key']}[service];

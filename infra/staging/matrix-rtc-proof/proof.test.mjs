@@ -125,14 +125,44 @@ test('pinned Linux amd64 images accept only their exact captured Docker Hub dige
   assert.throws(()=>proof.assertPinnedImage({Os:'linux',Architecture:'amd64',RepoDigests:[PINS.synapse.image.replace('ghcr.io/','')]},'synapse'),/^Error: IMAGE$/);
   assert.throws(()=>proof.assertPinnedImage({Os:'linux',Architecture:'amd64',RepoDigests:[PINS.caddy.image]},'unknown'),/^Error: IMAGE$/);
 });
+function configuredContainer(c,service){
+  const i=inspected(c,receipt(c).containers.find(x=>x.service===service));
+  i.HostConfig={LogConfig:{Type:'none'},ReadonlyRootfs:true,CapDrop:['ALL'],CapAdd:service==='caddy'?['NET_BIND_SERVICE']:[],SecurityOpt:['no-new-privileges'],Privileged:false,NetworkMode:c.project+'_isolated',PortBindings:service==='caddy'?{'18443/tcp':[{HostIp:'127.0.0.1',HostPort:'18443'}]}:{}};
+  const names={caddy:['Caddyfile','tls.crt','tls.key'],synapse:['data','homeserver.yaml','appservice.yaml','log.config'],auth:['appservice.yaml','livekit.key','livekit.secret'],livekit:['livekit.yaml']}[service];
+  i.LogPath='';i.Mounts=names.map(name=>name==='data'?{Type:'bind',Source:c.root+'/data',Destination:'/data',RW:true}:{Type:'bind',Source:c.root+'/secrets/'+name,Destination:'/run/secrets/'+name,RW:false});
+  return i;
+}
+
 test('actual container bindings and mounts reject another project, public ports, raw log paths and old business mounts',()=>{
   assert.equal(typeof proof.assertContainerConfiguration,'function');
-  const c=contract(),row=receipt(c).containers.find(x=>x.service==='caddy'),i=inspected(c,row);
-  i.HostConfig={LogConfig:{Type:'none'},ReadonlyRootfs:true,CapDrop:['ALL'],CapAdd:[],Privileged:false,NetworkMode:c.project+'_isolated',PortBindings:{'18443/tcp':[{HostIp:'127.0.0.1',HostPort:'18443'}]}};
-  i.LogPath='';i.Mounts=['Caddyfile','tls.crt','tls.key'].map(name=>({Type:'bind',Source:c.root+'/secrets/'+name,Destination:'/run/secrets/'+name,RW:false}));
+  const c=contract(),i=configuredContainer(c,'caddy');
   assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,'caddy'));
   for(const change of [copy=>copy.HostConfig.PortBindings['18443/tcp'][0].HostIp='0.0.0.0',copy=>copy.Mounts[0].Source='/opt/business/config',copy=>copy.LogPath='/var/log/unsafe.log',copy=>copy.HostConfig.NetworkMode='host',copy=>copy.Mounts[0].RW=true]){const copy=structuredClone(i);change(copy);assert.throws(()=>proof.assertContainerConfiguration(copy,c,'caddy'));}
 });
+test('Caddy capability admits exactly NET_BIND_SERVICE and rejects missing, duplicate or extra capabilities',()=>{
+  const c=contract();
+  for(const CapAdd of [['NET_BIND_SERVICE'],['CAP_NET_BIND_SERVICE']]){const i=configuredContainer(c,'caddy');i.HostConfig.CapAdd=CapAdd;assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,'caddy'));}
+  for(const CapAdd of [undefined,null,[],['NET_ADMIN'],['ALL'],['NET_BIND_SERVICE','SYS_ADMIN'],['NET_BIND_SERVICE','NET_BIND_SERVICE'],['NET_BIND_SERVICE','CAP_NET_BIND_SERVICE'],'NET_BIND_SERVICE',{length:0}]){
+    const i=configuredContainer(c,'caddy');i.HostConfig.CapAdd=CapAdd;assert.throws(()=>proof.assertContainerConfiguration(i,c,'caddy'),/^Error: CONFIG$/);
+  }
+});
+
+test('other RTC services cannot inherit Caddy capability or any other capability',()=>{
+  const c=contract();
+  for(const service of ['synapse','auth','livekit']){
+    for(const CapAdd of [undefined,null,[]]){const i=configuredContainer(c,service);i.HostConfig.CapAdd=CapAdd;assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,service));}
+    for(const CapAdd of [['NET_BIND_SERVICE'],['CAP_NET_BIND_SERVICE'],['SYS_ADMIN'],['ALL'],{length:0}]){const i=configuredContainer(c,service);i.HostConfig.CapAdd=CapAdd;assert.throws(()=>proof.assertContainerConfiguration(i,c,service),/^Error: CONFIG$/);}
+  }
+});
+
+test('all RTC containers retain drop ALL, no-new-privileges and read-only isolation',()=>{
+  const c=contract();
+  for(const service of ['synapse','auth','livekit','caddy']){
+    for(const SecurityOpt of [['no-new-privileges'],['no-new-privileges:true'],['no-new-privileges=true']]){const i=configuredContainer(c,service);i.HostConfig.SecurityOpt=SecurityOpt;assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,service));}
+    for(const changed of [{CapDrop:[]},{SecurityOpt:[]},{SecurityOpt:['no-new-privileges:false']},{SecurityOpt:['no-new-privileges','no-new-privileges:false']},{ReadonlyRootfs:false},{Privileged:true}]){const i=configuredContainer(c,service);Object.assign(i.HostConfig,changed);assert.throws(()=>proof.assertContainerConfiguration(i,c,service),/^Error: CONFIG$/);}
+  }
+});
+
 test('baseline mount comparison ignores only property and mount order while preserving every value and multiplicity',()=>{
   const frozen=[{Type:'bind',Source:'/home/ubuntu/recordings',Destination:'/data',Mode:'ro',RW:false,Propagation:'rprivate'},{Type:'volume',Name:'recorder-cache',Source:'/var/lib/docker/volumes/recorder-cache/_data',Destination:'/cache',Driver:'local',Mode:'rw',RW:true,Propagation:'',Options:{Labels:{purpose:'cache',scope:'recorder'},Flags:['first','second']}}];
   const reordered=frozen.toReversed().map(mount=>Object.fromEntries(Object.entries(mount).reverse()));reordered[0].Options=Object.fromEntries(Object.entries(reordered[0].Options).reverse());reordered[0].Options.Labels={scope:'recorder',purpose:'cache'};
