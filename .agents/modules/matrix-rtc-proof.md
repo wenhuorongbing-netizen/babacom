@@ -59,11 +59,11 @@ Matrix登录token注销必须独立验证；注销/停服不等于已签发OpenI
 
 本次能力修复先独立合并现有模块与 `docs/04-open-decisions.md`，再只改 `compose.yaml`、`proof.mjs`、`proof.test.mjs`；独立审查和托管检查通过后合并。随后最多两个全新固定官方 Caddy 诊断容器：先 validate，成功且独立超时清理实证有效后才以另一个容器 run≤5秒。仅只读现有实验 TLS、network=none、无发布端口、原始输出仅受限 RAM；诊断容器、Node/CLI与辅助进程合计仍硬限≤0.2 CPU/268435456字节，总期限≤120秒、清理≤60秒；只向既有 `/opt/babacom-matrix-rtc-e1/events/caddy-startup-diagnostic-20261019.jsonl` 追加脱敏归属与结果。失败即停，保留旧 FAIL 实验及业务；诊断通过不能代替完整 R0、可信 TLS 链路或媒体验收。
 
-### 新批次隔离（2026-10-20候选）
+### 新批次隔离（2026-10-20 e3候选，待签认）
 
-旧e1的目录、四个停止容器、DB、应用秘密、运行合同与历史证据原位保留，不重启、覆盖、重命名或删除。新e2固定使用独立目录/Compose项目、全新run ID、DB和应用秘密；不增加可配置根目录或通用批次管理器。新实验可只读复用e1已核定摘要的官方Node二进制，并将同一实验域名的既有TLS证书/私钥以独占创建方式复制到e2受保护目录；不复用旧账号/令牌或应用秘密。
+旧e1和已停止e2的目录、容器、DB、应用秘密、运行合同与历史证据原位保留，不重启、覆盖、重命名或删除。新e3固定使用独立目录/Compose项目、全新run ID、DB和应用秘密；不增加可配置根目录或通用批次管理器。新实验可只读复用e1已核定摘要的官方Node二进制，并将同一实验域名的既有TLS证书/私钥以独占创建方式复制到e3受保护目录；不复用旧账号/令牌或应用秘密。
 
-先独立审查、签认并可信合并本模块与既有04中的最小契约修订，再只修改既有compose.yaml、proof.mjs、proof.test.mjs。回归必须拒绝旧e1/混合归属及旧挂载；e2冲突仍BUSY，不重试换名。执行前重新冻结具体运行合同、源文件摘要、资源/旧服务基线和退出保障，e1只读快照前后核对；上述门槛不齐不启动。沿用原TLS/18443 loopback、日志、零媒体、资源及120秒/60秒约定；通过Caddy诊断不代表完整R0通过。
+先独立审查、签认并可信合并本模块与既有04中的最小契约修订，再只修改既有compose.yaml、proof.mjs、proof.test.mjs。回归必须拒绝旧e1/e2、混合归属及旧挂载；e3冲突仍BUSY，不重试换名。执行前重新冻结具体运行合同、源文件摘要、资源/旧服务基线和退出保障，e1/e2只读快照前后核对；上述门槛不齐不启动。沿用原TLS/18443 loopback、日志、零媒体、资源及120秒/60秒约定；通过Caddy诊断不代表完整R0通过。
 
 ## Validation（原候选接口；精简实现与真实运行尚未验证）
 
@@ -76,11 +76,11 @@ git diff --check
 
 范围生效、精确运行细节签认后，Linux宿主按序执行未来接口：
 ```bash
-node /opt/babacom-matrix-rtc-e2/proof.mjs preflight
-node /opt/babacom-matrix-rtc-e2/proof.mjs config
-node /opt/babacom-matrix-rtc-e2/proof.mjs up
-node /opt/babacom-matrix-rtc-e2/proof.mjs verify
-node /opt/babacom-matrix-rtc-e2/proof.mjs stop
+node /opt/babacom-matrix-rtc-e3/proof.mjs preflight
+node /opt/babacom-matrix-rtc-e3/proof.mjs config
+node /opt/babacom-matrix-rtc-e3/proof.mjs up
+node /opt/babacom-matrix-rtc-e3/proof.mjs verify
+node /opt/babacom-matrix-rtc-e3/proof.mjs stop
 ```
 
 `preflight/config`必须证明归属、秘密权限、固定摘要/平台、TLS/精确loopback入口与拟定资源限制；`up`≤120秒，创建容器后、就绪验收和验证请求前实查实际cgroups，不符即停自有实验。`verify`执行上述预算，任何失败非零退出；`stop`≤60秒且保留数据。当前缺失的域名/端口/证书/代理摘要/止损阈值须作为拒绝用例，不以默认值运行。
