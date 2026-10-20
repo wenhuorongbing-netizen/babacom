@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
-const ROOT='/opt/babacom-matrix-rtc-e2', PROJECT='babacom-matrix-rtc-e2';
+const ROOT='/opt/babacom-matrix-rtc-e3', PROJECT='babacom-matrix-rtc-e3';
 const SERVICES=['synapse','livekit','auth','caddy'];
 const SOURCE_FILES=['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'];
 export const PINS=Object.freeze({
@@ -19,7 +19,7 @@ export const PINS=Object.freeze({
   livekit:{image:'docker.io/livekit/livekit-server@sha256:f63579e294b6dbf38e0e6151a24a5b425e9293e75e6d41959f470c957248b8a7',source:'0b3fd288e3ef3263ec475ba0d78cf3ad77459981'},
   caddy:{image:'docker.io/library/caddy@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229',source:'72dd0fb067f6d7826c7f79907670ba4a713bfe37'},
 });
-function requireFact(ok,code='CONTRACT'){if(!ok) throw new Error(code);}
+function requireFact(ok,code='CONTRACT',reason){if(!ok)throw new Error(code,reason?{cause:new Error(reason)}:undefined);}
 export class Budget {
   constructor(ms,clock=()=>Number(process.hrtime.bigint())/1e6){requireFact(Number.isFinite(ms)&&ms>0);this.clock=clock;this.end=clock()+ms;}
   static fromDeadline(end){const budget=new Budget(1);requireFact(Number.isFinite(end),'DEADLINE');budget.end=end;budget.remaining();return budget;}
@@ -52,7 +52,7 @@ export function validateContract(c,action){
   return c;
 }
 const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','command','scan','openid_ttl','jwt_remaining','shared_cpu_milli','shared_memory_bytes','log_connection','log_success','log_tls','log_handshake','log_timeout']);
-const ERRORS=new Set(['OK','M_FORBIDDEN','M_UNAUTHORIZED','M_UNKNOWN_TOKEN','FAIL','HOLD','UNKNOWN','DEADLINE','CONTRACT','BUSY']);
+const ERRORS=new Set(['OK','M_FORBIDDEN','M_UNAUTHORIZED','M_UNKNOWN_TOKEN','FAIL','HOLD','UNKNOWN','DEADLINE','CONTRACT','BUSY','OLD_CPU','OLD_MEMORY','SHARED_CPU','SHARED_MEMORY','BASELINE','RESOURCES','ATTACH','LEAK','CONFIG','DNS','READINESS','SOURCE','NODE','TLS','NETWORK','CONNECTION','COMMAND','STATE','OWNERSHIP','SHIM','ADMIN','AUX_CGROUP','BODY','BODY_LIMIT','CANCELLED','DENIAL','HOST','HTTP','IDENTITY','IMAGE','INCAPABLE','JOIN','JWT','LOG_ADMISSION','LOG_DRIVER','LOG_FILE','LOGOUT','MEMBERSHIP','MOUNTS','OPENID','OUTPUT_LIMIT','PERMISSIONS','PERSISTENCE','PLATFORM','PORT','SFU','SFU_URL','SIGNAL','START','SWAP','TEMPLATE','TRACKS','TTL','WRONG_SUBJECT']);
 function normalizedLog(text){return text.replace(/%([a-f\d]{2})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))).replace(/\\u([a-f\d]{4})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))).replace(/\\([\\/"bfnrt])/g,(_,value)=>({b:'\b',f:'\f',n:'\n',r:'\r',t:'\t'}[value]??value));}
 export class SafeEvents {
   constructor(write){this.write=write;this.bytes=0;this.chunks=0;this.markers=new Set();this.tails=new Map();this.observed=0;this.leak=false;this.unknownDiscarded=false;}
@@ -79,6 +79,7 @@ export class SafeEvents {
     }finally{fs.closeSync(fd);}
   }
   event(service,event,status=0,errcode='OK',count=1){
+    if(errcode instanceof Error){let error=errcode;errcode='UNKNOWN';for(let depth=0;depth<8&&error instanceof Error;depth++,error=error.cause)if(error.message!=='OK'&&ERRORS.has(error.message))errcode=error.message;}
     if(event==='chunks'&&this.chunks>1)return;
     this.write({service:SERVICES.includes(service)?service:'verifier',event:EVENTS.has(event)?event:'unknown',status:Number.isInteger(status)&&status>=0&&status<600?status:0,errcode:ERRORS.has(errcode)?errcode:'UNKNOWN',count:Number.isSafeInteger(count)&&count>=0?count:0});
   }
@@ -202,9 +203,9 @@ export async function sampleResources(c,rows,budget,{read=sharedIO.read,now=()=>
   const before=rows.map(row=>{const start=counters(row);requireFact(start.usage>=(row.cpuUsageUsec??0)&&start.usage>=(previous.get(row.cgroup)??0),'UNKNOWN');return {row,start,at:now()};});
   await sleep(budget.remaining(100));let sharedCpu=0,sharedMemory=0;
   for(const {row,start,at} of before){budget.remaining();const end=counters(row),elapsed=now()-at;requireFact(Number.isFinite(elapsed)&&elapsed>0&&end.usage>=start.usage,'UNKNOWN');const cpu=(end.usage-start.usage)/elapsed*100,growth=Math.max(0,Math.max(start.memory,end.memory)-row.memoryUsageBytes);requireFact(Number.isFinite(cpu)&&Number.isFinite(growth),'HOLD');previous.set(row.cgroup,end.usage);
-    if(row.kind==='shared'){sharedCpu+=cpu;sharedMemory+=growth;}else requireFact(cpu<=c.thresholds.maxOldCpuPercent&&growth<=c.thresholds.maxOldMemoryGrowth,'FAIL');
+    if(row.kind==='shared'){sharedCpu+=cpu;sharedMemory+=growth;}else{requireFact(cpu<=c.thresholds.maxOldCpuPercent,'FAIL','OLD_CPU');requireFact(growth<=c.thresholds.maxOldMemoryGrowth,'FAIL','OLD_MEMORY');}
   }
-  requireFact(Number.isSafeInteger(sharedMemory)&&sharedCpu<=c.sharedRuntime.maxCpuPercent&&sharedMemory<=c.sharedRuntime.maxMemoryGrowth,'FAIL');return {sharedCpu,sharedMemory};
+  requireFact(Number.isSafeInteger(sharedMemory),'FAIL');requireFact(sharedCpu<=c.sharedRuntime.maxCpuPercent,'FAIL','SHARED_CPU');requireFact(sharedMemory<=c.sharedRuntime.maxMemoryGrowth,'FAIL','SHARED_MEMORY');return {sharedCpu,sharedMemory};
 }
 export function sameMounts(actual,frozen){
   if(!Array.isArray(actual)||!Array.isArray(frozen)||actual.length!==frozen.length)return false;
@@ -346,7 +347,7 @@ export class ResourceWatch {
   constructor(sample,budget,interval){this.read=sample;this.budget=budget;this.interval=interval;this.controller=new AbortController();this.timer=null;this.pending=null;this.fault=null;this.closed=false;budget.guard=()=>{this.check();requireFact(!this.closed,'CANCELLED');};budget.signal=this.controller.signal;}
   check(){if(this.fault)throw this.fault;}
   async sample(){
-    this.check();requireFact(!this.closed,'FAIL');if(!this.pending)this.pending=(async()=>{try{await this.read(this.budget);this.budget.remaining();}catch(error){if(!(this.closed&&error.message==='CANCELLED')){this.fault??=new Error(['FAIL','HOLD','UNKNOWN','DEADLINE'].includes(error.message)?error.message:'HOLD');this.controller.abort();}}finally{this.pending=null;}})();
+    this.check();requireFact(!this.closed,'FAIL');if(!this.pending)this.pending=(async()=>{try{await this.read(this.budget);this.budget.remaining();}catch(error){if(!(this.closed&&error.message==='CANCELLED')){this.fault??=new Error(['FAIL','HOLD','UNKNOWN','DEADLINE'].includes(error.message)?error.message:'HOLD',{cause:error});this.controller.abort();}}finally{this.pending=null;}})();
     await this.pending;this.check();
   }
   schedule(){if(this.closed||this.fault)return;try{this.timer=setTimeout(()=>{this.timer=null;this.sample().catch(()=>{}).finally(()=>this.schedule());},this.budget.remaining(this.interval));}catch(error){this.fault??=new Error(error.message==='DEADLINE'?'DEADLINE':'HOLD');this.controller.abort();}}
@@ -360,6 +361,7 @@ export class Runtime {
   constructor(c,budget){this.c=c;this.budget=budget;this.startedAt=new Date().toISOString();this.attaches=new Map();this.connections=[];this.logCases=new Set();this.loggingAdmitted=false;this.events=new SafeEvents(event=>{
     fs.appendFileSync(ROOT+'/events/'+c.runId+'.jsonl',JSON.stringify({...event,time:new Date().toISOString()})+'\n',{mode:0o600,flag:'a'});
   });}
+  recordFailure(error){this.events.event('verifier','fault',0,this.monitor?.fault??error);}
   async start(budget){
     await preflight(this.c,budget);this.secrets=validateGenerated(this.c);for(const secret of this.secrets)this.events.watch(secret);
     requireFact(fs.readFileSync('/etc/hosts','utf8')===hostsText(this.c),'DNS');
@@ -611,7 +613,7 @@ async function runTask(c,budget){
     await runtime.start(budget);writeState(c,'READY',budget.end);ready=true;
     while(!requested){await runtime.audit(budget);await new Promise(r=>setTimeout(r,budget.remaining(250)));}
     writeState(c,'VERIFYING',budget.end);await runtime.verify(budget);await runtime.stop();runtime.events.event('verifier','gate',200,'OK',0);writeState(c,'VERIFIED',budget.end);
-  }catch{await runtime.stop().catch(()=>{});writeState(c,'FAIL',budget.end);throw new Error('FAIL');}
+  }catch(error){try{runtime.recordFailure(error);}catch{}await runtime.stop().catch(()=>{});writeState(c,'FAIL',budget.end);throw new Error('FAIL');}
   finally{if(runtime.monitor&&!runtime.monitor.closed&&runtime.cleanup)await runtime.monitor.close(runtime.cleanup);}
   // systemd ExecStopPost also runs after SIGKILL, timeout and synchronous failure.
 }

@@ -260,7 +260,7 @@ test('observed TTL events contain positive returned OpenID seconds and JWT remai
 });
 
 function contract() {
-  return { host: 'lhins-af0ntal8', root: '/opt/babacom-matrix-rtc-e2', project: 'babacom-matrix-rtc-e2',
+  return { host: 'lhins-af0ntal8', root: '/opt/babacom-matrix-rtc-e3', project: 'babacom-matrix-rtc-e3',
     runId: 'a'.repeat(32), domain: 'rtc.example.org', port: 18443, certificateSource: 'operator-provisioned-public-chain',
     approved: true, logAdmission: true, machineUuid:'machine', fullAccessHomeservers: ['rtc.example.org:18443'], asHomeserver: 'rtc.example.org:18443',
     platform: 'linux/amd64', source: PINS, sourceHashes: Object.fromEntries(['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'].map(name=>[name,'f'.repeat(64)])), auxiliary: { unit: 'babacomrtc'+ 'a'.repeat(32)+'.slice', cgroup: '/sys/fs/cgroup/babacomrtc'+ 'a'.repeat(32)+'.slice', cpu: .1, memory: 134217728 },
@@ -273,14 +273,14 @@ function contract() {
   };
 }
 
-test('fresh e2 contract cannot reuse e1 or a mixed deployment identity',()=>{
+test('fresh e3 contract cannot reuse e1, e2 or a mixed deployment identity',()=>{
   const c=contract();assert.equal(validateContract(c),c);
-  for(const [root,project] of [['/opt/babacom-matrix-rtc-e1','babacom-matrix-rtc-e1'],[c.root,'babacom-matrix-rtc-e1'],['/opt/babacom-matrix-rtc-e1',c.project],[c.root+'/other',c.project],[c.root,c.project+'-other']])assert.throws(()=>validateContract({...c,root,project}),/^Error: CONTRACT$/);
+  for(const [root,project] of [...['e1','e2'].flatMap(batch=>[['/opt/babacom-matrix-rtc-'+batch,'babacom-matrix-rtc-'+batch],[c.root,'babacom-matrix-rtc-'+batch],['/opt/babacom-matrix-rtc-'+batch,c.project]]),[c.root+'/other',c.project],[c.root,c.project+'-other']])assert.throws(()=>validateContract({...c,root,project}),/^Error: CONTRACT$/);
 });
 
-test('all e2 bind sources, templates and cleanup hooks stay outside retained e1',()=>{
+test('all e3 bind sources, templates and cleanup hooks stay outside retained e1/e2',()=>{
   const c=contract(),compose=fs.readFileSync(new URL('./compose.yaml',import.meta.url),'utf8');
-  assert.match(compose,/^name: babacom-matrix-rtc-e2$/m);
+  assert.match(compose,/^name: babacom-matrix-rtc-e3$/m);
   const sources=[...compose.matchAll(/\/opt\/[^:\s,\]]+(?=:\/)/g)].map(match=>match[0]);
   const names=['data','secrets/homeserver.yaml','secrets/appservice.yaml','secrets/log.config','secrets/livekit.yaml','secrets/appservice.yaml','secrets/livekit.key','secrets/livekit.secret','secrets/Caddyfile','secrets/tls.crt','secrets/tls.key'];
   assert.deepEqual(sources.sort(),names.map(name=>c.root+'/'+name).sort());
@@ -288,21 +288,24 @@ test('all e2 bind sources, templates and cleanup hooks stay outside retained e1'
   const args=proof.systemdArguments(c);
   assert.ok(args.includes('--property=BindReadOnlyPaths='+c.root+'/hosts:/etc/hosts'));
   assert.ok(args.includes('--property=ExecStopPost='+process.execPath+' '+c.root+'/proof.mjs __cleanup'));
-  assert.equal(args.some(value=>value.replaceAll(process.execPath,'<node>').includes('/opt/babacom-matrix-rtc-e1')),false);
+  for(const batch of ['e1','e2'])assert.equal(args.some(value=>value.replaceAll(process.execPath,'<node>').includes('/opt/babacom-matrix-rtc-'+batch)),false);
 });
 
-test('e2 cleanup refuses retained e1 receipt and containers before mutation',async()=>{
-  const c=contract(),old={...c,root:'/opt/babacom-matrix-rtc-e1',project:'babacom-matrix-rtc-e1'},r=receipt(old);let inspectedCount=0,mutations=0;
-  assert.equal(await stopOwned(c,r,new Budget(1000),{machine:()=>c.machineUuid,inspect:async()=>{inspectedCount++;},stop:async()=>{mutations++;},unpause:async()=>{mutations++;}}),'UNKNOWN');
-  assert.equal(inspectedCount,0);assert.equal(mutations,0);
-  for(const row of r.containers)assert.throws(()=>assertOwned(inspected(old,row),c,row.service),/^Error: UNKNOWN$/);
+test('e3 cleanup refuses retained e1/e2 receipts and containers before mutation',async()=>{
+  const c=contract();
+  for(const batch of ['e1','e2']){
+    const old={...c,root:'/opt/babacom-matrix-rtc-'+batch,project:'babacom-matrix-rtc-'+batch},r=receipt(old);let inspectedCount=0,mutations=0;
+    assert.equal(await stopOwned(c,r,new Budget(1000),{machine:()=>c.machineUuid,inspect:async()=>{inspectedCount++;},stop:async()=>{mutations++;},unpause:async()=>{mutations++;}}),'UNKNOWN');
+    assert.equal(inspectedCount,0);assert.equal(mutations,0);
+    for(const row of r.containers)assert.throws(()=>assertOwned(inspected(old,row),c,row.service),/^Error: UNKNOWN$/);
+  }
 });
 
-test('e2 actual mounts cannot refer to retained e1 secrets or database',()=>{
+test('e3 actual mounts cannot refer to retained e1/e2 secrets or database',()=>{
   const c=contract();
   for(const service of ['synapse','livekit','auth','caddy']){
     const i=configuredContainer(c,service);assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,service));
-    for(let index=0;index<i.Mounts.length;index++){const copy=structuredClone(i);copy.Mounts[index].Source=copy.Mounts[index].Source.replace(c.root,'/opt/babacom-matrix-rtc-e1');assert.throws(()=>proof.assertContainerConfiguration(copy,c,service),/^Error: MOUNTS$/);}
+    for(const batch of ['e1','e2'])for(let index=0;index<i.Mounts.length;index++){const copy=structuredClone(i);copy.Mounts[index].Source=copy.Mounts[index].Source.replace(c.root,'/opt/babacom-matrix-rtc-'+batch);assert.throws(()=>proof.assertContainerConfiguration(copy,c,service),/^Error: MOUNTS$/);}
   }
 });
 
@@ -360,6 +363,41 @@ test('shared cpu.stat and memory.current samples enforce aggregate growth and re
   for(const bad of ['usage_usec NaN','usage_usec 9007199254740992','usage_usec -1','user_usec 1','usage_usec 1000\nusage_usec NaN'])await assert.rejects(sample({bad}));await assert.rejects(sample({fail:true}));
   await assert.rejects(sample({memory:'NaN'}));await assert.rejects(sample({memory:9007199254740992}));
 });
+test('resource failure evidence retains the specific stop reason across monitor normalization',async()=>{
+  for(const [kind,cpu,memory,want] of [['old',200000,1001000,'OLD_CPU'],['old',2000,200000000,'OLD_MEMORY'],['shared',200000,1001000,'SHARED_CPU'],['shared',2000,200000000,'SHARED_MEMORY']]){
+    const c=contract(),rows=[{...c.sharedRuntime.services[0],kind}],events=[],budget=new Budget(1000);let now=0;
+    const watch=new proof.ResourceWatch(()=>proof.sampleResources(c,rows,new Budget(1000,()=>now/1000),{now:()=>now,sleep:async()=>{now=100000;},read:file=>file.endsWith('/cpu.stat')?'usage_usec '+(now?cpu:1000)+'\n':String(memory),previous:new Map()}),budget,1000);
+    try{
+      await assert.rejects(watch.start(),/FAIL/);assert.equal(watch.controller.signal.aborted,true);assert.throws(()=>budget.remaining(),/FAIL/);
+      new SafeEvents(row=>events.push(row)).event('verifier','fault',0,watch.fault);
+      assert.deepEqual(events,[{service:'verifier',event:'fault',status:0,errcode:want,count:1}]);
+    }finally{await watch.close();}
+  }
+});
+test('failure events retain fixed enums without exposing arbitrary error messages or stacks',()=>{
+  const rows=[],events=new SafeEvents(row=>rows.push(row)),secret='incapable-secret-in-error';
+  events.event('verifier','fault',0,new Error('HOLD',{cause:new Error(secret)}));
+  events.event('verifier','fault',0,new Error(secret));
+  events.event('verifier','fault',0,{message:'OLD_CPU'});
+  const cycle=new Error('FAIL');cycle.cause=cycle;events.event('verifier','fault',0,cycle);
+  events.event('verifier','fault',0,new Error('FAIL',{cause:new Error('OK')}));
+  assert.deepEqual(rows.map(row=>row.errcode),['HOLD','UNKNOWN','UNKNOWN','FAIL','FAIL']);
+  assert.equal(JSON.stringify(rows).includes(secret),false);assert.equal(rows.some(row=>'stack' in row||'cause' in row||'message' in row),false);
+});
+test('runtime failure evidence preserves fixed admission and protocol failures',()=>{
+  const rows=[],runtime=new proof.Runtime(contract(),new Budget(1000));runtime.events=new SafeEvents(row=>rows.push(row));
+  const codes=['ADMIN','AUX_CGROUP','BODY','BODY_LIMIT','CANCELLED','DENIAL','HOST','HTTP','IDENTITY','IMAGE','INCAPABLE','JOIN','JWT','LOG_ADMISSION','LOG_DRIVER','LOG_FILE','LOGOUT','MEMBERSHIP','MOUNTS','OPENID','OUTPUT_LIMIT','PERMISSIONS','PERSISTENCE','PLATFORM','PORT','SFU','SFU_URL','SIGNAL','START','SWAP','TEMPLATE','TRACKS','TTL','WRONG_SUBJECT'];
+  for(const code of codes)runtime.recordFailure(new Error(code));
+  assert.deepEqual(rows.map(row=>row.errcode),codes);
+  for(const [check,want] of [
+    [()=>proof.assertPinnedImage({Os:'linux',Architecture:'arm64',RepoDigests:[PINS.synapse.image]},'synapse'),'IMAGE'],
+    [()=>{const c=contract(),i=configuredContainer(c,'caddy');i.HostConfig.PortBindings={};proof.assertContainerConfiguration(i,c,'caddy');},'PORT'],
+    [()=>{const c=contract(),i=configuredContainer(c,'synapse');i.Mounts[0].Source='/other';proof.assertContainerConfiguration(i,c,'synapse');},'MOUNTS'],
+    [()=>validateContract({...contract(),logging:{}}),'LOG_ADMISSION']
+  ]){let failure;try{check();}catch(error){failure=error;}assert.ok(failure instanceof Error);runtime.recordFailure(failure);assert.equal(rows.at(-1).errcode,want);}
+  runtime.recordFailure(new Error('PERMISSIONS incapable-secret'));
+  assert.equal(rows.at(-1).errcode,'UNKNOWN');assert.equal(JSON.stringify(rows).includes('incapable-secret'),false);
+});
 test('shared service restart, PID reuse and cgroup identity drift cannot pass measurement admission',async()=>{
   const c=contract();
   const io={show:async row=>({ActiveState:'active',SubState:'running',MainPID:String(row.pid),InvocationID:row.invocationId,ControlGroup:row.cgroup.slice('/sys/fs/cgroup'.length)}),read:file=>file.endsWith('/cmdline')?(file.includes('/100/')?'dockerd\0':'containerd\0'):file.endsWith('/stat')?'100 (daemon name) S '+'0 '.repeat(18)+'1000':'0::'+c.sharedRuntime.services.find(row=>file.includes('/'+row.pid+'/')).cgroup.slice('/sys/fs/cgroup'.length),stat:group=>({ino:c.sharedRuntime.services.find(row=>row.cgroup===group).inode,isDirectory:()=>true,isSymbolicLink:()=>false}),realpath:group=>group};
@@ -388,6 +426,15 @@ test('resource failure aborts an actual pending HTTP request before the client t
   const server=http.createServer();server.listen(0,'127.0.0.1');await once(server,'listening');let count=0;const budget=new Budget(2000),watch=new proof.ResourceWatch(async()=>{if(++count===2)throw Error('FAIL');},budget,1000);await watch.start();
   const observed=once(server,'request'),result=httpRequest(`http://127.0.0.1:${server.address().port}`,{allowHttpFixture:true,signal:budget.signal,timeout:2000}).catch(error=>error);const [request]=await observed;let closed=false;request.socket.once('close',()=>{closed=true;});
   try{await assert.rejects(watch.sample(),/FAIL/);assert.equal((await result).message,'NETWORK');await new Budget(500).waitFor(()=>closed);}finally{await watch.close();server.closeAllConnections();server.close();}
+});
+test('failure evidence preserves the resource reason after real HTTP cancellation',async()=>{
+  const server=http.createServer();server.listen(0,'127.0.0.1');await once(server,'listening');let count=0;const budget=new Budget(2000),watch=new proof.ResourceWatch(async()=>{if(++count===2)throw new Error('FAIL',{cause:new Error('SHARED_CPU')});},budget,1000);await watch.start();
+  const observed=once(server,'request'),result=httpRequest(`http://127.0.0.1:${server.address().port}`,{allowHttpFixture:true,signal:budget.signal,timeout:2000}).catch(error=>error);const [request]=await observed;let closed=false;request.socket.once('close',()=>{closed=true;});
+  try{
+    await assert.rejects(watch.sample(),/FAIL/);const error=await result;assert.equal(error.message,'NETWORK');await new Budget(500).waitFor(()=>closed);
+    const rows=[],runtime=new proof.Runtime(contract(),budget);runtime.monitor=watch;runtime.events=new SafeEvents(row=>rows.push(row));runtime.recordFailure(error);
+    assert.deepEqual(rows,[{service:'verifier',event:'fault',status:0,errcode:'SHARED_CPU',count:1}]);
+  }finally{await watch.close();server.closeAllConnections();server.close();}
 });
 test('normal sampler shutdown waits for its outstanding real child without creating a resource fault or leaving work',async()=>{
   const server=net.createServer();server.listen(0,'127.0.0.1');await once(server,'listening');let calls=0,closed=false;const budget=new Budget(2000),watch=new proof.ResourceWatch(async current=>{if(++calls===2)await command(process.execPath,[fileURLToPath(import.meta.url),'--fixture','hold',String(server.address().port)],{budget:current});},budget,1000);await watch.start();const sampling=watch.sample();const [socket]=await once(server,'connection');socket.on('error',()=>{});socket.once('close',()=>{closed=true;});const [data]=await once(socket,'data'),pid=Number(data.toString());
