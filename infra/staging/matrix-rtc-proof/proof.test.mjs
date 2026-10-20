@@ -288,7 +288,7 @@ test('all e2 bind sources, templates and cleanup hooks stay outside retained e1'
   const args=proof.systemdArguments(c);
   assert.ok(args.includes('--property=BindReadOnlyPaths='+c.root+'/hosts:/etc/hosts'));
   assert.ok(args.includes('--property=ExecStopPost='+process.execPath+' '+c.root+'/proof.mjs __cleanup'));
-  assert.equal(args.some(value=>value.includes('/opt/babacom-matrix-rtc-e1')),false);
+  assert.equal(args.some(value=>value.replaceAll(process.execPath,'<node>').includes('/opt/babacom-matrix-rtc-e1')),false);
 });
 
 test('e2 cleanup refuses retained e1 receipt and containers before mutation',async()=>{
