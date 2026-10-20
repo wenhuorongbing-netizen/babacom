@@ -384,6 +384,20 @@ test('failure events retain fixed enums without exposing arbitrary error message
   assert.deepEqual(rows.map(row=>row.errcode),['HOLD','UNKNOWN','UNKNOWN','FAIL','FAIL']);
   assert.equal(JSON.stringify(rows).includes(secret),false);assert.equal(rows.some(row=>'stack' in row||'cause' in row||'message' in row),false);
 });
+test('runtime failure evidence preserves fixed admission and protocol failures',()=>{
+  const rows=[],runtime=new proof.Runtime(contract(),new Budget(1000));runtime.events=new SafeEvents(row=>rows.push(row));
+  const codes=['ADMIN','AUX_CGROUP','BODY','BODY_LIMIT','CANCELLED','DENIAL','HOST','HTTP','IDENTITY','IMAGE','INCAPABLE','JOIN','JWT','LOG_ADMISSION','LOG_DRIVER','LOG_FILE','LOGOUT','MEMBERSHIP','MOUNTS','OPENID','OUTPUT_LIMIT','PERMISSIONS','PERSISTENCE','PLATFORM','PORT','SFU','SFU_URL','SIGNAL','START','SWAP','TEMPLATE','TRACKS','TTL','WRONG_SUBJECT'];
+  for(const code of codes)runtime.recordFailure(new Error(code));
+  assert.deepEqual(rows.map(row=>row.errcode),codes);
+  for(const [check,want] of [
+    [()=>proof.assertPinnedImage({Os:'linux',Architecture:'arm64',RepoDigests:[PINS.synapse.image]},'synapse'),'IMAGE'],
+    [()=>{const c=contract(),i=configuredContainer(c,'caddy');i.HostConfig.PortBindings={};proof.assertContainerConfiguration(i,c,'caddy');},'PORT'],
+    [()=>{const c=contract(),i=configuredContainer(c,'synapse');i.Mounts[0].Source='/other';proof.assertContainerConfiguration(i,c,'synapse');},'MOUNTS'],
+    [()=>validateContract({...contract(),logging:{}}),'LOG_ADMISSION']
+  ]){let failure;try{check();}catch(error){failure=error;}assert.ok(failure instanceof Error);runtime.recordFailure(failure);assert.equal(rows.at(-1).errcode,want);}
+  runtime.recordFailure(new Error('PERMISSIONS incapable-secret'));
+  assert.equal(rows.at(-1).errcode,'UNKNOWN');assert.equal(JSON.stringify(rows).includes('incapable-secret'),false);
+});
 test('shared service restart, PID reuse and cgroup identity drift cannot pass measurement admission',async()=>{
   const c=contract();
   const io={show:async row=>({ActiveState:'active',SubState:'running',MainPID:String(row.pid),InvocationID:row.invocationId,ControlGroup:row.cgroup.slice('/sys/fs/cgroup'.length)}),read:file=>file.endsWith('/cmdline')?(file.includes('/100/')?'dockerd\0':'containerd\0'):file.endsWith('/stat')?'100 (daemon name) S '+'0 '.repeat(18)+'1000':'0::'+c.sharedRuntime.services.find(row=>file.includes('/'+row.pid+'/')).cgroup.slice('/sys/fs/cgroup'.length),stat:group=>({ino:c.sharedRuntime.services.find(row=>row.cgroup===group).inode,isDirectory:()=>true,isSymbolicLink:()=>false}),realpath:group=>group};
