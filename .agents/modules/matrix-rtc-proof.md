@@ -1,6 +1,6 @@
 # matrix-rtc-proof — 同机零媒体 R0 候选
 
-状态：**范围与实现 PR119、PR125–128 已合并；真实 R0 启动 FAIL，原实验已停止。Caddy 最小能力修订已由 Jack 签认，独立审查和可信合并后生效。** 实施票 #124 的原候选保留在 `feat/matrix-rtc-r0-proof`（`ff4cd0933950dfb8e3afb8bef8b5d5eb7e9684e8`）。具体运行细节及负例未核定仍HOLD；关联 M04 #63、M10 #69、M29 #88。
+状态：**e3修订 PR133/134 已合并；e3真实 R0 启动 FAIL/SWAP，四容器已停止，清理钩子非零，完整退出验收未通过。下述e4/swap修订待Jack签认及可信合并，不据此启动。** 实施票 #124 的原候选保留在 `feat/matrix-rtc-r0-proof`（`ff4cd0933950dfb8e3afb8bef8b5d5eb7e9684e8`）。具体运行细节及负例未核定仍HOLD；关联 M04 #63、M10 #69、M29 #88。
 
 ## 目标与范围
 
@@ -25,7 +25,7 @@ infra/staging/matrix-rtc-proof/proof.test.mjs
 | 边界 | 约定与必须检查的事实 |
 |---|---|
 | 主机例外 | 仅 `lhins-af0ntal8` 的临时R0；授权与资源快照见[04](../../docs/04-open-decisions.md#matrix-rtc-e1-same-host-2026-10-16)，默认规则见[infra/AGENTS](../../infra/AGENTS.md)。不据此签收生产或媒体共置。 |
-| 归属 | 新批次仅 `/opt/babacom-matrix-rtc-e3`，Compose项目 `babacom-matrix-rtc-e3`；创建前核对目录不存在或归属明确，绑定主机/项目/镜像/全新run ID。全新合成DB、卷、应用秘密；独立Docker网络，无旧业务挂载、host网络或privileged。旧e1/e2现场按下文只读保留。 |
+| 归属 | 待签认新批次仅 `/opt/babacom-matrix-rtc-e4`，Compose项目 `babacom-matrix-rtc-e4`；创建前核对目录不存在或归属明确，绑定主机/项目/镜像/全新run ID。全新合成DB、卷、应用秘密；独立Docker网络，无旧业务挂载、host网络或privileged。旧e1/e2/e3现场按下文只读保留。 |
 | 容量 | 四个实验容器与Node/CLI及其验证辅助进程合计CPU quota/period≤1，memory限制总和≤1610612736字节；实查实际cgroups，不以Compose文本代替。共享Docker/containerd及shim开销按下文资源核算修订单独测量和止损，不计作已受实验硬限额封顶。启动前复核空间/内存/负载及旧服务基线；测量范围和止损阈值须随运行细节冻结，缺项即HOLD。 |
 | 故障/退出 | 超限、实验OOM或旧服务基线异常即停止本次自有实验；未知归属为UNKNOWN。只停确认归属的资源，保留合成DB/卷/秘密及追加证据；不停止旧服务、不全局down或删除卷。 |
 | TLS/入口 | 所有发布入口仅loopback，实际域名、精确端口、可信证书/取得方式、TLS代理平台摘要及访问方均待核定；缺项拒绝运行。严格验证证书链和主机名，另实测auth的OpenID入口；无跳过校验或安装自签CA，不改旧DNS/代理/防火墙，不新增公网端口。 |
@@ -61,11 +61,13 @@ Matrix登录token注销必须独立验证；注销/停服不等于已签发OpenI
 
 <a id="新批次隔离2026-10-20候选"></a>
 
-### 新批次隔离（2026-10-20 e3候选，待签认）
+### 新批次隔离（2026-10-20 e4/swap候选，待签认）
 
-旧e1和已停止e2的目录、容器、DB、应用秘密、运行合同与历史证据原位保留，不重启、覆盖、重命名或删除。新e3固定使用独立目录/Compose项目、全新run ID、DB和应用秘密；不增加可配置根目录或通用批次管理器。新实验可只读复用e1已核定摘要的官方Node二进制，并将同一实验域名的既有TLS证书/私钥以独占创建方式复制到e3受保护目录；不复用旧账号/令牌或应用秘密。
+旧e1/e2/e3的目录、容器、DB、应用秘密、运行合同与历史证据原位保留，不重启、覆盖、重命名或删除。新e4固定使用独立目录/Compose项目、全新run ID、DB和应用秘密；不增加可配置根目录或通用批次管理器。新实验可只读复用e1已核定摘要的官方Node二进制，并将同一实验域名的既有TLS证书/私钥以独占创建方式复制到e4受保护目录；不复用旧账号/令牌或应用秘密。
 
-先独立审查、签认并可信合并本模块与既有04中的最小契约修订，再只修改既有compose.yaml、proof.mjs、proof.test.mjs。回归必须拒绝旧e1/e2、混合归属及旧挂载；e3冲突仍BUSY，不重试换名。执行前重新冻结具体运行合同、源文件摘要、资源/旧服务基线和退出保障，e1/e2只读快照前后核对；上述门槛不齐不启动。沿用原TLS/18443 loopback、日志、零媒体、资源及120秒/60秒约定；通过Caddy诊断不代表完整R0通过。
+先独立审查、签认并可信合并本模块与既有04中的最小契约修订，再只修改既有compose.yaml、proof.mjs、proof.test.mjs。回归必须拒绝旧e1/e2/e3、混合归属及旧挂载；e4冲突仍BUSY，不重试换名。执行前重新冻结具体运行合同、源文件摘要、资源/旧服务基线和退出保障，e1/e2/e3只读快照前后核对；上述门槛不齐不启动。沿用原TLS/18443 loopback、日志、零媒体、资源及120秒/60秒约定；通过Caddy诊断不代表完整R0通过。
+
+四个新容器仅增加标准OCI注解 `org.systemd.property.MemorySwapMax: "uint64 0"`，使其自有systemd scope明确保持禁用swap；不接受其他注解或较宽值。创建后核对Docker实际注解，运行时从已确认归属的容器PID/cgroup核定对应scope，读取systemd的MemorySwapMax及内核memory.swap.max均为0；缺项、不符或归属不明即拒绝并清理自有实验，不重置预算。故障仅按固定服务/错误码留证，不输出原始路径/消息。禁止修改共享Docker/containerd、全局scope规则或旧服务，也不主动触发daemon-reload验证；不以Compose解析通过或上游缺陷记录替代真实R0及重载耐久性实测。执行前须重新核对旧服务基线，运行中及退出时发现异常仍FAIL，不把同期旧服务重启追认为基线匹配。
 
 ## Validation（原候选接口；精简实现与真实运行尚未验证）
 
@@ -78,11 +80,11 @@ git diff --check
 
 范围生效、精确运行细节签认后，Linux宿主按序执行未来接口：
 ```bash
-node /opt/babacom-matrix-rtc-e3/proof.mjs preflight
-node /opt/babacom-matrix-rtc-e3/proof.mjs config
-node /opt/babacom-matrix-rtc-e3/proof.mjs up
-node /opt/babacom-matrix-rtc-e3/proof.mjs verify
-node /opt/babacom-matrix-rtc-e3/proof.mjs stop
+node /opt/babacom-matrix-rtc-e4/proof.mjs preflight
+node /opt/babacom-matrix-rtc-e4/proof.mjs config
+node /opt/babacom-matrix-rtc-e4/proof.mjs up
+node /opt/babacom-matrix-rtc-e4/proof.mjs verify
+node /opt/babacom-matrix-rtc-e4/proof.mjs stop
 ```
 
 `preflight/config`必须证明归属、秘密权限、固定摘要/平台、TLS/精确loopback入口与拟定资源限制；`up`≤120秒，创建容器后、就绪验收和验证请求前实查实际cgroups，不符即停自有实验。`verify`执行上述预算，任何失败非零退出；`stop`≤60秒且保留数据。当前缺失的域名/端口/证书/代理摘要/止损阈值须作为拒绝用例，不以默认值运行。
