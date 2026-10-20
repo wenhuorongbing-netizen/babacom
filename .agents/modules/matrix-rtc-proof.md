@@ -25,7 +25,7 @@ infra/staging/matrix-rtc-proof/proof.test.mjs
 | 边界 | 约定与必须检查的事实 |
 |---|---|
 | 主机例外 | 仅 `lhins-af0ntal8` 的临时R0；授权与资源快照见[04](../../docs/04-open-decisions.md#matrix-rtc-e1-same-host-2026-10-16)，默认规则见[infra/AGENTS](../../infra/AGENTS.md)。不据此签收生产或媒体共置。 |
-| 归属 | 新批次仅 `/opt/babacom-matrix-rtc-e2`，Compose项目 `babacom-matrix-rtc-e2`；创建前核对目录不存在或归属明确，绑定主机/项目/镜像/全新run ID。全新合成DB、卷、应用秘密；独立Docker网络，无旧业务挂载、host网络或privileged。旧e1现场按下文只读保留。 |
+| 归属 | 新批次仅 `/opt/babacom-matrix-rtc-e3`，Compose项目 `babacom-matrix-rtc-e3`；创建前核对目录不存在或归属明确，绑定主机/项目/镜像/全新run ID。全新合成DB、卷、应用秘密；独立Docker网络，无旧业务挂载、host网络或privileged。旧e1/e2现场按下文只读保留。 |
 | 容量 | 四个实验容器与Node/CLI及其验证辅助进程合计CPU quota/period≤1，memory限制总和≤1610612736字节；实查实际cgroups，不以Compose文本代替。共享Docker/containerd及shim开销按下文资源核算修订单独测量和止损，不计作已受实验硬限额封顶。启动前复核空间/内存/负载及旧服务基线；测量范围和止损阈值须随运行细节冻结，缺项即HOLD。 |
 | 故障/退出 | 超限、实验OOM或旧服务基线异常即停止本次自有实验；未知归属为UNKNOWN。只停确认归属的资源，保留合成DB/卷/秘密及追加证据；不停止旧服务、不全局down或删除卷。 |
 | TLS/入口 | 所有发布入口仅loopback，实际域名、精确端口、可信证书/取得方式、TLS代理平台摘要及访问方均待核定；缺项拒绝运行。严格验证证书链和主机名，另实测auth的OpenID入口；无跳过校验或安装自签CA，不改旧DNS/代理/防火墙，不新增公网端口。 |
@@ -58,6 +58,8 @@ infra/staging/matrix-rtc-proof/proof.test.mjs
 Matrix登录token注销必须独立验证；注销/停服不等于已签发OpenID或LiveKit JWT立即失效。记录固定栈的实际TTL，停止后不重启复用该实验状态。上述例外不覆盖真实账号、产品、R1–R3或其他主机；保留原分支、数据库、秘密及全部历史证据。
 
 本次能力修复先独立合并现有模块与 `docs/04-open-decisions.md`，再只改 `compose.yaml`、`proof.mjs`、`proof.test.mjs`；独立审查和托管检查通过后合并。随后最多两个全新固定官方 Caddy 诊断容器：先 validate，成功且独立超时清理实证有效后才以另一个容器 run≤5秒。仅只读现有实验 TLS、network=none、无发布端口、原始输出仅受限 RAM；诊断容器、Node/CLI与辅助进程合计仍硬限≤0.2 CPU/268435456字节，总期限≤120秒、清理≤60秒；只向既有 `/opt/babacom-matrix-rtc-e1/events/caddy-startup-diagnostic-20261019.jsonl` 追加脱敏归属与结果。失败即停，保留旧 FAIL 实验及业务；诊断通过不能代替完整 R0、可信 TLS 链路或媒体验收。
+
+<a id="新批次隔离2026-10-20候选"></a>
 
 ### 新批次隔离（2026-10-20 e3候选，待签认）
 
