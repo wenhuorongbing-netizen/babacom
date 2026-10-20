@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
-const ROOT='/opt/babacom-matrix-rtc-e3', PROJECT='babacom-matrix-rtc-e3';
+const ROOT='/opt/babacom-matrix-rtc-e4', PROJECT='babacom-matrix-rtc-e4';
 const SERVICES=['synapse','livekit','auth','caddy'];
 const SOURCE_FILES=['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'];
 export const PINS=Object.freeze({
@@ -44,6 +44,7 @@ export function validateContract(c,action){
   requireFact(c.auxiliary.cpu>0&&c.auxiliary.cpu<=.2&&c.auxiliary.memory>0&&c.auxiliary.memory<=268435456);
   requireFact(c.thresholds&&['minFreeMemory','minFreeDisk','maxLoad','maxOldCpuPercent','maxOldMemoryGrowth'].every(k=>Number.isFinite(c.thresholds[k])&&c.thresholds[k]>0));
   requireFact(Array.isArray(c.baseline)&&c.baseline.length>0&&c.baseline.every(x=>/^[a-f0-9]{64}$/.test(x.id)&&typeof x.image==='string'&&x.status==='running'&&Array.isArray(x.mounts)));
+  requireFact(Array.isArray(c.nativeBaseline)&&c.nativeBaseline.length===5&&new Set(c.nativeBaseline.map(row=>row?.unit)).size===5&&c.nativeBaseline.every(row=>row&&/^maowo-[\w.@-]+\.service$/.test(row.unit)&&Number.isSafeInteger(row.pid)&&row.pid>1&&/^[a-f0-9]{32}$/.test(row.invocationId)),'BASELINE');
   requireFact(/^[a-f0-9]{64}$/.test(c.nodeSha256),'NODE');
   const metadata=row=>row&&typeof row.path==='string'&&path.isAbsolute(row.path)&&!row.path.split('/').includes('..')&&Number.isInteger(row.uid)&&row.uid>=0&&Number.isInteger(row.gid)&&row.gid>=0&&Number.isInteger(row.mode)&&row.mode>=0&&row.mode<=0o777&&Array.isArray(row.accessors)&&row.accessors.length>0&&row.accessors.every(x=>typeof x==='string'&&/^[a-zA-Z0-9_-]+$/.test(x));
   requireFact(c.persistence&&typeof c.persistence.corePattern==='string'&&c.persistence.corePattern.length>0&&c.persistence.corePattern.length<4096&&Array.isArray(c.persistence.locations)&&c.persistence.locations.length>0&&c.persistence.locations.every(x=>metadata(x)&&['swap','core-directory','core-handler'].includes(x.kind)),'PERSISTENCE');
@@ -96,6 +97,7 @@ export function assertResources(rows){
 }
 export function assertContainerConfiguration(i,c,service){
   assertOwned(i,c,service);const h=i.HostConfig;
+  requireFact(isDeepStrictEqual(h?.Annotations,{'org.systemd.property.MemorySwapMax':'uint64 0'}),'SWAP');
   requireFact(h?.LogConfig?.Type==='none'&&i.LogPath===''&&h.ReadonlyRootfs===true&&h.Privileged===false&&h.NetworkMode===c.project+'_isolated'&&h.CapDrop?.includes('ALL'),'CONFIG');
   const added=h.CapAdd??[],security=h.SecurityOpt;
   requireFact(Array.isArray(added)&&(service==='caddy'?added.length===1&&['NET_BIND_SERVICE','CAP_NET_BIND_SERVICE'].includes(added[0]):added.length===0),'CONFIG');
@@ -153,7 +155,7 @@ export function command(executable,args,{input,timeout=10000,budget}={}){
 function protectedFile(file,uid=0,mode,gid=uid){const s=fs.lstatSync(file);requireFact(s.isFile()&&!s.isSymbolicLink()&&s.uid===uid&&(mode===undefined?(s.mode&0o077)===0:(s.mode&0o777)===mode&&s.gid===gid),'PERMISSIONS');return s;}
 function privateDir(dir,uid=0){const s=fs.lstatSync(dir);requireFact(s.isDirectory()&&!s.isSymbolicLink()&&s.uid===uid&&(s.mode&0o077)===0,'PERMISSIONS');}
 function readContract(action){requireFact(process.platform==='linux'&&process.getuid()===0,'HOLD');privateDir(ROOT);protectedFile(`${ROOT}/runtime.json`);return validateContract(JSON.parse(fs.readFileSync(`${ROOT}/runtime.json`)),action);}
-function actualCgroup(dir){const cpu=fs.readFileSync(`${dir}/cpu.max`,'utf8').trim().split(/\s+/);const memory=Number(fs.readFileSync(`${dir}/memory.max`,'utf8').trim());requireFact(fs.readFileSync(`${dir}/memory.swap.max`,'utf8').trim()==='0','SWAP');return {cpu:Number(cpu[0])/Number(cpu[1]),memory};}
+function actualCgroup(dir,read=file=>fs.readFileSync(file,'utf8')){const cpu=read(`${dir}/cpu.max`).trim().split(/\s+/);const memory=Number(read(`${dir}/memory.max`).trim());requireFact(read(`${dir}/memory.swap.max`).trim()==='0','SWAP');return {cpu:Number(cpu[0])/Number(cpu[1]),memory};}
 function ownAux(c){
   const rel=fs.readFileSync('/proc/self/cgroup','utf8').trim().split('\n').find(x=>x.startsWith('0::'))?.slice(3),current=rel&&path.resolve('/sys/fs/cgroup'+rel);
   requireFact(current&&(current===c.auxiliary.cgroup||current.startsWith(c.auxiliary.cgroup+'/')),'AUX_CGROUP');
@@ -191,6 +193,20 @@ const sharedIO={
   show:async(row,budget)=>Object.fromEntries((await command('systemctl',['show',row.unit,'--property=ActiveState,SubState,MainPID,InvocationID,ControlGroup'],{budget})).trim().split('\n').map(line=>line.split('='))),
   read:(file)=>fs.readFileSync(file,'utf8'),stat:group=>fs.lstatSync(group),realpath:group=>fs.realpathSync(group)
 };
+export async function containerCgroup(c,i,budget,{read=sharedIO.read,show=async(unit,current)=>Object.fromEntries((await command('systemctl',['show',unit,'--property=Id,ActiveState,SubState,ControlGroup,MemorySwapMax'],{budget:current})).trim().split('\n').map(line=>line.split('=')))}={}){
+  assertOwned(i,c,i?.Config?.Labels?.['com.docker.compose.service']);
+  try{
+    budget.remaining();requireFact(i.State?.Running&&Number.isSafeInteger(i.State.Pid)&&i.State.Pid>1&&!i.State.OOMKilled,'RESOURCES');
+    const unit='docker-'+i.Id+'.scope',rel='/system.slice/'+unit,group='/sys/fs/cgroup'+rel;
+    requireFact(read('/proc/'+i.State.Pid+'/cgroup').trim()==='0::'+rel,'UNKNOWN');
+    const state=await show(unit,budget);budget.remaining();
+    requireFact(state.Id===unit&&state.ActiveState==='active'&&state.SubState==='running'&&state.ControlGroup===rel,'UNKNOWN');
+    requireFact(state.MemorySwapMax==='0','SWAP');const resources=actualCgroup(group,read);budget.remaining();return {cgroup:group,...resources};
+  }catch(error){throw new Error(['SWAP','UNKNOWN','RESOURCES','DEADLINE','FAIL','CANCELLED'].includes(error.message)?error.message:'HOLD');}
+}
+export async function assertNativeBaseline(c,budget,show=sharedIO.show){
+  for(const row of c.nativeBaseline){budget.remaining();const state=await show(row,budget);budget.remaining();requireFact(state.ActiveState==='active'&&state.SubState==='running'&&state.MainPID===String(row.pid)&&state.InvocationID===row.invocationId,'FAIL','BASELINE');}
+}
 export async function sharedServiceRows(c,budget,io=sharedIO){
   const rows=[];for(const row of c.sharedRuntime.services){budget.remaining();const state=await io.show(row,budget),stat=io.stat(row.cgroup),proc=io.read('/proc/'+row.pid+'/stat');
     requireFact(state.ActiveState==='active'&&state.SubState==='running'&&state.MainPID===String(row.pid)&&state.InvocationID===row.invocationId&&'/sys/fs/cgroup'+state.ControlGroup===row.cgroup&&stat.isDirectory()&&!stat.isSymbolicLink()&&stat.ino===row.inode&&io.realpath(row.cgroup)===row.cgroup,'UNKNOWN');
@@ -215,6 +231,7 @@ export function sameMounts(actual,frozen){
 }
 async function baseline(c,budget){
   budget.remaining();
+  await assertNativeBaseline(c,budget);
   requireFact(os.freemem()>=c.thresholds.minFreeMemory&&os.loadavg()[0]<=c.thresholds.maxLoad,'BASELINE');
   const disk=fs.statfsSync(ROOT);requireFact(disk.bavail*disk.bsize>=c.thresholds.minFreeDisk,'BASELINE');
   const samples=[];
@@ -229,7 +246,7 @@ async function cgroups(c,containers,budget){
   budget.remaining();
   const rows=[ownAux(c)],groups=[c.auxiliary.cgroup],shims=[];
   for(const i of containers){assertOwned(i,c,i.Config.Labels['com.docker.compose.service']);requireFact(i.State.Running&&i.State.Pid>0&&!i.State.OOMKilled,'RESOURCES');
-    const rel=fs.readFileSync(`/proc/${i.State.Pid}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3);requireFact(rel,'RESOURCES');const group='/sys/fs/cgroup'+rel.trim();groups.push(group);rows.push(actualCgroup(group));
+    const resources=await containerCgroup(c,i,budget);groups.push(resources.cgroup);rows.push(resources);
     const status=fs.readFileSync(`/proc/${i.State.Pid}/status`,'utf8');const parent=Number(status.match(/^PPid:\s+(\d+)/m)?.[1]);requireFact(parent>1,'SHIM');
     const args=fs.readFileSync(`/proc/${parent}/cmdline`,'utf8').split('\0');
     const shimRel=fs.readFileSync(`/proc/${parent}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3).trim();shims.push({id:i.Id,args,group:'/sys/fs/cgroup'+shimRel});
@@ -247,7 +264,7 @@ async function preflight(c,budget,{port=true}={}){
   protectedFile(`${ROOT}/secrets/tls.key`);protectedFile(`${ROOT}/secrets/tls.crt`);
   const cert=fs.readFileSync(`${ROOT}/secrets/tls.crt`);requireFact(crypto.createHash('sha256').update(cert).digest('hex')===c.certificateSha256,'TLS');
   const x=new crypto.X509Certificate(cert);requireFact(x.checkHost(c.domain)&&Date.parse(x.validTo)>Date.now(),'TLS');
-  const info=JSON.parse(await command('docker',['info','--format','{{json .}}'],{budget}));requireFact(info.OSType==='linux'&&info.Architecture==='x86_64'&&info.CgroupVersion==='2','PLATFORM');
+  const info=JSON.parse(await command('docker',['info','--format','{{json .}}'],{budget}));requireFact(info.OSType==='linux'&&info.Architecture==='x86_64'&&info.CgroupVersion==='2'&&info.CgroupDriver==='systemd','PLATFORM');
   for(const [service,p] of Object.entries(PINS)){const i=JSON.parse(await command('docker',['image','inspect',p.image],{budget}))[0];assertPinnedImage(i,service);}
   if(port)await new Promise((resolve,reject)=>{const s=net.createServer();s.once('error',()=>reject(new Error('BUSY')));s.listen(c.port,'127.0.0.1',()=>s.close(resolve));});
   budget.remaining();

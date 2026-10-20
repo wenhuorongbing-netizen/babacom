@@ -127,7 +127,7 @@ test('pinned Linux amd64 images accept only their exact captured Docker Hub dige
 });
 function configuredContainer(c,service){
   const i=inspected(c,receipt(c).containers.find(x=>x.service===service));
-  i.HostConfig={LogConfig:{Type:'none'},ReadonlyRootfs:true,CapDrop:['ALL'],CapAdd:service==='caddy'?['NET_BIND_SERVICE']:[],SecurityOpt:['no-new-privileges'],Privileged:false,NetworkMode:c.project+'_isolated',PortBindings:service==='caddy'?{'18443/tcp':[{HostIp:'127.0.0.1',HostPort:'18443'}]}:{}};
+  i.HostConfig={LogConfig:{Type:'none'},ReadonlyRootfs:true,CapDrop:['ALL'],CapAdd:service==='caddy'?['NET_BIND_SERVICE']:[],SecurityOpt:['no-new-privileges'],Privileged:false,NetworkMode:c.project+'_isolated',PortBindings:service==='caddy'?{'18443/tcp':[{HostIp:'127.0.0.1',HostPort:'18443'}]}:{},Annotations:{'org.systemd.property.MemorySwapMax':'uint64 0'}};
   const names={caddy:['Caddyfile','tls.crt','tls.key'],synapse:['data','homeserver.yaml','appservice.yaml','log.config'],auth:['appservice.yaml','livekit.key','livekit.secret'],livekit:['livekit.yaml']}[service];
   i.LogPath='';i.Mounts=names.map(name=>name==='data'?{Type:'bind',Source:c.root+'/data',Destination:'/data',RW:true}:{Type:'bind',Source:c.root+'/secrets/'+name,Destination:'/run/secrets/'+name,RW:false});
   return i;
@@ -161,6 +161,34 @@ test('all RTC containers retain drop ALL, no-new-privileges and read-only isolat
     for(const SecurityOpt of [['no-new-privileges'],['no-new-privileges:true'],['no-new-privileges=true']]){const i=configuredContainer(c,service);i.HostConfig.SecurityOpt=SecurityOpt;assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,service));}
     for(const changed of [{CapDrop:[]},{SecurityOpt:[]},{SecurityOpt:['no-new-privileges:false']},{SecurityOpt:['no-new-privileges','no-new-privileges:false']},{ReadonlyRootfs:false},{Privileged:true}]){const i=configuredContainer(c,service);Object.assign(i.HostConfig,changed);assert.throws(()=>proof.assertContainerConfiguration(i,c,service),/^Error: CONFIG$/);}
   }
+});
+
+test('every new container requires exactly the signed zero-swap annotation',()=>{
+  const c=contract();
+  for(const service of ['synapse','auth','livekit','caddy']){
+    const i=configuredContainer(c,service);assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,service));
+    for(const Annotations of [undefined,null,{},[],{'org.systemd.property.MemorySwapMax':'0'},{'org.systemd.property.MemorySwapMax':'uint64 1'},{'org.systemd.property.MemorySwapMax':0},{'org.systemd.property.MemorySwapMax':'uint64 0',other:'uint64 0'}]){
+      const copy=structuredClone(i);copy.HostConfig.Annotations=Annotations;assert.throws(()=>proof.assertContainerConfiguration(copy,c,service),/^Error: SWAP$/);
+    }
+  }
+});
+
+test('owned container PID, systemd scope and kernel must agree on zero swap',async()=>{
+  assert.equal(typeof proof.containerCgroup,'function');
+  const c=contract(),i=configuredContainer(c,'caddy');i.State={Running:true,Pid:4321,OOMKilled:false};
+  const unit='docker-'+i.Id+'.scope',rel='/system.slice/'+unit,group='/sys/fs/cgroup'+rel;
+  const files={['/proc/4321/cgroup']:'0::'+rel+'\n',[group+'/cpu.max']:'20000 100000\n',[group+'/memory.max']:'301989888\n',[group+'/memory.swap.max']:'0\n'};
+  const state={Id:unit,ActiveState:'active',SubState:'running',ControlGroup:rel,MemorySwapMax:'0'};
+  const io={read:file=>{assert.ok(Object.hasOwn(files,file));return files[file];},show:async(name,budget)=>{assert.equal(name,unit);budget.remaining();return state;}};
+  assert.deepEqual(await proof.containerCgroup(c,i,new Budget(1000),io),{cgroup:group,cpu:.2,memory:301989888});
+  for(const MemorySwapMax of [undefined,'infinity','18446744073709551615','1'])await assert.rejects(proof.containerCgroup(c,i,new Budget(1000),{...io,show:async()=>({...state,MemorySwapMax})}),/^Error: SWAP$/);
+  files[group+'/memory.swap.max']='max\n';await assert.rejects(proof.containerCgroup(c,i,new Budget(1000),io),/^Error: SWAP$/);files[group+'/memory.swap.max']='0\n';
+  for(const changed of [{Id:'docker-'+c.baseline[0].id+'.scope'},{ControlGroup:'/other/'+unit},{ActiveState:'inactive'},{SubState:'dead'}])await assert.rejects(proof.containerCgroup(c,i,new Budget(1000),{...io,show:async()=>({...state,...changed})}),/^Error: UNKNOWN$/);
+  for(const value of ['0::/system.slice/docker-'+c.baseline[0].id+'.scope\n','0::'+rel+'/child\n','0::'+rel+'\n0::'+rel+'\n','0::/system.slice/../'+unit+'\n']){
+    let shown=false;await assert.rejects(proof.containerCgroup(c,i,new Budget(1000),{...io,read:file=>file==='/proc/4321/cgroup'?value:io.read(file),show:async()=>{shown=true;return state;}}),/^Error: UNKNOWN$/);assert.equal(shown,false);
+  }
+  await assert.rejects(proof.containerCgroup(c,i,new Budget(1000),{...io,read:()=>{throw Error('/private/raw-path');}}),/^Error: HOLD$/);
+  let clock=0;const budget=new Budget(10,()=>clock);await assert.rejects(proof.containerCgroup(c,i,budget,{...io,show:async()=>{clock=11;return state;}}),/^Error: DEADLINE$/);
 });
 
 test('baseline mount comparison ignores only property and mount order while preserving every value and multiplicity',()=>{
@@ -260,27 +288,29 @@ test('observed TTL events contain positive returned OpenID seconds and JWT remai
 });
 
 function contract() {
-  return { host: 'lhins-af0ntal8', root: '/opt/babacom-matrix-rtc-e3', project: 'babacom-matrix-rtc-e3',
+  return { host: 'lhins-af0ntal8', root: '/opt/babacom-matrix-rtc-e4', project: 'babacom-matrix-rtc-e4',
     runId: 'a'.repeat(32), domain: 'rtc.example.org', port: 18443, certificateSource: 'operator-provisioned-public-chain',
     approved: true, logAdmission: true, machineUuid:'machine', fullAccessHomeservers: ['rtc.example.org:18443'], asHomeserver: 'rtc.example.org:18443',
     platform: 'linux/amd64', source: PINS, sourceHashes: Object.fromEntries(['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'].map(name=>[name,'f'.repeat(64)])), auxiliary: { unit: 'babacomrtc'+ 'a'.repeat(32)+'.slice', cgroup: '/sys/fs/cgroup/babacomrtc'+ 'a'.repeat(32)+'.slice', cpu: .1, memory: 134217728 },
     thresholds: { minFreeMemory: 2000000000, minFreeDisk: 3000000000, maxLoad: 2, maxOldCpuPercent: 80, maxOldMemoryGrowth: 100000000 },
     sharedRuntime:{sampleIntervalMs:250,maxCpuPercent:100,maxMemoryGrowth:100000000,services:['docker','containerd'].map((name,index)=>({unit:name+'.service',invocationId:String(index+1).repeat(32),pid:100+index,startTime:'1000',cgroup:'/sys/fs/cgroup/system.slice/'+name+'.service',inode:100+index,cpuUsageUsec:1000,memoryUsageBytes:1000000}))},
     baseline: [{ id: 'b'.repeat(64), image: 'sha256:' + 'c'.repeat(64), status: 'running', mounts: [] }],
+    nativeBaseline:['control','gateway','relay','staging','staging-relay'].map((name,index)=>({unit:'maowo-'+name+'.service',pid:200+index,invocationId:String(index+3).repeat(32)})),
     accessors: ['operator-loopback'], certificateSha256: 'd'.repeat(64), nodeSha256:'e'.repeat(64),
     persistence:{corePattern:'core',locations:[{path:'/var/crash',kind:'core-directory',uid:0,gid:0,mode:448,accessors:['root']}]},
     logging:{coverage:['success','timeout','tls','connection','handshake','redirect'],bypasses:[{path:'/var/run/docker.sock',uid:0,gid:0,mode:384,kind:'socket',writesRaw:false,accessors:['root']}]}
   };
 }
 
-test('fresh e3 contract cannot reuse e1, e2 or a mixed deployment identity',()=>{
+test('fresh e4 contract cannot reuse e1, e2, e3 or a mixed deployment identity',()=>{
   const c=contract();assert.equal(validateContract(c),c);
-  for(const [root,project] of [...['e1','e2'].flatMap(batch=>[['/opt/babacom-matrix-rtc-'+batch,'babacom-matrix-rtc-'+batch],[c.root,'babacom-matrix-rtc-'+batch],['/opt/babacom-matrix-rtc-'+batch,c.project]]),[c.root+'/other',c.project],[c.root,c.project+'-other']])assert.throws(()=>validateContract({...c,root,project}),/^Error: CONTRACT$/);
+  for(const [root,project] of [...['e1','e2','e3'].flatMap(batch=>[['/opt/babacom-matrix-rtc-'+batch,'babacom-matrix-rtc-'+batch],[c.root,'babacom-matrix-rtc-'+batch],['/opt/babacom-matrix-rtc-'+batch,c.project]]),[c.root+'/other',c.project],[c.root,c.project+'-other']])assert.throws(()=>validateContract({...c,root,project}),/^Error: CONTRACT$/);
 });
 
-test('all e3 bind sources, templates and cleanup hooks stay outside retained e1/e2',()=>{
+test('all e4 bind sources, templates and cleanup hooks stay outside retained e1/e2/e3',()=>{
   const c=contract(),compose=fs.readFileSync(new URL('./compose.yaml',import.meta.url),'utf8');
-  assert.match(compose,/^name: babacom-matrix-rtc-e3$/m);
+  assert.match(compose,/^name: babacom-matrix-rtc-e4$/m);
+  assert.match(compose,/^  annotations: \{org\.systemd\.property\.MemorySwapMax: "uint64 0"\}$/m);
   const sources=[...compose.matchAll(/\/opt\/[^:\s,\]]+(?=:\/)/g)].map(match=>match[0]);
   const names=['data','secrets/homeserver.yaml','secrets/appservice.yaml','secrets/log.config','secrets/livekit.yaml','secrets/appservice.yaml','secrets/livekit.key','secrets/livekit.secret','secrets/Caddyfile','secrets/tls.crt','secrets/tls.key'];
   assert.deepEqual(sources.sort(),names.map(name=>c.root+'/'+name).sort());
@@ -288,12 +318,12 @@ test('all e3 bind sources, templates and cleanup hooks stay outside retained e1/
   const args=proof.systemdArguments(c);
   assert.ok(args.includes('--property=BindReadOnlyPaths='+c.root+'/hosts:/etc/hosts'));
   assert.ok(args.includes('--property=ExecStopPost='+process.execPath+' '+c.root+'/proof.mjs __cleanup'));
-  for(const batch of ['e1','e2'])assert.equal(args.some(value=>value.replaceAll(process.execPath,'<node>').includes('/opt/babacom-matrix-rtc-'+batch)),false);
+  for(const batch of ['e1','e2','e3'])assert.equal(args.some(value=>value.replaceAll(process.execPath,'<node>').includes('/opt/babacom-matrix-rtc-'+batch)),false);
 });
 
-test('e3 cleanup refuses retained e1/e2 receipts and containers before mutation',async()=>{
+test('e4 cleanup refuses retained e1/e2/e3 receipts and containers before mutation',async()=>{
   const c=contract();
-  for(const batch of ['e1','e2']){
+  for(const batch of ['e1','e2','e3']){
     const old={...c,root:'/opt/babacom-matrix-rtc-'+batch,project:'babacom-matrix-rtc-'+batch},r=receipt(old);let inspectedCount=0,mutations=0;
     assert.equal(await stopOwned(c,r,new Budget(1000),{machine:()=>c.machineUuid,inspect:async()=>{inspectedCount++;},stop:async()=>{mutations++;},unpause:async()=>{mutations++;}}),'UNKNOWN');
     assert.equal(inspectedCount,0);assert.equal(mutations,0);
@@ -301,12 +331,29 @@ test('e3 cleanup refuses retained e1/e2 receipts and containers before mutation'
   }
 });
 
-test('e3 actual mounts cannot refer to retained e1/e2 secrets or database',()=>{
+test('e4 actual mounts cannot refer to retained e1/e2/e3 secrets or database',()=>{
   const c=contract();
   for(const service of ['synapse','livekit','auth','caddy']){
     const i=configuredContainer(c,service);assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,service));
-    for(const batch of ['e1','e2'])for(let index=0;index<i.Mounts.length;index++){const copy=structuredClone(i);copy.Mounts[index].Source=copy.Mounts[index].Source.replace(c.root,'/opt/babacom-matrix-rtc-'+batch);assert.throws(()=>proof.assertContainerConfiguration(copy,c,service),/^Error: MOUNTS$/);}
+    for(const batch of ['e1','e2','e3'])for(let index=0;index<i.Mounts.length;index++){const copy=structuredClone(i);copy.Mounts[index].Source=copy.Mounts[index].Source.replace(c.root,'/opt/babacom-matrix-rtc-'+batch);assert.throws(()=>proof.assertContainerConfiguration(copy,c,service),/^Error: MOUNTS$/);}
   }
+});
+
+test('old native services require a complete frozen identity baseline',()=>{
+  const c=contract();
+  for(const change of [copy=>delete copy.nativeBaseline,copy=>copy.nativeBaseline=[],copy=>copy.nativeBaseline.pop(),copy=>copy.nativeBaseline[0].unit='docker.service',copy=>copy.nativeBaseline[1].unit=copy.nativeBaseline[0].unit,copy=>copy.nativeBaseline[0].pid=0,copy=>copy.nativeBaseline[0].invocationId='']){
+    const copy=structuredClone(c);change(copy);assert.throws(()=>validateContract(copy),/^Error: BASELINE$/);
+  }
+});
+test('a concurrent old native restart latches failure while receipt-owned cleanup continues',async()=>{
+  assert.equal(typeof proof.assertNativeBaseline,'function');
+  const c=contract(),r=receipt(c);let restart=false,reads=0;const stopped=[];
+  const show=async row=>{reads++;return {ActiveState:'active',SubState:'running',MainPID:String(row.pid),InvocationID:restart?'f'.repeat(32):row.invocationId};};
+  const budget=new Budget(1000),watch=new proof.ResourceWatch(current=>proof.assertNativeBaseline(c,current,show),budget,100);
+  await watch.sample();assert.equal(reads,5);restart=true;await assert.rejects(watch.sample(),/^Error: FAIL$/);assert.equal(watch.controller.signal.aborted,true);await watch.close(new Budget(1000));
+  const events=[];new SafeEvents(event=>events.push(event)).event('verifier','fault',0,watch.fault);assert.equal(events[0].errcode,'BASELINE');
+  const result=await stopOwned(c,r,new Budget(1000),{machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:!stopped.includes(id)}}),stop:async id=>stopped.push(id),sample:(_c,current)=>proof.assertNativeBaseline(c,current,show)});
+  assert.equal(result,'FAIL');assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));assert.throws(()=>watch.check(),/^Error: FAIL$/);
 });
 
 test('configuration can prepare protected files before explicit log admission',()=>{
