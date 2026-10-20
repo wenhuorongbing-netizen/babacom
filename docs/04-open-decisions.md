@@ -446,3 +446,9 @@ PR119已合并；#124原实现 `ff4cd0933950dfb8e3afb8bef8b5d5eb7e9684e8` 完整
 PR126–128已合并；真实R0启动FAIL，原四实验容器保持停止。新独立诊断实际validate退出126、OOM=false，内存错误分类为OPERATION_NOT_PERMITTED，文件能力为`cap_net_bind_service=ep`且CapBnd全零；第二阶段run按条件NOT_RUN。旧8个业务容器、5个原生服务与36条监听基线核对一致。该结果证明新诊断的exec权限冲突；原直接入口255高置信符合相同机制，修复尚未实测通过。证据只追加于服务器既有`events/caddy-startup-diagnostic-20261019.jsonl`，不追改历史或复用旧FAIL状态。
 
 Jack签认并授权[模块中的窄修订](../.agents/modules/matrix-rtc-proof.md#标准组件精简修订已签认可信合并后生效)：仅Caddy增加且仅增加NET_BIND_SERVICE，保留drop ALL、NNP、只读及全部原隔离限制，其他三服务不得增加能力。先本文件与现有模块独立文档PR审查、托管检查通过后合并，再修复既有compose.yaml、proof.mjs、proof.test.mjs，覆盖缺失/额外能力及其他服务越权，独立审查和托管检查通过后合并。之后按模块中已签认的两个全新Caddy条件式诊断复测；不新增治理文档、不重启原实验，不以诊断或CI替代完整RTC验收。
+
+#### 2026-10-20 旧现场保留与新批次隔离候选
+
+PR129/130已合并；2026-10-19获准的单个额外Caddy短启动完成，进程与隔离命名空间18443监听同时观测2292毫秒，3000毫秒期限停止、exit137且无OOM；独立复核容器PID0、实际run cgroup消失、控制进程无PID/Job，旧8容器/5服务/36监听和历史前缀保持。证据在e1既有诊断记录；该结果不证明HTTPS或完整R0。
+
+Jack要求继续修复旧实验目录冲突、保留现场和历史、不增加工具或文档。最小候选只改本文件与[原模块的新批次条款](../.agents/modules/matrix-rtc-proof.md#新批次隔离2026-10-20候选)：新e2固定目录/项目，全新DB、应用秘密与run ID；旧e1原位只读保留，仅复用已核定Node及受保护TLS副本。随后既有compose/proof/tests三文件实施，范围不扩；源摘要、实际运行合同、基线与退出保障重新核定。候选待独立审查、签认及可信合并；本条未启动e2，完整R0仍NOT_RUN。
