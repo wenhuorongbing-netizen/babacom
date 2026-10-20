@@ -360,6 +360,27 @@ test('shared cpu.stat and memory.current samples enforce aggregate growth and re
   for(const bad of ['usage_usec NaN','usage_usec 9007199254740992','usage_usec -1','user_usec 1','usage_usec 1000\nusage_usec NaN'])await assert.rejects(sample({bad}));await assert.rejects(sample({fail:true}));
   await assert.rejects(sample({memory:'NaN'}));await assert.rejects(sample({memory:9007199254740992}));
 });
+test('resource failure evidence retains the specific stop reason across monitor normalization',async()=>{
+  for(const [kind,cpu,memory,want] of [['old',200000,1001000,'OLD_CPU'],['old',2000,200000000,'OLD_MEMORY'],['shared',200000,1001000,'SHARED_CPU'],['shared',2000,200000000,'SHARED_MEMORY']]){
+    const c=contract(),rows=[{...c.sharedRuntime.services[0],kind}],events=[],budget=new Budget(1000);let now=0;
+    const watch=new proof.ResourceWatch(()=>proof.sampleResources(c,rows,new Budget(1000,()=>now/1000),{now:()=>now,sleep:async()=>{now=100000;},read:file=>file.endsWith('/cpu.stat')?'usage_usec '+(now?cpu:1000)+'\n':String(memory),previous:new Map()}),budget,1000);
+    try{
+      await assert.rejects(watch.start(),/FAIL/);assert.equal(watch.controller.signal.aborted,true);assert.throws(()=>budget.remaining(),/FAIL/);
+      new SafeEvents(row=>events.push(row)).event('verifier','fault',0,watch.fault);
+      assert.deepEqual(events,[{service:'verifier',event:'fault',status:0,errcode:want,count:1}]);
+    }finally{await watch.close();}
+  }
+});
+test('failure events retain fixed enums without exposing arbitrary error messages or stacks',()=>{
+  const rows=[],events=new SafeEvents(row=>rows.push(row)),secret='incapable-secret-in-error';
+  events.event('verifier','fault',0,new Error('HOLD',{cause:new Error(secret)}));
+  events.event('verifier','fault',0,new Error(secret));
+  events.event('verifier','fault',0,{message:'OLD_CPU'});
+  const cycle=new Error('FAIL');cycle.cause=cycle;events.event('verifier','fault',0,cycle);
+  events.event('verifier','fault',0,new Error('FAIL',{cause:new Error('OK')}));
+  assert.deepEqual(rows.map(row=>row.errcode),['HOLD','UNKNOWN','UNKNOWN','FAIL','FAIL']);
+  assert.equal(JSON.stringify(rows).includes(secret),false);assert.equal(rows.some(row=>'stack' in row||'cause' in row||'message' in row),false);
+});
 test('shared service restart, PID reuse and cgroup identity drift cannot pass measurement admission',async()=>{
   const c=contract();
   const io={show:async row=>({ActiveState:'active',SubState:'running',MainPID:String(row.pid),InvocationID:row.invocationId,ControlGroup:row.cgroup.slice('/sys/fs/cgroup'.length)}),read:file=>file.endsWith('/cmdline')?(file.includes('/100/')?'dockerd\0':'containerd\0'):file.endsWith('/stat')?'100 (daemon name) S '+'0 '.repeat(18)+'1000':'0::'+c.sharedRuntime.services.find(row=>file.includes('/'+row.pid+'/')).cgroup.slice('/sys/fs/cgroup'.length),stat:group=>({ino:c.sharedRuntime.services.find(row=>row.cgroup===group).inode,isDirectory:()=>true,isSymbolicLink:()=>false}),realpath:group=>group};
@@ -388,6 +409,15 @@ test('resource failure aborts an actual pending HTTP request before the client t
   const server=http.createServer();server.listen(0,'127.0.0.1');await once(server,'listening');let count=0;const budget=new Budget(2000),watch=new proof.ResourceWatch(async()=>{if(++count===2)throw Error('FAIL');},budget,1000);await watch.start();
   const observed=once(server,'request'),result=httpRequest(`http://127.0.0.1:${server.address().port}`,{allowHttpFixture:true,signal:budget.signal,timeout:2000}).catch(error=>error);const [request]=await observed;let closed=false;request.socket.once('close',()=>{closed=true;});
   try{await assert.rejects(watch.sample(),/FAIL/);assert.equal((await result).message,'NETWORK');await new Budget(500).waitFor(()=>closed);}finally{await watch.close();server.closeAllConnections();server.close();}
+});
+test('failure evidence preserves the resource reason after real HTTP cancellation',async()=>{
+  const server=http.createServer();server.listen(0,'127.0.0.1');await once(server,'listening');let count=0;const budget=new Budget(2000),watch=new proof.ResourceWatch(async()=>{if(++count===2)throw new Error('FAIL',{cause:new Error('SHARED_CPU')});},budget,1000);await watch.start();
+  const observed=once(server,'request'),result=httpRequest(`http://127.0.0.1:${server.address().port}`,{allowHttpFixture:true,signal:budget.signal,timeout:2000}).catch(error=>error);const [request]=await observed;let closed=false;request.socket.once('close',()=>{closed=true;});
+  try{
+    await assert.rejects(watch.sample(),/FAIL/);const error=await result;assert.equal(error.message,'NETWORK');await new Budget(500).waitFor(()=>closed);
+    const rows=[],runtime=new proof.Runtime(contract(),budget);runtime.monitor=watch;runtime.events=new SafeEvents(row=>rows.push(row));runtime.recordFailure(error);
+    assert.deepEqual(rows,[{service:'verifier',event:'fault',status:0,errcode:'SHARED_CPU',count:1}]);
+  }finally{await watch.close();server.closeAllConnections();server.close();}
 });
 test('normal sampler shutdown waits for its outstanding real child without creating a resource fault or leaving work',async()=>{
   const server=net.createServer();server.listen(0,'127.0.0.1');await once(server,'listening');let calls=0,closed=false;const budget=new Budget(2000),watch=new proof.ResourceWatch(async current=>{if(++calls===2)await command(process.execPath,[fileURLToPath(import.meta.url),'--fixture','hold',String(server.address().port)],{budget:current});},budget,1000);await watch.start();const sampling=watch.sample();const [socket]=await once(server,'connection');socket.on('error',()=>{});socket.once('close',()=>{closed=true;});const [data]=await once(socket,'data'),pid=Number(data.toString());
