@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
-const ROOT='/opt/babacom-matrix-rtc-e2', PROJECT='babacom-matrix-rtc-e2';
+const ROOT='/opt/babacom-matrix-rtc-e3', PROJECT='babacom-matrix-rtc-e3';
 const SERVICES=['synapse','livekit','auth','caddy'];
 const SOURCE_FILES=['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'];
 export const PINS=Object.freeze({

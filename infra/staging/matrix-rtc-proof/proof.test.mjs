@@ -260,7 +260,7 @@ test('observed TTL events contain positive returned OpenID seconds and JWT remai
 });
 
 function contract() {
-  return { host: 'lhins-af0ntal8', root: '/opt/babacom-matrix-rtc-e2', project: 'babacom-matrix-rtc-e2',
+  return { host: 'lhins-af0ntal8', root: '/opt/babacom-matrix-rtc-e3', project: 'babacom-matrix-rtc-e3',
     runId: 'a'.repeat(32), domain: 'rtc.example.org', port: 18443, certificateSource: 'operator-provisioned-public-chain',
     approved: true, logAdmission: true, machineUuid:'machine', fullAccessHomeservers: ['rtc.example.org:18443'], asHomeserver: 'rtc.example.org:18443',
     platform: 'linux/amd64', source: PINS, sourceHashes: Object.fromEntries(['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'].map(name=>[name,'f'.repeat(64)])), auxiliary: { unit: 'babacomrtc'+ 'a'.repeat(32)+'.slice', cgroup: '/sys/fs/cgroup/babacomrtc'+ 'a'.repeat(32)+'.slice', cpu: .1, memory: 134217728 },
@@ -273,14 +273,14 @@ function contract() {
   };
 }
 
-test('fresh e2 contract cannot reuse e1 or a mixed deployment identity',()=>{
+test('fresh e3 contract cannot reuse e1, e2 or a mixed deployment identity',()=>{
   const c=contract();assert.equal(validateContract(c),c);
-  for(const [root,project] of [['/opt/babacom-matrix-rtc-e1','babacom-matrix-rtc-e1'],[c.root,'babacom-matrix-rtc-e1'],['/opt/babacom-matrix-rtc-e1',c.project],[c.root+'/other',c.project],[c.root,c.project+'-other']])assert.throws(()=>validateContract({...c,root,project}),/^Error: CONTRACT$/);
+  for(const [root,project] of [...['e1','e2'].flatMap(batch=>[['/opt/babacom-matrix-rtc-'+batch,'babacom-matrix-rtc-'+batch],[c.root,'babacom-matrix-rtc-'+batch],['/opt/babacom-matrix-rtc-'+batch,c.project]]),[c.root+'/other',c.project],[c.root,c.project+'-other']])assert.throws(()=>validateContract({...c,root,project}),/^Error: CONTRACT$/);
 });
 
-test('all e2 bind sources, templates and cleanup hooks stay outside retained e1',()=>{
+test('all e3 bind sources, templates and cleanup hooks stay outside retained e1/e2',()=>{
   const c=contract(),compose=fs.readFileSync(new URL('./compose.yaml',import.meta.url),'utf8');
-  assert.match(compose,/^name: babacom-matrix-rtc-e2$/m);
+  assert.match(compose,/^name: babacom-matrix-rtc-e3$/m);
   const sources=[...compose.matchAll(/\/opt\/[^:\s,\]]+(?=:\/)/g)].map(match=>match[0]);
   const names=['data','secrets/homeserver.yaml','secrets/appservice.yaml','secrets/log.config','secrets/livekit.yaml','secrets/appservice.yaml','secrets/livekit.key','secrets/livekit.secret','secrets/Caddyfile','secrets/tls.crt','secrets/tls.key'];
   assert.deepEqual(sources.sort(),names.map(name=>c.root+'/'+name).sort());
@@ -288,21 +288,24 @@ test('all e2 bind sources, templates and cleanup hooks stay outside retained e1'
   const args=proof.systemdArguments(c);
   assert.ok(args.includes('--property=BindReadOnlyPaths='+c.root+'/hosts:/etc/hosts'));
   assert.ok(args.includes('--property=ExecStopPost='+process.execPath+' '+c.root+'/proof.mjs __cleanup'));
-  assert.equal(args.some(value=>value.replaceAll(process.execPath,'<node>').includes('/opt/babacom-matrix-rtc-e1')),false);
+  for(const batch of ['e1','e2'])assert.equal(args.some(value=>value.replaceAll(process.execPath,'<node>').includes('/opt/babacom-matrix-rtc-'+batch)),false);
 });
 
-test('e2 cleanup refuses retained e1 receipt and containers before mutation',async()=>{
-  const c=contract(),old={...c,root:'/opt/babacom-matrix-rtc-e1',project:'babacom-matrix-rtc-e1'},r=receipt(old);let inspectedCount=0,mutations=0;
-  assert.equal(await stopOwned(c,r,new Budget(1000),{machine:()=>c.machineUuid,inspect:async()=>{inspectedCount++;},stop:async()=>{mutations++;},unpause:async()=>{mutations++;}}),'UNKNOWN');
-  assert.equal(inspectedCount,0);assert.equal(mutations,0);
-  for(const row of r.containers)assert.throws(()=>assertOwned(inspected(old,row),c,row.service),/^Error: UNKNOWN$/);
+test('e3 cleanup refuses retained e1/e2 receipts and containers before mutation',async()=>{
+  const c=contract();
+  for(const batch of ['e1','e2']){
+    const old={...c,root:'/opt/babacom-matrix-rtc-'+batch,project:'babacom-matrix-rtc-'+batch},r=receipt(old);let inspectedCount=0,mutations=0;
+    assert.equal(await stopOwned(c,r,new Budget(1000),{machine:()=>c.machineUuid,inspect:async()=>{inspectedCount++;},stop:async()=>{mutations++;},unpause:async()=>{mutations++;}}),'UNKNOWN');
+    assert.equal(inspectedCount,0);assert.equal(mutations,0);
+    for(const row of r.containers)assert.throws(()=>assertOwned(inspected(old,row),c,row.service),/^Error: UNKNOWN$/);
+  }
 });
 
-test('e2 actual mounts cannot refer to retained e1 secrets or database',()=>{
+test('e3 actual mounts cannot refer to retained e1/e2 secrets or database',()=>{
   const c=contract();
   for(const service of ['synapse','livekit','auth','caddy']){
     const i=configuredContainer(c,service);assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,service));
-    for(let index=0;index<i.Mounts.length;index++){const copy=structuredClone(i);copy.Mounts[index].Source=copy.Mounts[index].Source.replace(c.root,'/opt/babacom-matrix-rtc-e1');assert.throws(()=>proof.assertContainerConfiguration(copy,c,service),/^Error: MOUNTS$/);}
+    for(const batch of ['e1','e2'])for(let index=0;index<i.Mounts.length;index++){const copy=structuredClone(i);copy.Mounts[index].Source=copy.Mounts[index].Source.replace(c.root,'/opt/babacom-matrix-rtc-'+batch);assert.throws(()=>proof.assertContainerConfiguration(copy,c,service),/^Error: MOUNTS$/);}
   }
 });
 
