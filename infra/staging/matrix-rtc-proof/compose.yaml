@@ -1,4 +1,4 @@
-name: babacom-matrix-rtc-e4
+name: babacom-matrix-rtc-e5
 x-lab: &lab
   platform: linux/amd64
   cpus: 0.2
@@ -26,16 +26,16 @@ services:
     environment: {SYNAPSE_CONFIG_PATH: /run/secrets/homeserver.yaml}
     command: [run]
     volumes:
-      - /opt/babacom-matrix-rtc-e4/data:/data
-      - /opt/babacom-matrix-rtc-e4/secrets/homeserver.yaml:/run/secrets/homeserver.yaml:ro
-      - /opt/babacom-matrix-rtc-e4/secrets/appservice.yaml:/run/secrets/appservice.yaml:ro
-      - /opt/babacom-matrix-rtc-e4/secrets/log.config:/run/secrets/log.config:ro
+      - /opt/babacom-matrix-rtc-e5/data:/data
+      - /opt/babacom-matrix-rtc-e5/secrets/homeserver.yaml:/run/secrets/homeserver.yaml:ro
+      - /opt/babacom-matrix-rtc-e5/secrets/appservice.yaml:/run/secrets/appservice.yaml:ro
+      - /opt/babacom-matrix-rtc-e5/secrets/log.config:/run/secrets/log.config:ro
   livekit:
     <<: *lab
     # v1.13.4 / source 0b3fd288e3ef3263ec475ba0d78cf3ad77459981
     image: docker.io/livekit/livekit-server@sha256:f63579e294b6dbf38e0e6151a24a5b425e9293e75e6d41959f470c957248b8a7
     command: [--config, /run/secrets/livekit.yaml]
-    volumes: [/opt/babacom-matrix-rtc-e4/secrets/livekit.yaml:/run/secrets/livekit.yaml:ro]
+    volumes: [/opt/babacom-matrix-rtc-e5/secrets/livekit.yaml:/run/secrets/livekit.yaml:ro]
   auth:
     <<: *lab
     # v0.9.0 / source 0e176b1eca44e67b11484d0bdf56999807bf2b8e
@@ -50,9 +50,9 @@ services:
       LIVEKIT_JWT_BIND: '[::]:8080'
       LIVEKIT_LOG_LEVEL: warn
     volumes:
-      - /opt/babacom-matrix-rtc-e4/secrets/appservice.yaml:/run/secrets/appservice.yaml:ro
-      - /opt/babacom-matrix-rtc-e4/secrets/livekit.key:/run/secrets/livekit.key:ro
-      - /opt/babacom-matrix-rtc-e4/secrets/livekit.secret:/run/secrets/livekit.secret:ro
+      - /opt/babacom-matrix-rtc-e5/secrets/appservice.yaml:/run/secrets/appservice.yaml:ro
+      - /opt/babacom-matrix-rtc-e5/secrets/livekit.key:/run/secrets/livekit.key:ro
+      - /opt/babacom-matrix-rtc-e5/secrets/livekit.secret:/run/secrets/livekit.secret:ro
   caddy:
     <<: *lab
     cap_add: [NET_BIND_SERVICE]
@@ -64,9 +64,9 @@ services:
       isolated:
         aliases: ['${RTC_DOMAIN:?approved domain required}']
     volumes:
-      - /opt/babacom-matrix-rtc-e4/secrets/Caddyfile:/run/secrets/Caddyfile:ro
-      - /opt/babacom-matrix-rtc-e4/secrets/tls.crt:/run/secrets/tls.crt:ro
-      - /opt/babacom-matrix-rtc-e4/secrets/tls.key:/run/secrets/tls.key:ro
+      - /opt/babacom-matrix-rtc-e5/secrets/Caddyfile:/run/secrets/Caddyfile:ro
+      - /opt/babacom-matrix-rtc-e5/secrets/tls.crt:/run/secrets/tls.crt:ro
+      - /opt/babacom-matrix-rtc-e5/secrets/tls.key:/run/secrets/tls.key:ro
     tmpfs: ['/tmp:size=16777216,mode=1777', '/data:size=1048576', '/config:size=1048576']
 networks:
   isolated: {internal: true}
