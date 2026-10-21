@@ -545,9 +545,10 @@ test('cleanup hook retains the baseline reason even after all four owned contain
   const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),stopped=[],rows=[],events=new SafeEvents(row=>rows.push(row)),budget=new Budget(60000),deadline=budget.end;let postCheck=false;
   const recovery={machine:()=>c.machineUuid,inspect:async id=>structuredClone(states.get(id)),stop:async id=>{stopped.push(id);states.get(id).State.Running=false;},sample:async()=>proof.assertHostBaseline(c,{freeMemory:3000000000,load:3,freeDisk:4000000000})};
   assert.equal(typeof proof.cleanupHook,'function');
-  await assert.rejects(proof.cleanupHook(c,budget,events,{readReceipt:()=>r,recovery,checkBaseline:async()=>{postCheck=true;}}),/^Error: UNKNOWN$/);
+  await assert.rejects(proof.cleanupHook(c,events,{admit:()=>{},acquireBudget:()=>budget,readReceipt:()=>r,recovery,checkBaseline:async()=>{postCheck=true;}}),/^Error: UNKNOWN$/);
   assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));assert.ok([...states.values()].every(row=>!row.State.Running));
   assert.equal(rows.filter(row=>row.event==='cleanup_sample'&&row.errcode==='BASELINE_LOAD').length,8);
+  assert.equal(rows.filter(row=>row.event==='cleanup_sample').every(row=>row.service==='verifier'),true);
   assert.ok(rows.some(row=>row.event==='baseline_actual'&&row.count===3000));assert.ok(rows.some(row=>row.event==='baseline_limit'&&row.count===2000));
   assert.deepEqual(rows.at(-1),{service:'verifier',event:'cleanup_result',status:0,errcode:'UNKNOWN',count:1});
   assert.equal(postCheck,false);assert.equal(budget.end,deadline);
@@ -555,13 +556,13 @@ test('cleanup hook retains the baseline reason even after all four owned contain
 test('cleanup hook identifies final baseline failure separately from successful physical stops',async()=>{
   const c=contract(),r=receipt(c),rows=[],events=new SafeEvents(row=>rows.push(row));
   const recovery={machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:false}})};
-  await assert.rejects(proof.cleanupHook(c,new Budget(60000),events,{readReceipt:()=>r,recovery,checkBaseline:async()=>proof.assertHostBaseline(c,{freeMemory:1000,load:0,freeDisk:4000000000})}),/^Error: BASELINE$/);
+  await assert.rejects(proof.cleanupHook(c,events,{admit:()=>{},acquireBudget:()=>new Budget(60000),readReceipt:()=>r,recovery,checkBaseline:async()=>proof.assertHostBaseline(c,{freeMemory:1000,load:0,freeDisk:4000000000})}),/^Error: BASELINE$/);
   assert.equal(rows[0].event,'cleanup_baseline');assert.equal(rows[0].errcode,'BASELINE_MEMORY');assert.equal(rows[1].count,1000);assert.equal(rows[2].count,2000000000);
 });
 test('cleanup failure evidence names the failed operation without blocking other owned stops',async()=>{
   const c=contract(),r=receipt(c),stopped=[],rows=[],events=new SafeEvents(row=>rows.push(row)),broken=r.containers[2].id;
   const recovery={machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:!stopped.includes(id)}}),stop:async id=>{if(id===broken)throw new Error('COMMAND',{cause:new Error('incapable-secret')});stopped.push(id);}};
-  await assert.rejects(proof.cleanupHook(c,new Budget(60000),events,{readReceipt:()=>r,recovery,checkBaseline:async()=>{}}),/^Error: UNKNOWN$/);
+  await assert.rejects(proof.cleanupHook(c,events,{admit:()=>{},acquireBudget:()=>new Budget(60000),readReceipt:()=>r,recovery,checkBaseline:async()=>{}}),/^Error: UNKNOWN$/);
   assert.equal(stopped.length,3);assert.equal(stopped.includes(broken),false);
   assert.deepEqual(rows[0],{service:'auth',event:'cleanup_stop',status:0,errcode:'COMMAND',count:1});assert.equal(rows.at(-1).event,'cleanup_result');assert.equal(JSON.stringify(rows).includes('incapable-secret'),false);
 });
@@ -569,9 +570,17 @@ test('cleanup diagnostics keep the original shared deadline and cannot trigger l
   const c=contract(),r=receipt(c),rows=[],events=new SafeEvents(row=>rows.push(row));let now=59995,stops=0;
   const budget=new Budget(60000,()=>0);budget.clock=()=>now;const deadline=budget.end;
   const recovery={machine:()=>c.machineUuid,inspect:async id=>{now+=10;return inspected(c,r.containers.find(row=>row.id===id));},stop:async()=>{stops++;}};
-  await assert.rejects(proof.cleanupHook(c,budget,events,{readReceipt:()=>r,recovery,checkBaseline:async()=>{}}),/^Error: DEADLINE$/);
+  await assert.rejects(proof.cleanupHook(c,events,{admit:()=>{},acquireBudget:()=>budget,readReceipt:()=>r,recovery,checkBaseline:async()=>{}}),/^Error: DEADLINE$/);
   assert.equal(stops,0);assert.equal(budget.end,deadline);assert.equal(now,60005);
   assert.deepEqual(rows.map(({event,errcode})=>({event,errcode})),[{event:'cleanup_inspect',errcode:'DEADLINE'},{event:'cleanup_result',errcode:'DEADLINE'}]);
+});
+test('cleanup hook records auxiliary admission and inherited-budget failures before any Docker operation',async()=>{
+  for(const [stage,code] of [['cleanup_admission','SWAP'],['cleanup_budget','DEADLINE']]){
+    const rows=[],events=new SafeEvents(row=>rows.push(row));let acquired=0,reads=0,mutations=0;
+    const io={admit:()=>{if(stage==='cleanup_admission')throw new Error(code);},acquireBudget:()=>{acquired++;throw new Error(code);},readReceipt:()=>{reads++;},recovery:{stop:async()=>{mutations++;}}};
+    await assert.rejects(proof.cleanupHook(contract(),events,io),error=>error.message===code);
+    assert.deepEqual(rows,[{service:'verifier',event:stage,status:0,errcode:code,count:1}]);assert.equal(acquired,stage==='cleanup_budget'?1:0);assert.equal(reads,0);assert.equal(mutations,0);
+  }
 });
 test('a failed cleanup evidence writer cannot prevent remaining owned stops or clear the failure',async()=>{
   const c=contract(),r=receipt(c),stopped=[];

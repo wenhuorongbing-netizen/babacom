@@ -52,7 +52,7 @@ export function validateContract(c,action){
   validateSharedRuntime(c,[c.auxiliary.cgroup]);
   return c;
 }
-const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','baseline_actual','baseline_limit','readiness','cleanup_receipt','cleanup_sample','cleanup_inspect','cleanup_unpause','cleanup_stop','cleanup_stopped','cleanup_result','cleanup_baseline','cleanup_budget','cleanup_monitor','cleanup_sockets','cleanup_attaches','cleanup_scan','command','scan','openid_ttl','jwt_remaining','shared_cpu_milli','shared_memory_bytes','log_connection','log_success','log_tls','log_handshake','log_timeout']);
+const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','baseline_actual','baseline_limit','readiness','cleanup_admission','cleanup_worker','cleanup_unit','cleanup_receipt','cleanup_sample','cleanup_inspect','cleanup_unpause','cleanup_stop','cleanup_stopped','cleanup_result','cleanup_baseline','cleanup_budget','cleanup_monitor','cleanup_sockets','cleanup_attaches','cleanup_scan','command','scan','openid_ttl','jwt_remaining','shared_cpu_milli','shared_memory_bytes','log_connection','log_success','log_tls','log_handshake','log_timeout']);
 const BASELINE_ERRORS=new Set(['BASELINE_MEMORY','BASELINE_LOAD','BASELINE_DISK','BASELINE_NATIVE_ACTIVE','BASELINE_NATIVE_SUBSTATE','BASELINE_NATIVE_PID','BASELINE_NATIVE_INVOCATION','BASELINE_IMAGE','BASELINE_STATE','BASELINE_MOUNTS','BASELINE_COUNTER','BASELINE_CGROUP']);
 const ERRORS=new Set(['OK','M_FORBIDDEN','M_UNAUTHORIZED','M_UNKNOWN_TOKEN','FAIL','HOLD','UNKNOWN','DEADLINE','CONTRACT','BUSY','OLD_CPU','OLD_MEMORY','SHARED_CPU','SHARED_MEMORY','BASELINE','RESOURCES','ATTACH','LEAK','CONFIG','DNS','READINESS','SOURCE','NODE','TLS','NETWORK','CONNECTION','COMMAND','STATE','OWNERSHIP','SHIM','ADMIN','AUX_CGROUP','BODY','BODY_LIMIT','CANCELLED','DENIAL','HOST','HTTP','IDENTITY','IMAGE','INCAPABLE','JOIN','JWT','LOG_ADMISSION','LOG_DRIVER','LOG_FILE','LOGOUT','MEMBERSHIP','MOUNTS','OPENID','OUTPUT_LIMIT','PERMISSIONS','PERSISTENCE','PLATFORM','PORT','SFU','SFU_URL','SIGNAL','START','SWAP','TEMPLATE','TRACKS','TTL','WRONG_SUBJECT',...BASELINE_ERRORS]);
 function knownFailure(error){let known;for(let depth=0;depth<8&&error instanceof Error;depth++,error=error.cause)if(error.message!=='OK'&&ERRORS.has(error.message))known=error;return known;}
@@ -336,7 +336,7 @@ const recoveryIO={machine:()=>fs.readFileSync('/sys/class/dmi/id/product_uuid','
 function recordCleanup(events,stage,error,service='verifier'){try{events?.event(service,stage,0,error);}catch{}}
 export async function stopOwned(c,receipt,budget,io=recoveryIO,onFailure){
   let unknown=false,resourceFault,stage='cleanup_receipt',service='verifier';
-  const report=error=>{try{onFailure?.(stage,error,service);}catch{}};
+  const report=error=>{try{onFailure?.(stage,error,stage==='cleanup_sample'?'verifier':service);}catch{}};
   const sample=async()=>{stage='cleanup_sample';try{await io.sample?.(c,budget);}catch(error){if(error.message==='DEADLINE')throw error;report(error);resourceFault??=['FAIL','HOLD','UNKNOWN'].includes(error.message)?error.message:'UNKNOWN';}};
   try{
     budget.remaining();requireFact(receipt?.version===1&&receipt.host===c.host&&receipt.runId===c.runId&&receipt.project===c.project&&receipt.machineUuid===c.machineUuid&&io.machine()===c.machineUuid,'UNKNOWN');
@@ -355,12 +355,15 @@ export async function stopOwned(c,receipt,budget,io=recoveryIO,onFailure){
     budget.remaining();return unknown?'UNKNOWN':resourceFault??'OK';
   }catch(error){report(error);return error.message==='DEADLINE'?'DEADLINE':'UNKNOWN';}
 }
-export async function cleanupHook(c,budget,events,{readReceipt=readOwnership,recovery=recoveryIO,checkBaseline=baseline}={}){
-  let stage='cleanup_receipt';
+export async function cleanupHook(c,events,{admit=ownAux,acquireBudget=()=>cleanupBudget(c),readReceipt=readOwnership,recovery=recoveryIO,checkBaseline=baseline,stopWorker=false}={}){
+  let stage='cleanup_admission';
   try{
-    budget.remaining();const receipt=readReceipt(c);stage='cleanup_result';
+    admit(c);stage='cleanup_budget';const budget=acquireBudget();
+    if(stopWorker){stage='cleanup_worker';await stopUnit(c,budget);}
+    stage='cleanup_receipt';budget.remaining();const receipt=readReceipt(c);stage='cleanup_result';
     const result=await stopOwned(c,receipt,budget,recovery,(failed,error,service)=>recordCleanup(events,failed,error,service));
     requireFact(result==='OK',result);stage='cleanup_baseline';await checkBaseline(c,budget);
+    if(stopWorker){stage='cleanup_unit';await unitStopped(c,budget);}
   }catch(error){recordCleanup(events,stage,error);throw error;}
 }
 export async function startExperiment(c,budget,io){
@@ -688,7 +691,9 @@ async function runTask(c,budget){
 }
 export async function main(action){
   requireFact(['preflight','config','up','verify','stop','__run','__cleanup'].includes(action),'COMMAND');
-  const c=readContract(action);let budget=action==='__run'?Budget.fromDeadline(Number(process.argv[3])):new Budget(action==='stop'?60000:120000);ownAux(c);
+  const c=readContract(action);
+  if(action==='stop'||action==='__cleanup')return cleanupHook(c,runtimeEvents(c),{stopWorker:action==='stop'});
+  let budget=action==='__run'?Budget.fromDeadline(Number(process.argv[3])):new Budget(120000);ownAux(c);
   if(action==='preflight')await preflight(c,budget);
   else if(action==='config')await configure(c,budget);
   else if(action==='__run')await runTask(c,budget);
@@ -706,10 +711,6 @@ export async function main(action){
     try{while(true){budget.remaining();const state=readState(c);requireFact(state.phase!=='FAIL','FAIL');if(state.phase==='VERIFIED')break;await new Promise(r=>setTimeout(r,budget.remaining(25)));}}
     catch(error){await stopUnit(c,cleanupBudget(c));throw error;}
     await stopUnit(c,cleanupBudget(c));await unitStopped(c,cleanupBudget(c));
-  }else{
-    const stopBudget=cleanupBudget(c);if(action==='stop')await stopUnit(c,stopBudget);
-    await cleanupHook(c,stopBudget,runtimeEvents(c));
-    if(action==='stop')await unitStopped(c,stopBudget);
   }
 }
 export async function publicCommand(action,run=main){
