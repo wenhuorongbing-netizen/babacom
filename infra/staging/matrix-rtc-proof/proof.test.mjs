@@ -25,6 +25,11 @@ if(process.argv[2]==='--fixture'){
   else if(mode==='failure-output'){try{await command(process.execPath,[fileURLToPath(import.meta.url),'--fixture','fail']);}catch(error){process.stdout.write(JSON.stringify({errcode:error.message}));}}
   else if(mode==='signal-hang'){await proof.signal(process.argv[4],'incapable-fixture',{allowWsFixture:true,identity:'@rtc-a:fixture:device',room:'fixture-room',timeout:50}).catch(()=>{});}
   else if(mode==='public-error')process.exitCode=await proof.publicCommand('stop',async()=>{throw new Error(process.argv[4]);});
+  else if(mode==='readiness'){
+    const url=new URL(process.argv[4]),budget=new Budget(2000),runtime=new proof.Runtime({domain:url.hostname,port:Number(url.port)},budget);
+    runtime.events=new SafeEvents(row=>process.stdout.write(JSON.stringify(row)+'\n'));
+    try{await runtime.waitReady(budget);}catch(error){runtime.recordFailure(error);process.exitCode=1;}
+  }
   else if(mode==='hostname-check'){try{const response=await httpRequest(process.argv[4],{servername:'localhost',expectedHostname:process.argv[5],lookup:(_name,options,callback)=>callback(null,options.all?[{address:'127.0.0.1',family:4}]:'127.0.0.1',4),timeout:1000});process.stdout.write(JSON.stringify({status:response.status}));}catch(error){process.stdout.write(JSON.stringify({errcode:error.message}));}}
   else if(mode==='hostname-keepalive'){
     https.globalAgent.keepAlive=true;https.globalAgent.maxSockets=1;
@@ -351,9 +356,61 @@ test('a concurrent old native restart latches failure while receipt-owned cleanu
   const show=async row=>{reads++;return {ActiveState:'active',SubState:'running',MainPID:String(row.pid),InvocationID:restart?'f'.repeat(32):row.invocationId};};
   const budget=new Budget(1000),watch=new proof.ResourceWatch(current=>proof.assertNativeBaseline(c,current,show),budget,100);
   await watch.sample();assert.equal(reads,5);restart=true;await assert.rejects(watch.sample(),/^Error: FAIL$/);assert.equal(watch.controller.signal.aborted,true);await watch.close(new Budget(1000));
-  const events=[];new SafeEvents(event=>events.push(event)).event('verifier','fault',0,watch.fault);assert.equal(events[0].errcode,'BASELINE');
+  const events=[];new SafeEvents(event=>events.push(event)).event('verifier','fault',0,watch.fault);assert.equal(events[0].errcode,'BASELINE_NATIVE_INVOCATION');assert.equal(events[0].count,1);
   const result=await stopOwned(c,r,new Budget(1000),{machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:!stopped.includes(id)}}),stop:async id=>stopped.push(id),sample:(_c,current)=>proof.assertNativeBaseline(c,current,show)});
   assert.equal(result,'FAIL');assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));assert.throws(()=>watch.check(),/^Error: FAIL$/);
+});
+test('baseline evidence identifies the failed host threshold and its measured and frozen values',()=>{
+  const c=contract(),healthy={freeMemory:3000000000,load:1,freeDisk:4000000000};
+  assert.equal(typeof proof.assertHostBaseline,'function');
+  assert.doesNotThrow(()=>proof.assertHostBaseline(c,healthy));
+  assert.doesNotThrow(()=>proof.assertHostBaseline(c,{freeMemory:2000000000,load:2,freeDisk:3000000000}));
+  for(const [sample,code,actual,limit] of [
+    [{...healthy,freeMemory:1999999999},'BASELINE_MEMORY',1999999999,2000000000],
+    [{...healthy,load:2.125},'BASELINE_LOAD',2125,2000],
+    [{...healthy,freeDisk:2999999999},'BASELINE_DISK',2999999999,3000000000]
+  ]){
+    let error;try{proof.assertHostBaseline(c,sample);}catch(failure){error=failure;}
+    assert.equal(error?.message,'BASELINE');
+    const rows=[];new SafeEvents(row=>rows.push(row)).event('verifier','fault',0,error);
+    assert.deepEqual(rows,[{service:'verifier',event:'fault',status:0,errcode:code,count:1},
+      {service:'verifier',event:'baseline_actual',status:0,errcode:code,count:actual},
+      {service:'verifier',event:'baseline_limit',status:0,errcode:code,count:limit}]);
+  }
+});
+test('native baseline failures identify the exact condition and frozen row without publishing identity strings',async()=>{
+  const c=contract();
+  for(const [change,code] of [
+    [state=>state.ActiveState='failed','BASELINE_NATIVE_ACTIVE'],
+    [state=>state.SubState='exited','BASELINE_NATIVE_SUBSTATE'],
+    [state=>state.MainPID='999','BASELINE_NATIVE_PID'],
+    [state=>state.InvocationID='incapable-secret','BASELINE_NATIVE_INVOCATION']
+  ]){
+    let failure;try{await proof.assertNativeBaseline(c,new Budget(1000),async row=>{
+      const state={ActiveState:'active',SubState:'running',MainPID:String(row.pid),InvocationID:row.invocationId};
+      if(row===c.nativeBaseline[2])change(state);return state;
+    });}catch(error){failure=error;}
+    assert.equal(failure?.message,'FAIL');const rows=[];new SafeEvents(row=>rows.push(row)).event('verifier','fault',0,failure);
+    assert.equal(rows[0].errcode,code);assert.equal(rows[0].count,3);
+    assert.equal(JSON.stringify(rows).includes('incapable-secret'),false);
+  }
+});
+test('container baseline failures separate image, state, mounts and frozen counter conditions',()=>{
+  assert.equal(typeof proof.assertContainerBaseline,'function');
+  const frozen={image:'sha256:'+ 'a'.repeat(64),status:'running',mounts:[],memoryUsageBytes:1000};
+  const current={Image:frozen.image,State:{Status:'running'},Mounts:[]};
+  assert.doesNotThrow(()=>proof.assertContainerBaseline(frozen,current,2));
+  for(const [old,now,code] of [
+    [frozen,{...current,Image:'incapable-secret'},'BASELINE_IMAGE'],
+    [frozen,{...current,State:{Status:'exited'}},'BASELINE_STATE'],
+    [frozen,{...current,Mounts:[{Source:'incapable-secret'}]},'BASELINE_MOUNTS'],
+    [{...frozen,memoryUsageBytes:undefined},current,'BASELINE_COUNTER']
+  ]){
+    let failure;try{proof.assertContainerBaseline(old,now,2);}catch(error){failure=error;}
+    assert.equal(failure?.message,'BASELINE');const rows=[];new SafeEvents(row=>rows.push(row)).event('verifier','fault',0,failure);
+    assert.deepEqual(rows,[{service:'verifier',event:'fault',status:0,errcode:code,count:2}]);
+    assert.equal(JSON.stringify(rows).includes('incapable-secret'),false);
+  }
 });
 
 test('configuration can prepare protected files before explicit log admission',()=>{
@@ -445,6 +502,27 @@ test('runtime failure evidence preserves fixed admission and protocol failures',
   runtime.recordFailure(new Error('PERMISSIONS incapable-secret'));
   assert.equal(rows.at(-1).errcode,'UNKNOWN');assert.equal(JSON.stringify(rows).includes('incapable-secret'),false);
 });
+test('startup readiness retains changing request failures and HTTP status before eventual success',async()=>{
+  const rows=[],budget=new Budget(2000),deadline=budget.end,runtime=new proof.Runtime(contract(),budget);runtime.events=new SafeEvents(row=>rows.push(row));
+  const failures=[new Error('CONNECTION'),new Error('TLS'),Object.assign(new Error('HTTP',{cause:new Error('incapable-secret')}),{status:503}),Object.assign(new Error('HTTP'),{status:503})];let attempts=0;
+  runtime.api=async(route,options,current)=>{assert.equal(route,'/_matrix/client/versions');assert.deepEqual(options,{});assert.equal(current,budget);const error=failures[attempts++];if(error)throw error;return {};};
+  assert.equal(typeof runtime.waitReady,'function');await runtime.waitReady(budget);
+  assert.deepEqual(rows,[{service:'verifier',event:'readiness',status:0,errcode:'CONNECTION',count:1},
+    {service:'verifier',event:'readiness',status:0,errcode:'TLS',count:2},
+    {service:'verifier',event:'readiness',status:503,errcode:'HTTP',count:3},
+    {service:'verifier',event:'readiness',status:200,errcode:'OK',count:5}]);
+  assert.equal(budget.end,deadline);assert.equal(JSON.stringify(rows).includes('incapable-secret'),false);
+});
+test('readiness TLS evidence survives a subsequent baseline abort without extending the deadline',async()=>{
+  const c=contract(),rows=[],budget=new Budget(1000),deadline=budget.end,runtime=new proof.Runtime(c,budget);runtime.events=new SafeEvents(row=>rows.push(row));let broken=false;
+  const watch=new proof.ResourceWatch(async()=>{if(broken)proof.assertHostBaseline(c,{freeMemory:3000000000,load:3,freeDisk:4000000000});},budget,1000);runtime.monitor=watch;
+  runtime.api=async()=>{broken=true;await watch.sample().catch(()=>{});throw new Error('TLS');};
+  assert.equal(typeof runtime.waitReady,'function');
+  try{await assert.rejects(runtime.waitReady(budget),error=>{runtime.recordFailure(error);return error.message==='HOLD';});}
+  finally{await watch.close(new Budget(1000));}
+  assert.deepEqual(rows.slice(0,2).map(({event,errcode})=>({event,errcode})),[{event:'readiness',errcode:'TLS'},{event:'fault',errcode:'BASELINE_LOAD'}]);
+  assert.equal(rows.some(row=>row.event==='readiness'&&row.errcode==='OK'),false);assert.equal(budget.end,deadline);
+});
 test('shared service restart, PID reuse and cgroup identity drift cannot pass measurement admission',async()=>{
   const c=contract();
   const io={show:async row=>({ActiveState:'active',SubState:'running',MainPID:String(row.pid),InvocationID:row.invocationId,ControlGroup:row.cgroup.slice('/sys/fs/cgroup'.length)}),read:file=>file.endsWith('/cmdline')?(file.includes('/100/')?'dockerd\0':'containerd\0'):file.endsWith('/stat')?'100 (daemon name) S '+'0 '.repeat(18)+'1000':'0::'+c.sharedRuntime.services.find(row=>file.includes('/'+row.pid+'/')).cgroup.slice('/sys/fs/cgroup'.length),stat:group=>({ino:c.sharedRuntime.services.find(row=>row.cgroup===group).inode,isDirectory:()=>true,isSymbolicLink:()=>false}),realpath:group=>group};
@@ -462,6 +540,44 @@ test('resource failure during cleanup cannot stop old containers or prevent rece
   const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),stopped=[];let samples=0;
   const result=await stopOwned(c,r,new Budget(1000),{machine:()=>r.machineUuid,sample:async()=>{samples++;throw Error('FAIL');},inspect:async id=>structuredClone(states.get(id)),stop:async id=>{stopped.push(id);states.get(id).State.Running=false;}});
   assert.equal(result,'FAIL');assert.equal(samples>0,true);assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));assert.equal(stopped.includes(c.baseline[0].id),false);
+});
+test('cleanup hook retains the baseline reason even after all four owned containers stop',async()=>{
+  const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),stopped=[],rows=[],events=new SafeEvents(row=>rows.push(row)),budget=new Budget(60000),deadline=budget.end;let postCheck=false;
+  const recovery={machine:()=>c.machineUuid,inspect:async id=>structuredClone(states.get(id)),stop:async id=>{stopped.push(id);states.get(id).State.Running=false;},sample:async()=>proof.assertHostBaseline(c,{freeMemory:3000000000,load:3,freeDisk:4000000000})};
+  assert.equal(typeof proof.cleanupHook,'function');
+  await assert.rejects(proof.cleanupHook(c,budget,events,{readReceipt:()=>r,recovery,checkBaseline:async()=>{postCheck=true;}}),/^Error: UNKNOWN$/);
+  assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));assert.ok([...states.values()].every(row=>!row.State.Running));
+  assert.equal(rows.filter(row=>row.event==='cleanup_sample'&&row.errcode==='BASELINE_LOAD').length,8);
+  assert.ok(rows.some(row=>row.event==='baseline_actual'&&row.count===3000));assert.ok(rows.some(row=>row.event==='baseline_limit'&&row.count===2000));
+  assert.deepEqual(rows.at(-1),{service:'verifier',event:'cleanup_result',status:0,errcode:'UNKNOWN',count:1});
+  assert.equal(postCheck,false);assert.equal(budget.end,deadline);
+});
+test('cleanup hook identifies final baseline failure separately from successful physical stops',async()=>{
+  const c=contract(),r=receipt(c),rows=[],events=new SafeEvents(row=>rows.push(row));
+  const recovery={machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:false}})};
+  await assert.rejects(proof.cleanupHook(c,new Budget(60000),events,{readReceipt:()=>r,recovery,checkBaseline:async()=>proof.assertHostBaseline(c,{freeMemory:1000,load:0,freeDisk:4000000000})}),/^Error: BASELINE$/);
+  assert.equal(rows[0].event,'cleanup_baseline');assert.equal(rows[0].errcode,'BASELINE_MEMORY');assert.equal(rows[1].count,1000);assert.equal(rows[2].count,2000000000);
+});
+test('cleanup failure evidence names the failed operation without blocking other owned stops',async()=>{
+  const c=contract(),r=receipt(c),stopped=[],rows=[],events=new SafeEvents(row=>rows.push(row)),broken=r.containers[2].id;
+  const recovery={machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:!stopped.includes(id)}}),stop:async id=>{if(id===broken)throw new Error('COMMAND',{cause:new Error('incapable-secret')});stopped.push(id);}};
+  await assert.rejects(proof.cleanupHook(c,new Budget(60000),events,{readReceipt:()=>r,recovery,checkBaseline:async()=>{}}),/^Error: UNKNOWN$/);
+  assert.equal(stopped.length,3);assert.equal(stopped.includes(broken),false);
+  assert.deepEqual(rows[0],{service:'auth',event:'cleanup_stop',status:0,errcode:'COMMAND',count:1});assert.equal(rows.at(-1).event,'cleanup_result');assert.equal(JSON.stringify(rows).includes('incapable-secret'),false);
+});
+test('cleanup diagnostics keep the original shared deadline and cannot trigger late stops',async()=>{
+  const c=contract(),r=receipt(c),rows=[],events=new SafeEvents(row=>rows.push(row));let now=59995,stops=0;
+  const budget=new Budget(60000,()=>0);budget.clock=()=>now;const deadline=budget.end;
+  const recovery={machine:()=>c.machineUuid,inspect:async id=>{now+=10;return inspected(c,r.containers.find(row=>row.id===id));},stop:async()=>{stops++;}};
+  await assert.rejects(proof.cleanupHook(c,budget,events,{readReceipt:()=>r,recovery,checkBaseline:async()=>{}}),/^Error: DEADLINE$/);
+  assert.equal(stops,0);assert.equal(budget.end,deadline);assert.equal(now,60005);
+  assert.deepEqual(rows.map(({event,errcode})=>({event,errcode})),[{event:'cleanup_inspect',errcode:'DEADLINE'},{event:'cleanup_result',errcode:'DEADLINE'}]);
+});
+test('a failed cleanup evidence writer cannot prevent remaining owned stops or clear the failure',async()=>{
+  const c=contract(),r=receipt(c),stopped=[];
+  const recovery={machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:!stopped.includes(id)}}),stop:async id=>stopped.push(id),sample:async()=>{throw new Error('FAIL');}};
+  assert.equal(await stopOwned(c,r,new Budget(60000),recovery,()=>{throw new Error('incapable-secret');}),'FAIL');
+  assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));
 });
 test('a latched resource fault cancels a real verifier child and prohibits subsequent commands and VERIFIED',async()=>{
   const server=net.createServer();server.listen(0,'127.0.0.1');await once(server,'listening');let samples=0,closed=false;const budget=new Budget(2000),deadline=budget.end,watch=new proof.ResourceWatch(async()=>{if(++samples===2)throw Error('FAIL');},budget,1000);
@@ -711,6 +827,29 @@ test('real requests distinguish refused connection, untrusted TLS and client dea
   const hanging=http.createServer(()=>{});hanging.listen(0,'127.0.0.1');await once(hanging,'listening');
   try{await assert.rejects(httpRequest(`http://127.0.0.1:${hanging.address().port}`,{timeout:40,allowHttpFixture:true}),/^Error: DEADLINE$/);}finally{hanging.closeAllConnections();await new Promise(resolve=>hanging.close(resolve));}
 });
+test('actual readiness requests retain strict TLS rejection until the inherited startup deadline',async()=>{
+  const certificate=memoryTlsCertificate(),rows=[];let requests=0;
+  const server=https.createServer(certificate,(_request,response)=>{requests++;response.end('{}');});server.on('tlsClientError',()=>{});
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  const budget=new Budget(500),deadline=budget.end,runtime=new proof.Runtime({domain:'localhost',port:server.address().port},budget);runtime.events=new SafeEvents(row=>rows.push(row));
+  try{
+    await assert.rejects(runtime.waitReady(budget),/^Error: DEADLINE$/);
+    assert.equal(requests,0);assert.equal(budget.end,deadline);
+    assert.deepEqual(rows,[{service:'verifier',event:'readiness',status:0,errcode:'TLS',count:1}]);
+  }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+});
+test('actual readiness records a trusted HTTPS 503 before the Matrix versions endpoint becomes ready',async()=>{
+  const certificate=memoryTlsCertificate(),directory=fs.mkdtempSync(path.join(os.tmpdir(),'babacom-rtc-ready-')),file=path.join(directory,'fixture-ca.pem');let requests=0;
+  fs.writeFileSync(file,certificate.cert);
+  const server=https.createServer(certificate,(request,response)=>{assert.equal(request.url,'/_matrix/client/versions');assert.equal(request.headers.authorization,undefined);requests++;response.writeHead(requests<3?503:200);response.end(requests<3?'incapable-secret':'{}');});server.on('tlsClientError',()=>{});
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  try{
+    const child=spawn(process.execPath,[fileURLToPath(import.meta.url),'--fixture','readiness',`https://localhost:${server.address().port}`],{env:{...process.env,NODE_EXTRA_CA_CERTS:file},stdio:['ignore','pipe','pipe']});let output='',stderr='';child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>stderr+=chunk);const [code]=await once(child,'close');
+    assert.equal(code,0);assert.equal(stderr,'');assert.equal(requests,3);const rows=output.trim().split('\n').map(line=>JSON.parse(line));
+    assert.deepEqual(rows.filter(row=>row.event==='readiness'),[{service:'verifier',event:'readiness',status:503,errcode:'HTTP',count:1},{service:'verifier',event:'readiness',status:200,errcode:'OK',count:3}]);
+    assert.equal(output.includes('incapable-secret'),false);
+  }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));fs.unlinkSync(file);fs.rmdirSync(directory);}
+});
 test('strict additional hostname rejection uses the approved SNI on an actual trusted HTTPS fixture',async()=>{
   const certificate=memoryTlsCertificate(),directory=fs.mkdtempSync(path.join(os.tmpdir(),'babacom-rtc-tls-')),file=path.join(directory,'fixture-ca.pem'),names=[];let requests=0;
   fs.writeFileSync(file,certificate.cert);
@@ -742,9 +881,9 @@ test('JWT and administrative observation must agree; any track is failure', () =
 });
 
 test('public error enums preserve UNKNOWN, BUSY and deadlines without exposing raw messages or stacks',async()=>{
-  for(const message of ['UNKNOWN','BUSY','DEADLINE','FAIL','HOLD','incapable-secret%2Fmarker\nraw stack/body']){
+  for(const message of ['UNKNOWN','BUSY','DEADLINE','FAIL','HOLD','BASELINE','BASELINE_LOAD','incapable-secret%2Fmarker\nraw stack/body']){
     const child=spawn(process.execPath,[fileURLToPath(import.meta.url),'--fixture','public-error',message],{stdio:['ignore','pipe','pipe']});let stdout='',stderr='';child.stdout.on('data',b=>{stdout+=b;});child.stderr.on('data',b=>{stderr+=b;});
-    const [code]=await once(child,'close');assert.equal(code,1);assert.equal(stdout,'');assert.deepEqual(JSON.parse(stderr),{service:'verifier',event:'command',errcode:message.startsWith('incapable-')?'HOLD':message});assert.equal(stderr.includes('incapable-secret'),false);assert.equal(stderr.includes('raw stack/body'),false);
+    const [code]=await once(child,'close');assert.equal(code,1);assert.equal(stdout,'');assert.deepEqual(JSON.parse(stderr),{service:'verifier',event:'command',errcode:['UNKNOWN','BUSY','DEADLINE','FAIL','HOLD'].includes(message)?message:'HOLD'});assert.equal(stderr.includes('incapable-secret'),false);assert.equal(stderr.includes('raw stack/body'),false);
   }
 });
 

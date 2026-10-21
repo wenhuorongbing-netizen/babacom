@@ -52,8 +52,11 @@ export function validateContract(c,action){
   validateSharedRuntime(c,[c.auxiliary.cgroup]);
   return c;
 }
-const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','command','scan','openid_ttl','jwt_remaining','shared_cpu_milli','shared_memory_bytes','log_connection','log_success','log_tls','log_handshake','log_timeout']);
-const ERRORS=new Set(['OK','M_FORBIDDEN','M_UNAUTHORIZED','M_UNKNOWN_TOKEN','FAIL','HOLD','UNKNOWN','DEADLINE','CONTRACT','BUSY','OLD_CPU','OLD_MEMORY','SHARED_CPU','SHARED_MEMORY','BASELINE','RESOURCES','ATTACH','LEAK','CONFIG','DNS','READINESS','SOURCE','NODE','TLS','NETWORK','CONNECTION','COMMAND','STATE','OWNERSHIP','SHIM','ADMIN','AUX_CGROUP','BODY','BODY_LIMIT','CANCELLED','DENIAL','HOST','HTTP','IDENTITY','IMAGE','INCAPABLE','JOIN','JWT','LOG_ADMISSION','LOG_DRIVER','LOG_FILE','LOGOUT','MEMBERSHIP','MOUNTS','OPENID','OUTPUT_LIMIT','PERMISSIONS','PERSISTENCE','PLATFORM','PORT','SFU','SFU_URL','SIGNAL','START','SWAP','TEMPLATE','TRACKS','TTL','WRONG_SUBJECT']);
+const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','baseline_actual','baseline_limit','readiness','cleanup_receipt','cleanup_sample','cleanup_inspect','cleanup_unpause','cleanup_stop','cleanup_stopped','cleanup_result','cleanup_baseline','cleanup_budget','cleanup_monitor','cleanup_sockets','cleanup_attaches','cleanup_scan','command','scan','openid_ttl','jwt_remaining','shared_cpu_milli','shared_memory_bytes','log_connection','log_success','log_tls','log_handshake','log_timeout']);
+const BASELINE_ERRORS=new Set(['BASELINE_MEMORY','BASELINE_LOAD','BASELINE_DISK','BASELINE_NATIVE_ACTIVE','BASELINE_NATIVE_SUBSTATE','BASELINE_NATIVE_PID','BASELINE_NATIVE_INVOCATION','BASELINE_IMAGE','BASELINE_STATE','BASELINE_MOUNTS','BASELINE_COUNTER','BASELINE_CGROUP']);
+const ERRORS=new Set(['OK','M_FORBIDDEN','M_UNAUTHORIZED','M_UNKNOWN_TOKEN','FAIL','HOLD','UNKNOWN','DEADLINE','CONTRACT','BUSY','OLD_CPU','OLD_MEMORY','SHARED_CPU','SHARED_MEMORY','BASELINE','RESOURCES','ATTACH','LEAK','CONFIG','DNS','READINESS','SOURCE','NODE','TLS','NETWORK','CONNECTION','COMMAND','STATE','OWNERSHIP','SHIM','ADMIN','AUX_CGROUP','BODY','BODY_LIMIT','CANCELLED','DENIAL','HOST','HTTP','IDENTITY','IMAGE','INCAPABLE','JOIN','JWT','LOG_ADMISSION','LOG_DRIVER','LOG_FILE','LOGOUT','MEMBERSHIP','MOUNTS','OPENID','OUTPUT_LIMIT','PERMISSIONS','PERSISTENCE','PLATFORM','PORT','SFU','SFU_URL','SIGNAL','START','SWAP','TEMPLATE','TRACKS','TTL','WRONG_SUBJECT',...BASELINE_ERRORS]);
+function knownFailure(error){let known;for(let depth=0;depth<8&&error instanceof Error;depth++,error=error.cause)if(error.message!=='OK'&&ERRORS.has(error.message))known=error;return known;}
+function requireBaseline(ok,reason,{index=1,actual,limit,code='BASELINE'}={}){if(!ok)throw new Error(code,{cause:Object.assign(new Error(reason),{index,actual,limit})});}
 function normalizedLog(text){return text.replace(/%([a-f\d]{2})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))).replace(/\\u([a-f\d]{4})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))).replace(/\\([\\/"bfnrt])/g,(_,value)=>({b:'\b',f:'\f',n:'\n',r:'\r',t:'\t'}[value]??value));}
 export class SafeEvents {
   constructor(write){this.write=write;this.bytes=0;this.chunks=0;this.markers=new Set();this.tails=new Map();this.observed=0;this.leak=false;this.unknownDiscarded=false;}
@@ -80,9 +83,12 @@ export class SafeEvents {
     }finally{fs.closeSync(fd);}
   }
   event(service,event,status=0,errcode='OK',count=1){
-    if(errcode instanceof Error){let error=errcode;errcode='UNKNOWN';for(let depth=0;depth<8&&error instanceof Error;depth++,error=error.cause)if(error.message!=='OK'&&ERRORS.has(error.message))errcode=error.message;}
+    const detail=errcode instanceof Error?knownFailure(errcode):undefined;
+    if(errcode instanceof Error)errcode=detail?.message??'UNKNOWN';
+    if(BASELINE_ERRORS.has(errcode)&&Number.isSafeInteger(detail?.index)&&detail.index>0)count=detail.index;
     if(event==='chunks'&&this.chunks>1)return;
     this.write({service:SERVICES.includes(service)?service:'verifier',event:EVENTS.has(event)?event:'unknown',status:Number.isInteger(status)&&status>=0&&status<600?status:0,errcode:ERRORS.has(errcode)?errcode:'UNKNOWN',count:Number.isSafeInteger(count)&&count>=0?count:0});
+    if(BASELINE_ERRORS.has(errcode))for(const key of ['actual','limit'])if(Number.isSafeInteger(detail?.[key])&&detail[key]>=0)this.event(service,'baseline_'+key,0,errcode,detail[key]);
   }
 }
 export function recordTtl(events,event,seconds){requireFact(['openid_ttl','jwt_remaining'].includes(event)&&Number.isSafeInteger(seconds)&&seconds>0,'TTL');events.event('verifier',event,200,'OK',seconds);}
@@ -205,7 +211,13 @@ export async function containerCgroup(c,i,budget,{read=sharedIO.read,show=async(
   }catch(error){throw new Error(['SWAP','UNKNOWN','RESOURCES','DEADLINE','FAIL','CANCELLED'].includes(error.message)?error.message:'HOLD');}
 }
 export async function assertNativeBaseline(c,budget,show=sharedIO.show){
-  for(const row of c.nativeBaseline){budget.remaining();const state=await show(row,budget);budget.remaining();requireFact(state.ActiveState==='active'&&state.SubState==='running'&&state.MainPID===String(row.pid)&&state.InvocationID===row.invocationId,'FAIL','BASELINE');}
+  for(const [index,row] of c.nativeBaseline.entries()){
+    budget.remaining();const state=await show(row,budget);budget.remaining();const detail={index:index+1,code:'FAIL'};
+    requireBaseline(state.ActiveState==='active','BASELINE_NATIVE_ACTIVE',detail);
+    requireBaseline(state.SubState==='running','BASELINE_NATIVE_SUBSTATE',detail);
+    requireBaseline(state.MainPID===String(row.pid),'BASELINE_NATIVE_PID',detail);
+    requireBaseline(state.InvocationID===row.invocationId,'BASELINE_NATIVE_INVOCATION',detail);
+  }
 }
 export async function sharedServiceRows(c,budget,io=sharedIO){
   const rows=[];for(const row of c.sharedRuntime.services){budget.remaining();const state=await io.show(row,budget),stat=io.stat(row.cgroup),proc=io.read('/proc/'+row.pid+'/stat');
@@ -229,15 +241,25 @@ export function sameMounts(actual,frozen){
   for(const mount of actual){const index=remaining.findIndex(row=>isDeepStrictEqual(mount,row));if(index<0)return false;remaining.splice(index,1);}
   return true;
 }
+export function assertHostBaseline(c,{freeMemory,load,freeDisk}){
+  requireBaseline(freeMemory>=c.thresholds.minFreeMemory,'BASELINE_MEMORY',{actual:freeMemory,limit:c.thresholds.minFreeMemory});
+  requireBaseline(load<=c.thresholds.maxLoad,'BASELINE_LOAD',{actual:Math.ceil(load*1000),limit:Math.floor(c.thresholds.maxLoad*1000)});
+  requireBaseline(freeDisk>=c.thresholds.minFreeDisk,'BASELINE_DISK',{actual:freeDisk,limit:c.thresholds.minFreeDisk});
+}
+export function assertContainerBaseline(frozen,current,index){
+  const detail={index};
+  requireBaseline(current.Image===frozen.image,'BASELINE_IMAGE',detail);
+  requireBaseline(current.State.Status===frozen.status,'BASELINE_STATE',detail);
+  requireBaseline(sameMounts(current.Mounts,frozen.mounts),'BASELINE_MOUNTS',detail);
+  requireBaseline(Number.isSafeInteger(frozen.memoryUsageBytes)&&frozen.memoryUsageBytes>=0,'BASELINE_COUNTER',detail);
+}
 async function baseline(c,budget){
   budget.remaining();
   await assertNativeBaseline(c,budget);
-  requireFact(os.freemem()>=c.thresholds.minFreeMemory&&os.loadavg()[0]<=c.thresholds.maxLoad,'BASELINE');
-  const disk=fs.statfsSync(ROOT);requireFact(disk.bavail*disk.bsize>=c.thresholds.minFreeDisk,'BASELINE');
+  const disk=fs.statfsSync(ROOT);assertHostBaseline(c,{freeMemory:os.freemem(),load:os.loadavg()[0],freeDisk:disk.bavail*disk.bsize});
   const samples=[];
-  for(const b of c.baseline){const i=await inspect(b.id,budget);requireFact(i.Image===b.image&&i.State.Status===b.status&&sameMounts(i.Mounts,b.mounts),'BASELINE');
-    requireFact(Number.isSafeInteger(b.memoryUsageBytes)&&b.memoryUsageBytes>=0,'BASELINE');
-    const rel=fs.readFileSync(`/proc/${i.State.Pid}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3).trim();requireFact(rel,'BASELINE');
+  for(const [index,b] of c.baseline.entries()){const i=await inspect(b.id,budget);assertContainerBaseline(b,i,index+1);
+    const rel=fs.readFileSync(`/proc/${i.State.Pid}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3).trim();requireBaseline(rel,'BASELINE_CGROUP',{index:index+1});
     samples.push({cgroup:'/sys/fs/cgroup'+rel,memoryUsageBytes:b.memoryUsageBytes,kind:'old'});
   }
   samples.push(...await sharedServiceRows(c,budget));return sampleResources(c,samples,budget);
@@ -311,25 +333,35 @@ function writeOwnership(c,containers){
   const directory=fs.openSync(ROOT,'r');try{fs.fsyncSync(directory);}finally{fs.closeSync(directory);}return receipt;
 }
 const recoveryIO={machine:()=>fs.readFileSync('/sys/class/dmi/id/product_uuid','utf8').trim(),inspect,unpause:(id,budget)=>command('docker',['unpause',id],{budget}),stop:(id,budget)=>command('docker',['stop','--time','3',id],{budget}),sample:async(c,budget)=>{await baseline(c,budget);await cgroups(c,(await ownContainers(c,budget)).filter(row=>row.State.Running),budget);}};
-export async function stopOwned(c,receipt,budget,io=recoveryIO){
-  let unknown=false,resourceFault;
-  const sample=async()=>{try{await io.sample?.(c,budget);}catch(error){if(error.message==='DEADLINE')throw error;resourceFault??=['FAIL','HOLD','UNKNOWN'].includes(error.message)?error.message:'UNKNOWN';}};
+function recordCleanup(events,stage,error,service='verifier'){try{events?.event(service,stage,0,error);}catch{}}
+export async function stopOwned(c,receipt,budget,io=recoveryIO,onFailure){
+  let unknown=false,resourceFault,stage='cleanup_receipt',service='verifier';
+  const report=error=>{try{onFailure?.(stage,error,service);}catch{}};
+  const sample=async()=>{stage='cleanup_sample';try{await io.sample?.(c,budget);}catch(error){if(error.message==='DEADLINE')throw error;report(error);resourceFault??=['FAIL','HOLD','UNKNOWN'].includes(error.message)?error.message:'UNKNOWN';}};
   try{
     budget.remaining();requireFact(receipt?.version===1&&receipt.host===c.host&&receipt.runId===c.runId&&receipt.project===c.project&&receipt.machineUuid===c.machineUuid&&io.machine()===c.machineUuid,'UNKNOWN');
     requireFact(Array.isArray(receipt.containers)&&receipt.containers.length===4&&new Set(receipt.containers.map(x=>x.id)).size===4&&new Set(receipt.containers.map(x=>x.service)).size===4,'UNKNOWN');
     for(const row of [...receipt.containers].reverse()){
-      budget.remaining();
+      stage='cleanup_receipt';service=row.service;budget.remaining();
       try{
         requireFact(SERVICES.includes(row.service)&&row.image===PINS[row.service].image&&/^[a-f0-9]{64}$/.test(row.id)&&/^sha256:[a-f0-9]{64}$/.test(row.imageId)&&typeof row.created==='string','UNKNOWN');
         const verify=i=>{assertOwned(i,c,row.service);requireFact(i.Id===row.id&&i.Image===row.imageId&&i.Created===row.created,'UNKNOWN');};
-        await sample();let current=await io.inspect(row.id,budget);budget.remaining();verify(current);
-        if(current.State.Paused){requireFact(row.service==='synapse'&&typeof io.unpause==='function','UNKNOWN');await io.unpause(row.id,budget);budget.remaining();current=await io.inspect(row.id,budget);budget.remaining();verify(current);requireFact(!current.State.Paused,'UNKNOWN');}
-        if(current.State.Running){budget.remaining();await io.stop(row.id,budget);}
-        const after=await io.inspect(row.id,budget);budget.remaining();verify(after);requireFact(!after.State.Running,'UNKNOWN');await sample();
-      }catch(error){if(error.message==='DEADLINE')throw error;unknown=true;}
+        await sample();stage='cleanup_inspect';let current=await io.inspect(row.id,budget);budget.remaining();verify(current);
+        if(current.State.Paused){stage='cleanup_unpause';requireFact(row.service==='synapse'&&typeof io.unpause==='function','UNKNOWN');await io.unpause(row.id,budget);budget.remaining();current=await io.inspect(row.id,budget);budget.remaining();verify(current);requireFact(!current.State.Paused,'UNKNOWN');}
+        if(current.State.Running){stage='cleanup_stop';budget.remaining();await io.stop(row.id,budget);}
+        stage='cleanup_stopped';const after=await io.inspect(row.id,budget);budget.remaining();verify(after);requireFact(!after.State.Running,'UNKNOWN');await sample();
+      }catch(error){if(error.message==='DEADLINE')throw error;report(error);unknown=true;}
     }
     budget.remaining();return unknown?'UNKNOWN':resourceFault??'OK';
-  }catch(error){return error.message==='DEADLINE'?'DEADLINE':'UNKNOWN';}
+  }catch(error){report(error);return error.message==='DEADLINE'?'DEADLINE':'UNKNOWN';}
+}
+export async function cleanupHook(c,budget,events,{readReceipt=readOwnership,recovery=recoveryIO,checkBaseline=baseline}={}){
+  let stage='cleanup_receipt';
+  try{
+    budget.remaining();const receipt=readReceipt(c);stage='cleanup_result';
+    const result=await stopOwned(c,receipt,budget,recovery,(failed,error,service)=>recordCleanup(events,failed,error,service));
+    requireFact(result==='OK',result);stage='cleanup_baseline';await checkBaseline(c,budget);
+  }catch(error){recordCleanup(events,stage,error);throw error;}
 }
 export async function startExperiment(c,budget,io){
   let launched=false;
@@ -374,10 +406,11 @@ export class ResourceWatch {
     let timer;try{if(budget){await Promise.race([this.pending,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('DEADLINE')),budget.remaining());})]);budget.remaining();}else await this.pending;}finally{clearTimeout(timer);}
   }
 }
+function runtimeEvents(c){return new SafeEvents(event=>{
+  fs.appendFileSync(ROOT+'/events/'+c.runId+'.jsonl',JSON.stringify({...event,time:new Date().toISOString()})+'\n',{mode:0o600,flag:'a'});
+});}
 export class Runtime {
-  constructor(c,budget){this.c=c;this.budget=budget;this.startedAt=new Date().toISOString();this.attaches=new Map();this.connections=[];this.logCases=new Set();this.loggingAdmitted=false;this.events=new SafeEvents(event=>{
-    fs.appendFileSync(ROOT+'/events/'+c.runId+'.jsonl',JSON.stringify({...event,time:new Date().toISOString()})+'\n',{mode:0o600,flag:'a'});
-  });}
+  constructor(c,budget){this.c=c;this.budget=budget;this.startedAt=new Date().toISOString();this.attaches=new Map();this.connections=[];this.logCases=new Set();this.loggingAdmitted=false;this.events=runtimeEvents(c);}
   recordFailure(error){this.events.event('verifier','fault',0,this.monitor?.fault??error);}
   async start(budget){
     await preflight(this.c,budget);this.secrets=validateGenerated(this.c);for(const secret of this.secrets)this.events.watch(secret);
@@ -400,7 +433,7 @@ export class Runtime {
     }
     this.ready=true;
     await this.audit(budget);
-    while(true){try{await this.api('/_matrix/client/versions',{},budget);break;}catch{await new Promise(r=>setTimeout(r,budget.remaining(100)));}}
+    await this.waitReady(budget);
     await this.sentinels(budget);
     const livekit=await httpRequest('https://'+serverName(this.c)+'/twirp/livekit.RoomService/ListParticipants',{method:'POST',body:'{}',lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,headers:{'Content-Type':'application/json'}});budget.remaining();
     requireFact(livekit.status===401,'READINESS');
@@ -410,23 +443,42 @@ export class Runtime {
     requireFact([...this.attaches.values()].every(x=>!x.ended),'ATTACH');
     for(const connection of this.connections)connection.assertClean();
   }
+  async waitReady(budget){
+    let attempts=0,last;
+    while(true){
+      budget.remaining();attempts++;
+      try{await this.api('/_matrix/client/versions',{},budget);budget.remaining();this.events.event('verifier','readiness',200,'OK',attempts);return;}
+      catch(error){
+        const status=Number.isInteger(error.status)&&error.status>=100&&error.status<600?error.status:0,key=(knownFailure(error)?.message??'UNKNOWN')+':'+status;
+        if(key!==last){this.events.event('verifier','readiness',status,error,attempts);last=key;}
+        await new Promise(resolve=>setTimeout(resolve,budget.remaining(100)));
+      }
+    }
+  }
   async api(route,{method='GET',body,token,expected=200}={},budget){
     if(token||body!==undefined)requireFact(this.loggingAdmitted===true,'LOG_ADMISSION');if(token)this.events.watch(token);
     const r=await httpRequest('https://'+serverName(this.c)+route,{method,body:body===undefined?undefined:JSON.stringify(body),token,lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,headers:body===undefined?{}:{'Content-Type':'application/json'}});budget.remaining();
-    this.events.event('verifier','http',r.status,r.status===expected?'OK':'FAIL');requireFact(r.status===expected,'HTTP');
-    try{return JSON.parse(r.body);}catch{throw new Error('BODY');}
+    this.events.event('verifier','http',r.status,r.status===expected?'OK':'FAIL');
+    if(r.status!==expected)throw Object.assign(new Error('HTTP'),{status:r.status});
+    try{return JSON.parse(r.body);}catch{throw Object.assign(new Error('BODY'),{status:r.status});}
   }
   async auth(body,budget){requireFact(this.loggingAdmitted===true||this.sentinel===body?.openid_token?.access_token&&typeof this.sentinel==='string','LOG_ADMISSION');this.events.watch(body.openid_token.access_token);const result=await httpRequest('https://'+serverName(this.c)+'/sfu/get',{method:'POST',body:JSON.stringify(body),lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal,headers:{'Content-Type':'application/json'}});budget.remaining();return result;}
   async stop(){
+    let stage='cleanup_budget';
     try{
     const budget=this.cleanup??=cleanupBudget(this.c);
-    await this.monitor?.close(budget);budget.remaining();
+    stage='cleanup_monitor';await this.monitor?.close(budget);budget.remaining();
+    stage='cleanup_sockets';
     for(const connection of this.connections)connection.socket.close();
-    const result=await stopOwned(this.c,readOwnership(this.c),budget);
+    stage='cleanup_receipt';const receipt=readOwnership(this.c);
+    stage='cleanup_result';const result=await stopOwned(this.c,receipt,budget,undefined,(failed,error,service)=>recordCleanup(this.events,failed,error,service));
+    stage='cleanup_attaches';
     await budget.waitFor(()=>[...this.attaches.values()].every(x=>x.ended));
+    stage='cleanup_sockets';
     await budget.waitFor(()=>this.connections.every(x=>x.socket.readyState===WebSocket.CLOSED));
     for(const service of SERVICES)this.events.event(service,'stopped');
-    await baseline(this.c,budget);requireFact(result==='OK',result);this.monitor?.check();for(const connection of this.connections)connection.assertClean();await this.scan([this.sentinel,...this.secrets],budget);this.events.check();this.events.event('verifier','chunks',0,'OK',this.events.chunks);
+    stage='cleanup_baseline';await baseline(this.c,budget);stage='cleanup_result';requireFact(result==='OK',result);stage='cleanup_monitor';this.monitor?.check();stage='cleanup_sockets';for(const connection of this.connections)connection.assertClean();stage='cleanup_scan';await this.scan([this.sentinel,...this.secrets],budget);this.events.check();this.events.event('verifier','chunks',0,'OK',this.events.chunks);
+    }catch(error){recordCleanup(this.events,stage,error);throw error;
     }finally{this.closeSyslog?.();}
   }
 }
@@ -656,7 +708,7 @@ export async function main(action){
     await stopUnit(c,cleanupBudget(c));await unitStopped(c,cleanupBudget(c));
   }else{
     const stopBudget=cleanupBudget(c);if(action==='stop')await stopUnit(c,stopBudget);
-    const result=await stopOwned(c,readOwnership(c),stopBudget);requireFact(result==='OK',result);await baseline(c,stopBudget);
+    await cleanupHook(c,stopBudget,runtimeEvents(c));
     if(action==='stop')await unitStopped(c,stopBudget);
   }
 }
