@@ -37,7 +37,7 @@ export function validateContract(c,action){
   requireFact(c.certificateSource==='operator-provisioned-public-chain'&&/^[a-f0-9]{64}$/.test(c.certificateSha256));
   requireFact(c.asHomeserver===serverName(c)&&JSON.stringify(c.fullAccessHomeservers)===JSON.stringify([serverName(c)]));
   requireFact(typeof c.machineUuid==='string'&&c.machineUuid.length>0&&c.machineUuid.length<=128);
-  requireFact(c.platform==='linux/amd64'&&JSON.stringify(c.source)===JSON.stringify(PINS));
+  requireFact(c.platform==='linux/amd64'&&isDeepStrictEqual(c.source,PINS));
   requireFact(c.sourceHashes&&Object.keys(c.sourceHashes).length===7&&SOURCE_FILES.every(name=>/^[a-f0-9]{64}$/.test(c.sourceHashes[name])));
   requireFact(Array.isArray(c.accessors)&&c.accessors.length>0&&c.accessors.every(x=>x==='operator-loopback'));
   requireFact(c.auxiliary&&c.auxiliary.unit==='babacomrtc'+c.runId+'.slice'&&c.auxiliary.cgroup==='/sys/fs/cgroup/'+c.auxiliary.unit);
