@@ -466,3 +466,7 @@ Jack要求继续修复旧实验目录冲突、保留现场和历史、不增加�
 2026-10-21 e4补跑已结束：PR135/136合并后四服务启动，随后FAIL/BASELINE；四容器停止、PID0、无OOM，18443释放，但清理钩子返回1，完整R0与退出验收未通过。旧e1/e2/e3及业务冻结基线匹配；触发瞬间的基线子条件/数值未保留，不能用后测正常倒推原因。归因修复[PR137](https://github.com/wenhuorongbing-netizen/babacom/pull/137)已合并，98/98本地回归及独立审查通过，保留具体门槛、就绪请求与清理阶段的固定枚举/数值；不据此追认云端PASS。
 
 Jack已签认并授权发布上述修复、审查/托管检查通过后合并，以及[固定新e5](../.agents/modules/matrix-rtc-proof.md#新批次隔离2026-10-20候选)的一次R0。仅更新本文件与原模块，再按序审查合并既有compose/proof/tests三文件；e1–e4目录、数据、秘密、合同及历史原位保留。e5仅独立目录/项目、全新run ID、DB及应用秘密，可只读复用核定Node、独占复制同一实验TLS；原主机、loopback:18443、资源/日志与120秒运行/60秒清理不变，先核对旧基线并冻结本次运行细节，准入失败即停，不复用失败状态、不新增工具或文档文件。本条记录授权与执行顺序，e5真实运行仍NOT_RUN，#124保持OPEN。
+
+2026-10-22 e5实测：PR138/139合并后四服务启动，入口CONNECTION后在原期限内DEADLINE，签票/信令NOT_RUN；四容器停止、PID0、无OOM，18443释放，旧e1–e4/业务基线匹配。systemd约117秒发起停止、约18.7秒后停止完成；public stop再次检查已回收unit而UNKNOWN，完整R0/退出仍未通过。详见[#124实际执行记录](https://github.com/wenhuorongbing-netizen/babacom/issues/124)，不追认历史PASS。
+
+Jack要求修复Docker隔离入口兼容和停止判定，保留旧现场和120秒/60秒，不新增工具或文档。最小e6候选仅更新[原模块](../.agents/modules/matrix-rtc-proof.md#新批次隔离2026-10-20候选)及本文件，再实施既有compose/proof/tests三文件：Caddy独接专属标准ingress bridge恢复loopback发布，后三服务仍只接internal；Caddy将获得标准出站能力，须明确签认。unit回收不再单独构成停止失败，但必须结合归属回执、零PID/Job、空cgroup及四容器停止实证。候选待独立审查、具体签认与发布合并；e1–e5原位保留，e6用全新run/DB/应用秘密和原TLS/资源/日志门，当前未启动e6。
