@@ -6,6 +6,7 @@ The current product remains the custom prototype. Matrix migration progress and 
 
 ## Start here
 
+- Current implementation: [as-built product baseline](PRD.md) → [architecture and flows](ARCHITECTURE.md). These describe the code; migration requirements remain in the migration PRD and specification below.
 - Development: [source map](REPO_MAP.md) → [contributor rules](AGENTS.md) → [team workflow](docs/05-collaboration.md) and the Issue's module manifest.
 - Migration: [PRD](docs/PRD-matrix-migration.md) → [specification](docs/Matrix-migration-spec.md) → [backlog index](docs/Matrix-migration-backlog.md). Live acceptance criteria and status belong to GitHub Issues.
 - Signoffs and evidence provenance: [decisions](docs/04-open-decisions.md).
