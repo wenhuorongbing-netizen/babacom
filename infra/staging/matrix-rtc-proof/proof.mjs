@@ -59,27 +59,39 @@ function knownFailure(error){let known;for(let depth=0;depth<8&&error instanceof
 function requireBaseline(ok,reason,{index=1,actual,limit,code='BASELINE'}={}){if(!ok)throw new Error(code,{cause:Object.assign(new Error(reason),{index,actual,limit})});}
 function normalizedLog(text){return text.replace(/%([a-f\d]{2})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))).replace(/\\u([a-f\d]{4})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))).replace(/\\([\\/"bfnrt])/g,(_,value)=>({b:'\b',f:'\f',n:'\n',r:'\r',t:'\t'}[value]??value));}
 export class SafeEvents {
-  constructor(write){this.write=write;this.bytes=0;this.chunks=0;this.markers=new Set();this.tails=new Map();this.observed=0;this.leak=false;this.unknownDiscarded=false;}
+  constructor(write){this.write=write;this.bytes=0;this.chunks=0;this.markers=new Set();this.tails=new Map();this.retained=new Map();this.observed=0;this.leak=false;this.unknownDiscarded=false;}
   watch(marker){requireFact(typeof marker==='string'&&marker.length>0&&marker.length<=8192&&this.markers.size<512,'HOLD');if(this.markers.has(marker))return;requireFact(!this.unknownDiscarded,'HOLD');this.markers.add(marker);for(const [key,text] of this.tails)if(text.includes(marker)||normalizedLog(text).includes(marker)){this.observed++;if(key!=='auth:stderr')this.leak=true;}}
   get bufferedBytes(){return [...this.tails.values()].reduce((sum,value)=>sum+Buffer.byteLength(value),0);}
-  consume(service,chunk,stream='stderr'){
-    this.bytes+=chunk.length;this.chunks++;const name=SERVICES.includes(service)?service:'verifier',channel=['stdout','stderr','retained','syslog'].includes(stream)?stream:'retained',key=name+':'+channel;
+  consume(service,chunk,stream='stderr',source){
+    requireFact(source===undefined||service==='verifier'&&stream==='retained'&&this.retained.has(source),'HOLD');
+    this.bytes+=chunk.length;this.chunks++;const name=SERVICES.includes(service)?service:'verifier',channel=['stdout','stderr','retained','syslog'].includes(stream)?stream:'retained',key=name+':'+channel+(source===undefined?'':':'+source);
     const text=(this.tails.get(key)??'')+chunk.toString('utf8');
     const normalized=normalizedLog(text);
     for(const marker of this.markers)if(text.includes(marker)||normalized.includes(marker)){this.observed++;if(name!=='auth'||channel!=='stderr')this.leak=true;}
-    // At most five services * four channels; enough for a fully escaped 8 KiB marker.
+    // Twenty live channels plus at most 128 retained sources; each holds an escaped 8 KiB marker.
     // A future issued token cannot be cleared against unknown bytes already dropped.
     if(text.length>49168&&(name!=='auth'||channel!=='stderr'))this.unknownDiscarded=true;
     this.tails.set(key,text.slice(-49168));
   }
   check(){requireFact(!this.leak,'LEAK');}
+  inspectRetained(source,content,budget){
+    budget.remaining();requireFact(typeof source==='string'&&source.length>0&&source.length<=4096&&Buffer.isBuffer(content)&&content.length<=4194304,'HOLD');
+    const previous=this.retained.get(source);requireFact(previous||this.retained.size<128,'HOLD');
+    const digest=value=>crypto.createHash('sha256').update(value).digest('hex');
+    // Verify the entire old prefix before excluding it; rewrites are scanned in full.
+    const offset=previous&&content.length>=previous.size&&digest(content.subarray(0,previous.size))===previous.hash?previous.size:0;
+    const hash=digest(content);budget.remaining();this.retained.set(source,{size:content.length,hash});
+    if(content.length>offset)this.consume('verifier',content.subarray(offset),'retained',source);
+    budget.remaining();
+  }
   inspectFile(file,budget){
     budget.remaining();const before=fs.lstatSync(file);requireFact(before.isFile()&&!before.isSymbolicLink()&&before.size<=1048576,'HOLD');
     const fd=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));
     try{
-      const opened=fs.fstatSync(fd);requireFact(opened.ino===before.ino&&opened.dev===before.dev,'HOLD');const buffer=Buffer.alloc(8192);let size,total=0;
-      while((size=fs.readSync(fd,buffer,0,buffer.length,null))>0){budget.remaining();total+=size;const chunk=buffer.subarray(0,size);requireFact(total<=1048576&&!chunk.includes(0),'HOLD');this.consume('verifier',chunk,'retained');}
+      const opened=fs.fstatSync(fd);requireFact(opened.ino===before.ino&&opened.dev===before.dev,'HOLD');const buffer=Buffer.alloc(8192),chunks=[];let size,total=0;
+      while((size=fs.readSync(fd,buffer,0,buffer.length,null))>0){budget.remaining();total+=size;const chunk=buffer.subarray(0,size);requireFact(total<=1048576&&!chunk.includes(0),'HOLD');chunks.push(Buffer.from(chunk));}
       const after=fs.fstatSync(fd),name=fs.lstatSync(file);requireFact(after.size===before.size&&after.mtimeMs===before.mtimeMs&&name.ino===opened.ino&&name.dev===opened.dev&&!name.isSymbolicLink(),'HOLD');budget.remaining();
+      this.inspectRetained(file,Buffer.concat(chunks,total),budget);
     }finally{fs.closeSync(fd);}
   }
   event(service,event,status=0,errcode='OK',count=1){
@@ -611,7 +623,7 @@ Runtime.prototype.scan=async function(secrets,budget){
     budget.remaining();frozenMetadata(row);
     if(row.kind==='socket'){
       requireFact(['/run/systemd/journal/socket','/run/systemd/journal/stdout'].includes(row.path),'HOLD');
-      const output=await command('journalctl',['--no-pager','--quiet','--output=cat','--since',this.startedAt,'--until',new Date().toISOString(),'--unit=docker.service','--unit=containerd.service','--unit=rtc-r0-'+this.c.runId+'.service'],{budget});this.events.consume('verifier',Buffer.from(output),'retained');
+      const output=await command('journalctl',['--no-pager','--quiet','--output=cat','--since',this.startedAt,'--until',new Date().toISOString(),'--unit=docker.service','--unit=containerd.service','--unit=rtc-r0-'+this.c.runId+'.service'],{budget});this.events.inspectRetained('systemd-journal',Buffer.from(output),budget);
     }else if(row.path==='/var/log/syslog'&&row.kind==='file')requireFact(this.syslog,'HOLD');
     else{
       requireFact([ROOT+'/events',ROOT+'/logs'].some(root=>row.path===root||row.path.startsWith(root+'/')),'HOLD');

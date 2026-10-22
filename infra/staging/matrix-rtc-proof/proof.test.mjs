@@ -824,6 +824,43 @@ test('observed markers distinguish permitted auth stderr RAM from forbidden stre
   const bounded=new SafeEvents(()=>{});bounded.watch(marker);bounded.consume('auth',Buffer.from('x'.repeat(100000)),'stderr');
   assert.ok(bounded.bufferedBytes<=65536);
 });
+test('repeated retained-file scans do not discard bytes that are still available before a new credential',()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'babacom-rtc-repeat-')),file=path.join(directory,'events.jsonl'),budget=new Budget(1000),events=new SafeEvents(()=>{});
+  try{
+    fs.writeFileSync(file,'{"event":"http","status":502}\n'.repeat(1000));
+    events.inspectFile(file,budget);events.inspectFile(file,budget);
+    assert.doesNotThrow(()=>events.watch('incapable/new-credential'));
+    assert.equal(events.bytes,fs.statSync(file).size);
+  }finally{fs.unlinkSync(file);fs.rmdirSync(directory);}
+});
+test('retained-file growth keeps earlier evidence without replaying the unchanged prefix',()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'babacom-rtc-growth-')),file=path.join(directory,'events.jsonl'),budget=new Budget(1000),events=new SafeEvents(()=>{}),marker='incapable/earlier-credential';
+  try{
+    fs.writeFileSync(file,marker+'x'.repeat(29900));events.inspectFile(file,budget);
+    fs.appendFileSync(file,'y'.repeat(10000));events.inspectFile(file,budget);events.inspectFile(file,budget);
+    assert.doesNotThrow(()=>events.watch(marker));assert.throws(()=>events.check(),/LEAK/);
+    assert.equal(events.bytes,fs.statSync(file).size);
+  }finally{fs.unlinkSync(file);fs.rmdirSync(directory);}
+});
+test('independent retained files keep split markers across interleaved scans and detect rewritten prefixes',()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'babacom-rtc-interleave-')),a=path.join(directory,'a.txt'),b=path.join(directory,'b.txt'),budget=new Budget(1000),events=new SafeEvents(()=>{}),marker='incapable/split';
+  try{
+    events.watch(marker);fs.writeFileSync(a,'x'.repeat(20000)+'incapable%2Fsp');events.inspectFile(a,budget);
+    fs.writeFileSync(b,'y'.repeat(20000));events.inspectFile(b,budget);fs.appendFileSync(a,'lit');events.inspectFile(a,budget);assert.throws(()=>events.check(),/LEAK/);
+    const rewritten=new SafeEvents(()=>{});rewritten.watch(marker);fs.writeFileSync(b,'z'.repeat(100));rewritten.inspectFile(b,budget);
+    fs.writeFileSync(b,marker.padEnd(100,'z'));rewritten.inspectFile(b,budget);assert.throws(()=>rewritten.check(),/LEAK/);
+    const discarded=new SafeEvents(()=>{});fs.writeFileSync(b,'x'.repeat(50000));discarded.inspectFile(b,budget);assert.throws(()=>discarded.watch('incapable/new-credential'),/HOLD/);
+  }finally{fs.unlinkSync(a);fs.unlinkSync(b);fs.rmdirSync(directory);}
+});
+test('repeated journal snapshots share one bounded source and real discarded history remains HOLD',()=>{
+  const budget=new Budget(1000),events=new SafeEvents(()=>{}),marker='incapable/journal-credential',first=Buffer.from('incapable%2Fjournal-credential'+'x'.repeat(30000));
+  events.inspectRetained('systemd-journal',first,budget);events.inspectRetained('systemd-journal',Buffer.from(first),budget);
+  const grown=Buffer.concat([first,Buffer.from('y'.repeat(10000))]);events.inspectRetained('systemd-journal',grown,budget);
+  assert.equal(events.bytes,grown.length);assert.doesNotThrow(()=>events.watch(marker));assert.throws(()=>events.check(),/LEAK/);
+  const bounded=new SafeEvents(()=>{});for(let index=0;index<128;index++)bounded.inspectRetained('source-'+index,Buffer.from('safe'),budget);
+  assert.throws(()=>bounded.inspectRetained('overflow',Buffer.from('safe'),budget),/HOLD/);assert.ok(bounded.bufferedBytes<=512);
+  const discarded=new SafeEvents(()=>{});discarded.inspectRetained('systemd-journal',Buffer.alloc(50000,120),budget);assert.throws(()=>discarded.watch(marker),/HOLD/);
+});
 test('actual retained files are scanned across read boundaries and oversized or opaque files remain HOLD',()=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'babacom-rtc-log-')),file=path.join(directory,'retained.txt'),budget=new Budget(1000),events=new SafeEvents(()=>{});
   try{
