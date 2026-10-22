@@ -4,7 +4,7 @@
 
 ## 产品和使用者
 
-当前产品是供私人游戏群使用的 Windows Electron 语音原型；Matrix 是独立验证中的迁移方向。当前没有 Matrix 测试发行版，安装旧 BabaCom 包不代表迁移完成。
+当前产品是供私人游戏群使用的 Windows Electron 语音原型；Matrix 是独立验证中的迁移方向。当前没有 Matrix 测试发行版，安装旧 BabaCom 包不代表迁移完成。客户端只接受 `127.0.0.1` API 和 `ws://127.0.0.1` SFU，普通 API 入口也只监听本机；直接配置远端服务接入尚未实现（[启动校验](apps/desktop/src/main/main.ts)、[API 入口](apps/api/app/main.py)）。
 
 | 使用者 | 当前可执行的任务 | 边界 |
 |---|---|---|

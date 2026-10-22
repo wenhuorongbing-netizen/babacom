@@ -10,9 +10,9 @@ flowchart TB
     Preload[受限 preload IPC]
     Main[Electron 主进程 / 凭据 / MediaSession]
     Media[独立媒体窗口 / LiveKit JS SDK]
-    API[FastAPI 准入路由]
+    API[本机 FastAPI 准入路由]
     Providers[宿主注入认证与授权 provider]
-    LK[获准 LiveKit SFU]
+    LK[本机 LiveKit SFU]
     UI --> Preload --> Main
     Main --> API --> Providers
     Main --> Media --> LK
