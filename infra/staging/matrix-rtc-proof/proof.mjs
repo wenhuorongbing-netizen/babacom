@@ -10,11 +10,11 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
-const ROOT='/opt/babacom-matrix-rtc-e5', PROJECT='babacom-matrix-rtc-e5';
+const ROOT='/opt/babacom-matrix-rtc-e6', PROJECT='babacom-matrix-rtc-e6';
 const SERVICES=['synapse','livekit','auth','caddy'];
 const SOURCE_FILES=['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'];
 export const PINS=Object.freeze({
-  synapse:{image:'ghcr.io/element-hq/synapse@sha256:43fd704aedef503a6fba2e5696439ef7bac24479a3472e364561973f550e4aad',source:'63dc0cbfe514f60743212566374ffeb5e9e295c2'},
+  synapse:{image:'ghcr.io/element-hq/synapse@sha256:43fd704aedef503a6fba2e6696439ef7bac24479a3472e364561973f550e4aad',source:'63dc0cbfe614f60743212566374ffeb5e9e295c2'},
   auth:{image:'ghcr.io/element-hq/lk-jwt-service@sha256:2c985ab98de8da3b101c09fb597404dcb2723bb984b1ee20a430a8bb4f6a51a9',source:'0e176b1eca44e67b11484d0bdf56999807bf2b8e'},
   livekit:{image:'docker.io/livekit/livekit-server@sha256:f63579e294b6dbf38e0e6151a24a5b425e9293e75e6d41959f470c957248b8a7',source:'0b3fd288e3ef3263ec475ba0d78cf3ad77459981'},
   caddy:{image:'docker.io/library/caddy@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229',source:'72dd0fb067f6d7826c7f79907670ba4a713bfe37'},
@@ -104,15 +104,30 @@ export function assertResources(rows){
 export function assertContainerConfiguration(i,c,service){
   assertOwned(i,c,service);const h=i.HostConfig;
   requireFact(isDeepStrictEqual(h?.Annotations,{'org.systemd.property.MemorySwapMax':'uint64 0'}),'SWAP');
-  requireFact(h?.LogConfig?.Type==='none'&&i.LogPath===''&&h.ReadonlyRootfs===true&&h.Privileged===false&&h.NetworkMode===c.project+'_isolated'&&h.CapDrop?.includes('ALL'),'CONFIG');
+  requireFact(h?.LogConfig?.Type==='none'&&i.LogPath===''&&h.ReadonlyRootfs===true&&h.Privileged===false&&(service==='caddy'?[c.project+'_isolated',c.project+'_ingress'].includes(h.NetworkMode):h.NetworkMode===c.project+'_isolated')&&h.CapDrop?.includes('ALL'),'CONFIG');
   const added=h.CapAdd??[],security=h.SecurityOpt;
   requireFact(Array.isArray(added)&&(service==='caddy'?added.length===1&&['NET_BIND_SERVICE','CAP_NET_BIND_SERVICE'].includes(added[0]):added.length===0),'CONFIG');
   requireFact(Array.isArray(security)&&security.length===1&&['no-new-privileges','no-new-privileges:true','no-new-privileges=true'].includes(security[0]),'CONFIG');
   const ports=h.PortBindings??{},expected=service==='caddy'?{[c.port+'/tcp']:[{HostIp:'127.0.0.1',HostPort:String(c.port)}]}:{};
   requireFact(JSON.stringify(ports)===JSON.stringify(expected),'PORT');
+  const names=service==='caddy'?['ingress','isolated']:['isolated'];
+  requireFact(isDeepStrictEqual(Object.keys(i.NetworkSettings?.Networks??{}).sort(),names.map(name=>c.project+'_'+name).sort()),'CONFIG');
+  if(i.State.Running){
+    const published=Object.fromEntries(Object.entries(i.NetworkSettings?.Ports??{}).filter(([,bindings])=>bindings!==null));
+    requireFact(isDeepStrictEqual(published,expected),'PORT');
+  }
   const targets={synapse:['data','homeserver.yaml','appservice.yaml','log.config'],livekit:['livekit.yaml'],auth:['appservice.yaml','livekit.key','livekit.secret'],caddy:['Caddyfile','tls.crt','tls.key']}[service];
   requireFact(Array.isArray(i.Mounts)&&i.Mounts.filter(x=>x.Type==='bind').length===targets.length&&i.Mounts.every(x=>x.Type==='bind'||x.Type==='tmpfs'&&['/tmp',...(service==='caddy'?['/data','/config']:[])].includes(x.Destination)),'MOUNTS');
   for(const name of targets){const data=name==='data',source=c.root+(data?'/data':'/secrets/'+name),destination=data?'/data':'/run/secrets/'+name;requireFact(i.Mounts.some(x=>x.Type==='bind'&&x.Source===source&&x.Destination===destination&&x.RW===data),'MOUNTS');}
+}
+export function assertNetworkTopology(c,containers,networks){
+  requireFact(containers.length===4&&networks.length===2,'CONFIG');
+  for(const name of ['isolated','ingress']){
+    const n=networks.find(row=>row.Name===c.project+'_'+name),members=containers.filter(i=>name==='isolated'||i.Config.Labels['com.docker.compose.service']==='caddy');
+    requireFact(n&&n.Driver==='bridge'&&n.Scope==='local'&&n.Internal===(name==='isolated')&&n.EnableIPv6===false&&n.Labels?.['com.docker.compose.project']===c.project&&n.Labels?.['com.docker.compose.network']===name&&n.Labels?.['rtc.host']===c.host&&n.Labels?.['rtc.run']===c.runId,'CONFIG');
+    requireFact(isDeepStrictEqual(Object.keys(n.Options??{}).sort(),name==='ingress'?['com.docker.network.bridge.host_binding_ipv4']:[])&&(name!=='ingress'||n.Options['com.docker.network.bridge.host_binding_ipv4']==='127.0.0.1'),'CONFIG');
+    requireFact(isDeepStrictEqual(Object.keys(n.Containers??{}).sort(),members.map(i=>i.Id).sort())&&members.every(i=>i.NetworkSettings?.Networks?.[n.Name]?.NetworkID===n.Id),'CONFIG');
+  }
 }
 export function assertPinnedImage(image,service){
   const pin=PINS[service]?.image,alias=pin?.startsWith('docker.io/')?pin.slice('docker.io/'.length).replace(/^library\//,''):pin;
@@ -349,21 +364,22 @@ export async function stopOwned(c,receipt,budget,io=recoveryIO,onFailure){
         await sample();stage='cleanup_inspect';let current=await io.inspect(row.id,budget);budget.remaining();verify(current);
         if(current.State.Paused){stage='cleanup_unpause';requireFact(row.service==='synapse'&&typeof io.unpause==='function','UNKNOWN');await io.unpause(row.id,budget);budget.remaining();current=await io.inspect(row.id,budget);budget.remaining();verify(current);requireFact(!current.State.Paused,'UNKNOWN');}
         if(current.State.Running){stage='cleanup_stop';budget.remaining();await io.stop(row.id,budget);}
-        stage='cleanup_stopped';const after=await io.inspect(row.id,budget);budget.remaining();verify(after);requireFact(!after.State.Running,'UNKNOWN');await sample();
+        stage='cleanup_stopped';const after=await io.inspect(row.id,budget);budget.remaining();verify(after);requireFact(!after.State.Running&&after.State.Pid===0&&after.State.Paused===false,'UNKNOWN');await sample();
       }catch(error){if(error.message==='DEADLINE')throw error;report(error);unknown=true;}
     }
     budget.remaining();return unknown?'UNKNOWN':resourceFault??'OK';
   }catch(error){report(error);return error.message==='DEADLINE'?'DEADLINE':'UNKNOWN';}
 }
-export async function cleanupHook(c,events,{admit=ownAux,acquireBudget=()=>cleanupBudget(c),readReceipt=readOwnership,recovery=recoveryIO,checkBaseline=baseline,stopWorker=false}={}){
+export async function cleanupHook(c,events,{admit=ownAux,acquireBudget=()=>cleanupBudget(c),readReceipt=readOwnership,recovery=recoveryIO,checkBaseline=baseline,stopWorker=false,stopWorkerUnit=stopUnit,checkUnit=unitStopped}={}){
   let stage='cleanup_admission';
   try{
     admit(c);stage='cleanup_budget';const budget=acquireBudget();
-    if(stopWorker){stage='cleanup_worker';await stopUnit(c,budget);}
+    if(stopWorker){stage='cleanup_worker';await stopWorkerUnit(c,budget);}
     stage='cleanup_receipt';budget.remaining();const receipt=readReceipt(c);stage='cleanup_result';
     const result=await stopOwned(c,receipt,budget,recovery,(failed,error,service)=>recordCleanup(events,failed,error,service));
     requireFact(result==='OK',result);stage='cleanup_baseline';await checkBaseline(c,budget);
-    if(stopWorker){stage='cleanup_unit';await unitStopped(c,budget);}
+    if(stopWorker){stage='cleanup_unit';await checkUnit(c,budget);}
+    events?.event('verifier','cleanup_result',0,'OK');
   }catch(error){recordCleanup(events,stage,error);throw error;}
 }
 export async function startExperiment(c,budget,io){
@@ -421,7 +437,7 @@ export class Runtime {
     this.freezeSyslog(budget);
     this.sentinel='incapable-'+crypto.randomBytes(24).toString('hex');this.events.watch(this.sentinel);
     await expectFailure(httpRequest('https://'+serverName(this.c)+'/_matrix/client/versions',{token:this.sentinel,lookup:lookupLoopback,timeout:budget.remaining(8000),signal:budget.signal}),'CONNECTION',budget);this.logCases.add('connection');this.events.event('verifier','log_connection');
-    this.monitor=new ResourceWatch(async current=>{this.events.check();const measured=await baseline(this.c,current),containers=await ownContainers(this.c,current);if(this.ready)requireFact(containers.length===4&&containers.every(row=>row.State.Running),'FAIL');await cgroups(this.c,containers.filter(row=>row.State.Running),current);this.events.event('verifier','shared_cpu_milli',0,'OK',Math.ceil(measured.sharedCpu*10));this.events.event('verifier','shared_memory_bytes',0,'OK',measured.sharedMemory);},budget,this.c.sharedRuntime.sampleIntervalMs);await this.monitor.start();
+    this.monitor=new ResourceWatch(async current=>{this.events.check();const measured=await baseline(this.c,current),containers=await ownContainers(this.c,current);if(this.ready){requireFact(containers.length===4&&containers.every(row=>row.State.Running),'FAIL');for(const row of containers)assertContainerConfiguration(row,this.c,row.Config.Labels['com.docker.compose.service']);}await cgroups(this.c,containers.filter(row=>row.State.Running),current);this.events.event('verifier','shared_cpu_milli',0,'OK',Math.ceil(measured.sharedCpu*10));this.events.event('verifier','shared_memory_bytes',0,'OK',measured.sharedMemory);},budget,this.c.sharedRuntime.sampleIntervalMs);await this.monitor.start();
     await compose(this.c,['create','--pull','never'],budget);
     const containers=await ownContainers(this.c,budget);requireFact(containers.length===4,'OWNERSHIP');writeOwnership(this.c,containers);
     for(const i of containers){assertContainerConfiguration(i,this.c,i.Config.Labels['com.docker.compose.service']);requireFact(i.HostConfig.MemorySwap===i.HostConfig.Memory&&i.HostConfig.Memory>0&&i.HostConfig.NanoCpus>0,'CONFIG');}
@@ -434,6 +450,10 @@ export class Runtime {
       while(!(await inspect(i.Id,budget)).State.Running){requireFact(!state.ended,'START');await new Promise(r=>setTimeout(r,budget.remaining(25)));}
       await this.monitor.sample();this.events.event(service,'started');
     }
+    const running=await ownContainers(this.c,budget);
+    for(const i of running)assertContainerConfiguration(i,this.c,i.Config.Labels['com.docker.compose.service']);
+    const networks=JSON.parse(await command('docker',['network','inspect',this.c.project+'_isolated',this.c.project+'_ingress'],{budget}));
+    assertNetworkTopology(this.c,running,networks);
     this.ready=true;
     await this.audit(budget);
     await this.waitReady(budget);
@@ -665,18 +685,30 @@ Runtime.prototype.verify=async function(budget){
   }finally{for(const socket of sockets)socket.close();}
 };
 
-export async function stopUnit(c,budget,run=command){
+function unitState(text){return Object.fromEntries(text.trim().split('\n').map(line=>{const at=line.indexOf('=');return [line.slice(0,at),line.slice(at+1)];}));}
+function workerGroup(c){
+  const group=c.auxiliary.cgroup+'/rtc-r0-'+c.runId+'.service';
+  if(!fs.existsSync(group))return null;
+  const stat=fs.lstatSync(group);requireFact(stat.isDirectory()&&!stat.isSymbolicLink(),'UNKNOWN');return fs.readFileSync(group+'/cgroup.events','utf8');
+}
+function assertWorkerGroup(c,budget,readGroup){budget.remaining();const state=readGroup(c);requireFact(state===null||typeof state==='string'&&/^populated 0$/m.test(state),'UNKNOWN');budget.remaining();}
+export async function stopUnit(c,budget,run=command,readGroup=workerGroup){
   const unit='rtc-r0-'+c.runId+'.service';
-  const metadata=await run('systemctl',['show',unit,'--property=Description,Slice,Transient','--value'],{budget});
-  requireFact(metadata.split('\n').includes('BabaCom RTC '+c.runId)&&metadata.split('\n').includes(c.auxiliary.unit)&&metadata.split('\n').includes('yes'),'UNKNOWN');
+  const state=unitState(await run('systemctl',['show',unit,'--property=Description,Slice,Transient,LoadState,ActiveState,MainPID,ControlPID,Job,ControlGroup'],{budget}));
+  budget.remaining();
+  if(state.LoadState==='not-found'){
+    assertUnitStopped(state);requireFact(state.Job===''&&state.ControlGroup==='','UNKNOWN');assertWorkerGroup(c,budget,readGroup);return;
+  }
+  requireFact(state.LoadState==='loaded'&&state.Description==='BabaCom RTC '+c.runId&&state.Slice===c.auxiliary.unit&&state.Transient==='yes','UNKNOWN');
   await run('systemctl',['stop',unit],{budget,timeout:budget.remaining(60000)});
 }
-export function assertUnitStopped(state){requireFact(['inactive','failed'].includes(state.ActiveState)&&state.MainPID==='0'&&state.ControlPID==='0','UNKNOWN');}
-async function unitStopped(c,budget){
-  const text=await command('systemctl',['show','rtc-r0-'+c.runId+'.service','--property=ActiveState,MainPID,ControlPID'],{budget});
-  assertUnitStopped(Object.fromEntries(text.trim().split('\n').map(line=>line.split('='))));
-  const group=c.auxiliary.cgroup+'/rtc-r0-'+c.runId+'.service';
-  if(fs.existsSync(group))requireFact(/^populated 0$/m.test(fs.readFileSync(group+'/cgroup.events','utf8')),'UNKNOWN');
+export function assertUnitStopped(state){requireFact(['inactive','failed'].includes(state.ActiveState)&&state.MainPID==='0'&&state.ControlPID==='0'&&(state.Job===undefined||state.Job===''),'UNKNOWN');}
+export async function unitStopped(c,budget,run=command,readGroup=workerGroup){
+  const state=unitState(await run('systemctl',['show','rtc-r0-'+c.runId+'.service','--property=Description,Slice,Transient,LoadState,ActiveState,MainPID,ControlPID,Job,ControlGroup'],{budget}));
+  assertUnitStopped(state);requireFact(['loaded','not-found'].includes(state.LoadState)&&state.Job==='','UNKNOWN');
+  if(state.LoadState==='not-found')requireFact(state.ControlGroup==='','UNKNOWN');
+  else requireFact(state.Description==='BabaCom RTC '+c.runId&&state.Slice===c.auxiliary.unit&&state.Transient==='yes'&&['',c.auxiliary.cgroup.slice('/sys/fs/cgroup'.length)+'/rtc-r0-'+c.runId+'.service'].includes(state.ControlGroup),'UNKNOWN');
+  assertWorkerGroup(c,budget,readGroup);
 }
 async function runTask(c,budget){
   const runtime=new Runtime(c,budget);let requested=false,ready=false;
