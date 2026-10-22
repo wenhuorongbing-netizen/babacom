@@ -402,6 +402,25 @@ test('fresh e7 contract cannot reuse e1, e2, e3, e4, e5, e6 or a mixed deploymen
   for(const [root,project] of [...['e1','e2','e3','e4','e5','e6'].flatMap(batch=>[['/opt/babacom-matrix-rtc-'+batch,'babacom-matrix-rtc-'+batch],[c.root,'babacom-matrix-rtc-'+batch],['/opt/babacom-matrix-rtc-'+batch,c.project]]),[c.root+'/other',c.project],[c.root,c.project+'-other']])assert.throws(()=>validateContract({...c,root,project}),/^Error: CONTRACT$/);
 });
 
+test('contract image pins accept unchanged values after JSON property reordering',()=>{
+  const c=contract();
+  const source=Object.fromEntries(Object.entries(c.source).sort(([a],[b])=>a.localeCompare(b)).map(([service,pin])=>[service,Object.fromEntries(Object.entries(pin).reverse())]));
+  const parsed=JSON.parse(JSON.stringify({...c,source}));
+  assert.notEqual(JSON.stringify(parsed.source),JSON.stringify(PINS));
+  assert.equal(validateContract(parsed),parsed);
+});
+
+test('contract image pins still reject changed, missing and extra values',()=>{
+  const c=contract();
+  for(const service of Object.keys(PINS)){
+    for(const change of [pin=>pin.image=pin.image.replace(/sha256:[a-f0-9]{64}$/,'sha256:'+'0'.repeat(64)),pin=>pin.source='0'.repeat(40),pin=>delete pin.source,pin=>pin.extra=true]){
+      const copy=structuredClone(c);change(copy.source[service]);assert.throws(()=>validateContract(copy),/^Error: CONTRACT$/);
+    }
+    const copy=structuredClone(c);delete copy.source[service];assert.throws(()=>validateContract(copy),/^Error: CONTRACT$/);
+  }
+  assert.throws(()=>validateContract({...c,source:{...c.source,extra:{...c.source.caddy}}}),/^Error: CONTRACT$/);
+});
+
 test('all e7 bind sources, templates and cleanup hooks stay outside retained e1/e2/e3/e4/e5/e6',()=>{
   const c=contract(),compose=fs.readFileSync(new URL('./compose.yaml',import.meta.url),'utf8');
   assert.match(compose,/^name: babacom-matrix-rtc-e7$/m);
