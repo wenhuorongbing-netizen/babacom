@@ -120,6 +120,18 @@ test('public stop cannot accept an active unit or surviving worker and cleanup c
   for(const state of [{ActiveState:'active',MainPID:'0',ControlPID:'0'},{ActiveState:'inactive',MainPID:'123',ControlPID:'0'},{ActiveState:'inactive',MainPID:'0',ControlPID:'123'},{}])assert.throws(()=>proof.assertUnitStopped(state));
 });
 
+test('frozen official image and source pins remain unchanged across experiment batches',()=>{
+  const approved={
+    synapse:{image:'ghcr.io/element-hq/synapse@sha256:43fd704aedef503a6fba2e5696439ef7bac24479a3472e364561973f550e4aad',source:'63dc0cbfe514f60743212566374ffeb5e9e295c2'},
+    auth:{image:'ghcr.io/element-hq/lk-jwt-service@sha256:2c985ab98de8da3b101c09fb597404dcb2723bb984b1ee20a430a8bb4f6a51a9',source:'0e176b1eca44e67b11484d0bdf56999807bf2b8e'},
+    livekit:{image:'docker.io/livekit/livekit-server@sha256:f63579e294b6dbf38e0e6151a24a5b425e9293e75e6d41959f470c957248b8a7',source:'0b3fd288e3ef3263ec475ba0d78cf3ad77459981'},
+    caddy:{image:'docker.io/library/caddy@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229',source:'72dd0fb067f6d7826c7f79907670ba4a713bfe37'},
+  };
+  assert.deepEqual(PINS,approved);
+  const compose=fs.readFileSync(new URL('./compose.yaml',import.meta.url),'utf8');
+  for(const pin of Object.values(approved)){assert.ok(compose.includes('image: '+pin.image));assert.ok(compose.includes('/ source '+pin.source));}
+});
+
 test('pinned Linux amd64 images accept only their exact captured Docker Hub digest aliases',()=>{
   const captured={synapse:PINS.synapse.image,auth:PINS.auth.image,livekit:'livekit/livekit-server@sha256:f63579e294b6dbf38e0e6151a24a5b425e9293e75e6d41959f470c957248b8a7',caddy:'caddy@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229'};
   for(const [service,digest] of Object.entries(captured)){
@@ -134,6 +146,7 @@ function configuredContainer(c,service){
   const i=inspected(c,receipt(c).containers.find(x=>x.service===service));
   i.HostConfig={LogConfig:{Type:'none'},ReadonlyRootfs:true,CapDrop:['ALL'],CapAdd:service==='caddy'?['NET_BIND_SERVICE']:[],SecurityOpt:['no-new-privileges'],Privileged:false,NetworkMode:c.project+'_isolated',PortBindings:service==='caddy'?{'18443/tcp':[{HostIp:'127.0.0.1',HostPort:'18443'}]}:{},Annotations:{'org.systemd.property.MemorySwapMax':'uint64 0'}};
   const names={caddy:['Caddyfile','tls.crt','tls.key'],synapse:['data','homeserver.yaml','appservice.yaml','log.config'],auth:['appservice.yaml','livekit.key','livekit.secret'],livekit:['livekit.yaml']}[service];
+  i.NetworkSettings={Networks:Object.fromEntries((service==='caddy'?['isolated','ingress']:['isolated']).map((name,index)=>[c.project+'_'+name,{NetworkID:String(index+1).repeat(64)}])),Ports:service==='caddy'?{'18443/tcp':[{HostIp:'127.0.0.1',HostPort:'18443'}]}:{}};
   i.LogPath='';i.Mounts=names.map(name=>name==='data'?{Type:'bind',Source:c.root+'/data',Destination:'/data',RW:true}:{Type:'bind',Source:c.root+'/secrets/'+name,Destination:'/run/secrets/'+name,RW:false});
   return i;
 }
@@ -278,10 +291,87 @@ test('systemd inherits the already consumed public deadline instead of starting 
 test('unit stop receives the remaining cleanup budget instead of a separate ten-second command cap',async()=>{
   const c=contract();let now=0,stopped=false;const budget=new Budget(60000,()=>now);now=45000;
   await proof.stopUnit(c,budget,async(_executable,args,options)=>{
-    assert.equal(options.budget,budget);if(args[0]==='show'){now+=1000;return 'BabaCom RTC '+c.runId+'\n'+c.auxiliary.unit+'\nyes\n';}
+    assert.equal(options.budget,budget);if(args[0]==='show'){now+=1000;return 'Description=BabaCom RTC '+c.runId+'\nSlice='+c.auxiliary.unit+'\nTransient=yes\nLoadState=loaded\n';}
     assert.equal(options.timeout,14000);assert.equal(options.budget.end,60000);await command(process.execPath,[fileURLToPath(import.meta.url),'--fixture','json','stopped'],options);now+=11000;options.budget.remaining();stopped=true;
   });
   assert.equal(stopped,true);assert.equal(budget.remaining(),3000);
+});
+
+
+test('running Caddy must have an actual loopback publication rather than only a requested binding',()=>{
+  const c=contract(),i=configuredContainer(c,'caddy');
+  i.NetworkSettings={Networks:{[c.project+'_isolated']:{NetworkID:'1'.repeat(64)},[c.project+'_ingress']:{NetworkID:'2'.repeat(64)}},Ports:{'18443/tcp':[{HostIp:'127.0.0.1',HostPort:'18443'}],'80/tcp':null}};
+  assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,'caddy'));
+  for(const Ports of [{},{'18443/tcp':null},{'18443/tcp':[]},{'18443/tcp':[{HostIp:'0.0.0.0',HostPort:'18443'}]},{...i.NetworkSettings.Ports,'443/tcp':[{HostIp:'127.0.0.1',HostPort:'443'}]}]){
+    assert.throws(()=>proof.assertContainerConfiguration({...i,NetworkSettings:{...i.NetworkSettings,Ports}},c,'caddy'),/^Error: PORT$/);
+  }
+});
+test('only Caddy may join the exact own ingress network and an internal-only Caddy is refused',()=>{
+  const c=contract(),i=configuredContainer(c,'caddy');
+  i.NetworkSettings={Networks:{[c.project+'_isolated']:{NetworkID:'1'.repeat(64)},[c.project+'_ingress']:{NetworkID:'2'.repeat(64)}},Ports:{'18443/tcp':[{HostIp:'127.0.0.1',HostPort:'18443'}]}};
+  assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,'caddy'));
+  for(const Networks of [{[c.project+'_isolated']:{NetworkID:'1'.repeat(64)}},{...i.NetworkSettings.Networks,business:{NetworkID:'3'.repeat(64)}}]){
+    assert.throws(()=>proof.assertContainerConfiguration({...i,NetworkSettings:{...i.NetworkSettings,Networks}},c,'caddy'),/^Error: CONFIG$/);
+  }
+  const other=configuredContainer(c,'auth');other.NetworkSettings={Networks:structuredClone(i.NetworkSettings.Networks),Ports:{}};
+  assert.throws(()=>proof.assertContainerConfiguration(other,c,'auth'),/^Error: CONFIG$/);
+});
+test('collected transient worker can be stopped again only with zero processes, no job and empty cgroup',async()=>{
+  const c=contract(),budget=new Budget(60000),deadline=budget.end;
+  const missing={LoadState:'not-found',ActiveState:'inactive',MainPID:'0',ControlPID:'0',Job:'',ControlGroup:''};
+  const text=state=>Object.entries(state).map(([key,value])=>key+'='+value).join('\n');
+  const run=async(_exe,args,options)=>{assert.equal(options.budget,budget);assert.equal(args[0],'show');return text(missing);};
+  await assert.doesNotReject(proof.stopUnit(c,budget,run,()=>null));
+  await assert.doesNotReject(proof.unitStopped(c,budget,run,()=>'populated 0\nfrozen 0\n'));
+  for(const changed of [{MainPID:'9'},{ControlPID:'9'},{Job:'1 x'},{ActiveState:'active'},{ControlGroup:'/system.slice/foreign.service'}]){
+    await assert.rejects(proof.stopUnit(c,budget,async()=>text({...missing,...changed}),()=>null),/^Error: UNKNOWN$/);
+  }
+  await assert.rejects(proof.stopUnit(c,budget,run,()=>'populated 1\n'),/^Error: UNKNOWN$/);
+  await assert.rejects(proof.stopUnit(c,budget,async()=>{throw Error('COMMAND');},()=>null),/^Error: COMMAND$/);
+  assert.equal(budget.end,deadline);
+});
+test('stopped container with a remaining PID or pause flag cannot pass receipt-owned cleanup',async()=>{
+  const c=contract(),r=receipt(c);
+  for(const changed of [{Pid:123},{Paused:true}]){
+    const result=await stopOwned(c,r,new Budget(1000),{machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:false,Pid:0,Paused:false,...changed}})});
+    assert.equal(result,'UNKNOWN');
+  }
+});
+
+
+test('actual bridge topology rejects external backends, foreign members and wrong run labels',()=>{
+  const c=contract(),containers=['synapse','livekit','auth','caddy'].map(service=>configuredContainer(c,service));
+  const networks=['isolated','ingress'].map((name,index)=>({
+    Id:String(index+1).repeat(64),Name:c.project+'_'+name,Driver:'bridge',Scope:'local',Internal:name==='isolated',EnableIPv6:false,
+    Labels:{'com.docker.compose.project':c.project,'com.docker.compose.network':name,'rtc.host':c.host,'rtc.run':c.runId},
+    Options:name==='ingress'?{'com.docker.network.bridge.host_binding_ipv4':'127.0.0.1'}:{},
+    Containers:Object.fromEntries(containers.filter(i=>name==='isolated'||i.Config.Labels['com.docker.compose.service']==='caddy').map(i=>[i.Id,{}]))
+  }));
+  assert.doesNotThrow(()=>proof.assertNetworkTopology(c,containers,networks));
+  for(const mutate of [
+    rows=>rows[0].Internal=false,rows=>rows[1].Internal=true,rows=>rows[0].Labels['rtc.run']='old',
+    rows=>rows[1].Containers[containers[0].Id]={},rows=>rows[0].Containers['f'.repeat(64)]={},
+    rows=>rows[1].Options['com.docker.network.bridge.host_binding_ipv4']='0.0.0.0',rows=>rows[0].Driver='host',
+    rows=>rows[1].Id='f'.repeat(64)
+  ]){const copy=structuredClone(networks);mutate(copy);assert.throws(()=>proof.assertNetworkTopology(c,containers,copy),/^Error: CONFIG$/);}
+});
+test('public cleanup after worker collection still checks every receipt container and the final baseline',async()=>{
+  const c=contract(),r=receipt(c),rows=[],events=new SafeEvents(row=>rows.push(row)),budget=new Budget(60000);let reads=0,checked=false;
+  const missing='LoadState=not-found\nActiveState=inactive\nMainPID=0\nControlPID=0\nJob=\nControlGroup=\n',run=async()=>missing;
+  const recovery={machine:()=>c.machineUuid,inspect:async id=>{reads++;return {...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:false,Pid:0,Paused:false}};}};
+  const io={admit:()=>{},acquireBudget:()=>budget,readReceipt:()=>r,recovery,stopWorker:true,stopWorkerUnit:(c,b)=>proof.stopUnit(c,b,run,()=>null),checkUnit:(c,b)=>proof.unitStopped(c,b,run,()=>null),checkBaseline:async()=>{checked=true;}};
+  await proof.cleanupHook(c,events,io);assert.equal(reads,8);assert.equal(checked,true);assert.equal(rows.at(-1).errcode,'OK');
+  await assert.rejects(proof.cleanupHook(c,events,{...io,readReceipt:()=>({...r,runId:'old'})}),/^Error: UNKNOWN$/);
+  await assert.rejects(proof.cleanupHook(c,events,{...io,checkBaseline:async()=>{throw Error('BASELINE');}}),/^Error: BASELINE$/);
+});
+test('loaded worker ownership cannot be bypassed by an inactive state or a lookalike name',async()=>{
+  const c=contract(),state={LoadState:'loaded',Description:'BabaCom RTC '+c.runId,Slice:c.auxiliary.unit,Transient:'yes',ActiveState:'inactive',MainPID:'0',ControlPID:'0',Job:'',ControlGroup:''};
+  const text=row=>Object.entries(row).map(([key,value])=>key+'='+value).join('\n');
+  for(const changed of [{Description:'foreign'},{Slice:'system.slice'},{Transient:'no'}]){
+    let stops=0;const run=async(_exe,args)=>{if(args[0]==='stop'){stops++;return '';}return text({...state,...changed});};
+    await assert.rejects(proof.stopUnit(c,new Budget(1000),run,()=>null),/^Error: UNKNOWN$/);assert.equal(stops,0);
+    await assert.rejects(proof.unitStopped(c,new Budget(1000),run,()=>null),/^Error: UNKNOWN$/);
+  }
 });
 
 test('observed TTL events contain positive returned OpenID seconds and JWT remaining seconds only',()=>{
@@ -293,7 +383,7 @@ test('observed TTL events contain positive returned OpenID seconds and JWT remai
 });
 
 function contract() {
-  return { host: 'lhins-af0ntal8', root: '/opt/babacom-matrix-rtc-e5', project: 'babacom-matrix-rtc-e5',
+  return { host: 'lhins-af0ntal8', root: '/opt/babacom-matrix-rtc-e6', project: 'babacom-matrix-rtc-e6',
     runId: 'a'.repeat(32), domain: 'rtc.example.org', port: 18443, certificateSource: 'operator-provisioned-public-chain',
     approved: true, logAdmission: true, machineUuid:'machine', fullAccessHomeservers: ['rtc.example.org:18443'], asHomeserver: 'rtc.example.org:18443',
     platform: 'linux/amd64', source: PINS, sourceHashes: Object.fromEntries(['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'].map(name=>[name,'f'.repeat(64)])), auxiliary: { unit: 'babacomrtc'+ 'a'.repeat(32)+'.slice', cgroup: '/sys/fs/cgroup/babacomrtc'+ 'a'.repeat(32)+'.slice', cpu: .1, memory: 134217728 },
@@ -307,14 +397,14 @@ function contract() {
   };
 }
 
-test('fresh e5 contract cannot reuse e1, e2, e3, e4 or a mixed deployment identity',()=>{
+test('fresh e6 contract cannot reuse e1, e2, e3, e4, e5 or a mixed deployment identity',()=>{
   const c=contract();assert.equal(validateContract(c),c);
-  for(const [root,project] of [...['e1','e2','e3','e4'].flatMap(batch=>[['/opt/babacom-matrix-rtc-'+batch,'babacom-matrix-rtc-'+batch],[c.root,'babacom-matrix-rtc-'+batch],['/opt/babacom-matrix-rtc-'+batch,c.project]]),[c.root+'/other',c.project],[c.root,c.project+'-other']])assert.throws(()=>validateContract({...c,root,project}),/^Error: CONTRACT$/);
+  for(const [root,project] of [...['e1','e2','e3','e4','e5'].flatMap(batch=>[['/opt/babacom-matrix-rtc-'+batch,'babacom-matrix-rtc-'+batch],[c.root,'babacom-matrix-rtc-'+batch],['/opt/babacom-matrix-rtc-'+batch,c.project]]),[c.root+'/other',c.project],[c.root,c.project+'-other']])assert.throws(()=>validateContract({...c,root,project}),/^Error: CONTRACT$/);
 });
 
-test('all e5 bind sources, templates and cleanup hooks stay outside retained e1/e2/e3/e4',()=>{
+test('all e6 bind sources, templates and cleanup hooks stay outside retained e1/e2/e3/e4/e5',()=>{
   const c=contract(),compose=fs.readFileSync(new URL('./compose.yaml',import.meta.url),'utf8');
-  assert.match(compose,/^name: babacom-matrix-rtc-e5$/m);
+  assert.match(compose,/^name: babacom-matrix-rtc-e6$/m);
   assert.match(compose,/^  annotations: \{org\.systemd\.property\.MemorySwapMax: "uint64 0"\}$/m);
   const sources=[...compose.matchAll(/\/opt\/[^:\s,\]]+(?=:\/)/g)].map(match=>match[0]);
   const names=['data','secrets/homeserver.yaml','secrets/appservice.yaml','secrets/log.config','secrets/livekit.yaml','secrets/appservice.yaml','secrets/livekit.key','secrets/livekit.secret','secrets/Caddyfile','secrets/tls.crt','secrets/tls.key'];
@@ -323,12 +413,12 @@ test('all e5 bind sources, templates and cleanup hooks stay outside retained e1/
   const args=proof.systemdArguments(c);
   assert.ok(args.includes('--property=BindReadOnlyPaths='+c.root+'/hosts:/etc/hosts'));
   assert.ok(args.includes('--property=ExecStopPost='+process.execPath+' '+c.root+'/proof.mjs __cleanup'));
-  for(const batch of ['e1','e2','e3','e4'])assert.equal(args.some(value=>value.replaceAll(process.execPath,'<node>').includes('/opt/babacom-matrix-rtc-'+batch)),false);
+  for(const batch of ['e1','e2','e3','e4','e5'])assert.equal(args.some(value=>value.replaceAll(process.execPath,'<node>').includes('/opt/babacom-matrix-rtc-'+batch)),false);
 });
 
-test('e5 cleanup refuses retained e1/e2/e3/e4 receipts and containers before mutation',async()=>{
+test('e6 cleanup refuses retained e1/e2/e3/e4/e5 receipts and containers before mutation',async()=>{
   const c=contract();
-  for(const batch of ['e1','e2','e3','e4']){
+  for(const batch of ['e1','e2','e3','e4','e5']){
     const old={...c,root:'/opt/babacom-matrix-rtc-'+batch,project:'babacom-matrix-rtc-'+batch},r=receipt(old);let inspectedCount=0,mutations=0;
     assert.equal(await stopOwned(c,r,new Budget(1000),{machine:()=>c.machineUuid,inspect:async()=>{inspectedCount++;},stop:async()=>{mutations++;},unpause:async()=>{mutations++;}}),'UNKNOWN');
     assert.equal(inspectedCount,0);assert.equal(mutations,0);
@@ -336,11 +426,11 @@ test('e5 cleanup refuses retained e1/e2/e3/e4 receipts and containers before mut
   }
 });
 
-test('e5 actual mounts cannot refer to retained e1/e2/e3/e4 secrets or database',()=>{
+test('e6 actual mounts cannot refer to retained e1/e2/e3/e4/e5 secrets or database',()=>{
   const c=contract();
   for(const service of ['synapse','livekit','auth','caddy']){
     const i=configuredContainer(c,service);assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,service));
-    for(const batch of ['e1','e2','e3','e4'])for(let index=0;index<i.Mounts.length;index++){const copy=structuredClone(i);copy.Mounts[index].Source=copy.Mounts[index].Source.replace(c.root,'/opt/babacom-matrix-rtc-'+batch);assert.throws(()=>proof.assertContainerConfiguration(copy,c,service),/^Error: MOUNTS$/);}
+    for(const batch of ['e1','e2','e3','e4','e5'])for(let index=0;index<i.Mounts.length;index++){const copy=structuredClone(i);copy.Mounts[index].Source=copy.Mounts[index].Source.replace(c.root,'/opt/babacom-matrix-rtc-'+batch);assert.throws(()=>proof.assertContainerConfiguration(copy,c,service),/^Error: MOUNTS$/);}
   }
 });
 
@@ -357,7 +447,7 @@ test('a concurrent old native restart latches failure while receipt-owned cleanu
   const budget=new Budget(1000),watch=new proof.ResourceWatch(current=>proof.assertNativeBaseline(c,current,show),budget,100);
   await watch.sample();assert.equal(reads,5);restart=true;await assert.rejects(watch.sample(),/^Error: FAIL$/);assert.equal(watch.controller.signal.aborted,true);await watch.close(new Budget(1000));
   const events=[];new SafeEvents(event=>events.push(event)).event('verifier','fault',0,watch.fault);assert.equal(events[0].errcode,'BASELINE_NATIVE_INVOCATION');assert.equal(events[0].count,1);
-  const result=await stopOwned(c,r,new Budget(1000),{machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:!stopped.includes(id)}}),stop:async id=>stopped.push(id),sample:(_c,current)=>proof.assertNativeBaseline(c,current,show)});
+  const result=await stopOwned(c,r,new Budget(1000),{machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:!stopped.includes(id),Pid:stopped.includes(id)?0:123,Paused:false}}),stop:async id=>stopped.push(id),sample:(_c,current)=>proof.assertNativeBaseline(c,current,show)});
   assert.equal(result,'FAIL');assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));assert.throws(()=>watch.check(),/^Error: FAIL$/);
 });
 test('baseline evidence identifies the failed host threshold and its measured and frozen values',()=>{
@@ -538,12 +628,12 @@ test('serialized resource sampling latches a mid-verification fault, aborts work
 });
 test('resource failure during cleanup cannot stop old containers or prevent receipt-owned stops',async()=>{
   const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),stopped=[];let samples=0;
-  const result=await stopOwned(c,r,new Budget(1000),{machine:()=>r.machineUuid,sample:async()=>{samples++;throw Error('FAIL');},inspect:async id=>structuredClone(states.get(id)),stop:async id=>{stopped.push(id);states.get(id).State.Running=false;}});
+  const result=await stopOwned(c,r,new Budget(1000),{machine:()=>r.machineUuid,sample:async()=>{samples++;throw Error('FAIL');},inspect:async id=>structuredClone(states.get(id)),stop:async id=>{stopped.push(id);states.get(id).State.Running=false;states.get(id).State.Pid=0;}});
   assert.equal(result,'FAIL');assert.equal(samples>0,true);assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));assert.equal(stopped.includes(c.baseline[0].id),false);
 });
 test('cleanup hook retains the baseline reason even after all four owned containers stop',async()=>{
   const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),stopped=[],rows=[],events=new SafeEvents(row=>rows.push(row)),budget=new Budget(60000),deadline=budget.end;let postCheck=false;
-  const recovery={machine:()=>c.machineUuid,inspect:async id=>structuredClone(states.get(id)),stop:async id=>{stopped.push(id);states.get(id).State.Running=false;},sample:async()=>proof.assertHostBaseline(c,{freeMemory:3000000000,load:3,freeDisk:4000000000})};
+  const recovery={machine:()=>c.machineUuid,inspect:async id=>structuredClone(states.get(id)),stop:async id=>{stopped.push(id);states.get(id).State.Running=false;states.get(id).State.Pid=0;},sample:async()=>proof.assertHostBaseline(c,{freeMemory:3000000000,load:3,freeDisk:4000000000})};
   assert.equal(typeof proof.cleanupHook,'function');
   await assert.rejects(proof.cleanupHook(c,events,{admit:()=>{},acquireBudget:()=>budget,readReceipt:()=>r,recovery,checkBaseline:async()=>{postCheck=true;}}),/^Error: UNKNOWN$/);
   assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));assert.ok([...states.values()].every(row=>!row.State.Running));
@@ -555,13 +645,13 @@ test('cleanup hook retains the baseline reason even after all four owned contain
 });
 test('cleanup hook identifies final baseline failure separately from successful physical stops',async()=>{
   const c=contract(),r=receipt(c),rows=[],events=new SafeEvents(row=>rows.push(row));
-  const recovery={machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:false}})};
+  const recovery={machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:false,Pid:0,Paused:false}})};
   await assert.rejects(proof.cleanupHook(c,events,{admit:()=>{},acquireBudget:()=>new Budget(60000),readReceipt:()=>r,recovery,checkBaseline:async()=>proof.assertHostBaseline(c,{freeMemory:1000,load:0,freeDisk:4000000000})}),/^Error: BASELINE$/);
   assert.equal(rows[0].event,'cleanup_baseline');assert.equal(rows[0].errcode,'BASELINE_MEMORY');assert.equal(rows[1].count,1000);assert.equal(rows[2].count,2000000000);
 });
 test('cleanup failure evidence names the failed operation without blocking other owned stops',async()=>{
   const c=contract(),r=receipt(c),stopped=[],rows=[],events=new SafeEvents(row=>rows.push(row)),broken=r.containers[2].id;
-  const recovery={machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:!stopped.includes(id)}}),stop:async id=>{if(id===broken)throw new Error('COMMAND',{cause:new Error('incapable-secret')});stopped.push(id);}};
+  const recovery={machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:!stopped.includes(id),Pid:stopped.includes(id)?0:123,Paused:false}}),stop:async id=>{if(id===broken)throw new Error('COMMAND',{cause:new Error('incapable-secret')});stopped.push(id);}};
   await assert.rejects(proof.cleanupHook(c,events,{admit:()=>{},acquireBudget:()=>new Budget(60000),readReceipt:()=>r,recovery,checkBaseline:async()=>{}}),/^Error: UNKNOWN$/);
   assert.equal(stopped.length,3);assert.equal(stopped.includes(broken),false);
   assert.deepEqual(rows[0],{service:'auth',event:'cleanup_stop',status:0,errcode:'COMMAND',count:1});assert.equal(rows.at(-1).event,'cleanup_result');assert.equal(JSON.stringify(rows).includes('incapable-secret'),false);
@@ -584,7 +674,7 @@ test('cleanup hook records auxiliary admission and inherited-budget failures bef
 });
 test('a failed cleanup evidence writer cannot prevent remaining owned stops or clear the failure',async()=>{
   const c=contract(),r=receipt(c),stopped=[];
-  const recovery={machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:!stopped.includes(id)}}),stop:async id=>stopped.push(id),sample:async()=>{throw new Error('FAIL');}};
+  const recovery={machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:!stopped.includes(id),Pid:stopped.includes(id)?0:123,Paused:false}}),stop:async id=>stopped.push(id),sample:async()=>{throw new Error('FAIL');}};
   assert.equal(await stopOwned(c,r,new Budget(60000),recovery,()=>{throw new Error('incapable-secret');}),'FAIL');
   assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));
 });
@@ -659,17 +749,17 @@ test('BUSY before a new unit launches never stops an existing experiment',async(
 });
 
 function receipt(c){return {version:1,host:c.host,machineUuid:'machine',project:c.project,runId:c.runId,containers:['synapse','livekit','auth','caddy'].map((service,n)=>({service,id:String(n+1).repeat(64),image:PINS[service].image,imageId:'sha256:'+String(n+5).repeat(64),created:'2026-10-16T00:00:00Z'}))};}
-function inspected(c,row){return {Id:row.id,Image:row.imageId,Created:row.created,State:{Running:true},Config:{Image:row.image,Labels:{'com.docker.compose.project':c.project,'com.docker.compose.service':row.service,'rtc.run':c.runId,'rtc.host':c.host}}};}
+function inspected(c,row){return {Id:row.id,Image:row.imageId,Created:row.created,State:{Running:true,Pid:123,Paused:false},Config:{Image:row.image,Labels:{'com.docker.compose.project':c.project,'com.docker.compose.service':row.service,'rtc.run':c.runId,'rtc.host':c.host}}};}
 test('cleanup uses receipt ownership and fresh checks without depending on a controller PID', async () => {
   const c=contract(),r=receipt(c);let now=0;const stopped=[];const states=new Map(r.containers.map(x=>[x.id,inspected(c,x)]));states.get(r.containers[1].id).Config.Labels['rtc.run']='another-run';
-  const io={machine:()=>r.machineUuid,inspect:async(id,b)=>{b.remaining();return structuredClone(states.get(id));},stop:async(id,b)=>{b.remaining();stopped.push(id);states.get(id).State.Running=false;}};
+  const io={machine:()=>r.machineUuid,inspect:async(id,b)=>{b.remaining();return structuredClone(states.get(id));},stop:async(id,b)=>{b.remaining();stopped.push(id);states.get(id).State.Running=false;states.get(id).State.Pid=0;}};
   const result=await stopOwned(c,r,new Budget(60000,()=>now),io);assert.equal(result,'UNKNOWN');assert.equal(stopped.length,3);assert.equal(stopped.includes(r.containers[1].id),false);
   assert.equal(states.get(r.containers[1].id).State.Running,true);
 });
 test('receipt recovery unpauses only its paused Synapse before stopping and rechecks identity within the same deadline',async()=>{
   const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),paused=r.containers[0].id,mutations=[],budget=new Budget(1000);
   states.get(paused).State.Paused=true;
-  const io={machine:()=>r.machineUuid,inspect:async id=>structuredClone(states.get(id)),unpause:async(id,current)=>{assert.equal(current,budget);assert.equal(id,paused);mutations.push('unpause');states.get(id).State.Paused=false;},stop:async(id,current)=>{assert.equal(current,budget);assert.notEqual(states.get(id).State.Paused,true);mutations.push(id);states.get(id).State.Running=false;}};
+  const io={machine:()=>r.machineUuid,inspect:async id=>structuredClone(states.get(id)),unpause:async(id,current)=>{assert.equal(current,budget);assert.equal(id,paused);mutations.push('unpause');states.get(id).State.Paused=false;},stop:async(id,current)=>{assert.equal(current,budget);assert.notEqual(states.get(id).State.Paused,true);mutations.push(id);states.get(id).State.Running=false;states.get(id).State.Pid=0;}};
   assert.equal(await stopOwned(c,r,budget,io),'OK');assert.ok(mutations.indexOf('unpause')<mutations.indexOf(paused));
   states.get(paused).State.Running=true;states.get(paused).State.Paused=true;mutations.length=0;
   io.unpause=async()=>{mutations.push('unpause');states.get(paused).Created='replacement';states.get(paused).State.Paused=false;};
@@ -677,7 +767,7 @@ test('receipt recovery unpauses only its paused Synapse before stopping and rech
 });
 test('slow Docker inspections exhaust one stop deadline without starting late mutations', async () => {
   const c=contract(),r=receipt(c);let now=0;const states=new Map(r.containers.map(x=>[x.id,inspected(c,x)]));const stopped=[];
-  const io={machine:()=>r.machineUuid,inspect:async(id,b)=>{now+=9000;b.remaining();return structuredClone(states.get(id));},stop:async(id,b)=>{b.remaining();stopped.push(id);states.get(id).State.Running=false;}};
+  const io={machine:()=>r.machineUuid,inspect:async(id,b)=>{now+=9000;b.remaining();return structuredClone(states.get(id));},stop:async(id,b)=>{b.remaining();stopped.push(id);states.get(id).State.Running=false;states.get(id).State.Pid=0;}};
   const result=await stopOwned(c,r,new Budget(60000,()=>now),io);assert.equal(result,'DEADLINE');assert.ok(now<=63000);assert.equal(stopped.length,3);
 });
 test('wrong host, run, project, configured image, actual image and created identity prevent cleanup mutation', async()=>{
@@ -702,7 +792,7 @@ test('receipt cleanup works after actual worker SIGKILL with delayed process-bac
   const controller=spawn(process.execPath,[fileURLToPath(import.meta.url),'--fixture','idle'],{stdio:['ignore','pipe','pipe']});await once(controller.stdout,'data');controller.kill('SIGKILL');const [code,signal]=await once(controller,'close');assert.ok(code!==0||signal);
   const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),stopped=[],unpaused=[];states.get(r.containers[0].id).State.Paused=true;
   const delayed=async(value,budget)=>JSON.parse(await command(process.execPath,[fileURLToPath(import.meta.url),'--fixture','json',JSON.stringify(value)],{budget}));
-  const io={machine:()=>r.machineUuid,inspect:(id,budget)=>delayed(states.get(id),budget),unpause:async(id,budget)=>{await delayed({status:'unpaused'},budget);unpaused.push(id);states.get(id).State.Paused=false;},stop:async(id,budget)=>{assert.notEqual(states.get(id).State.Paused,true);await delayed({status:'stopped'},budget);stopped.push(id);states.get(id).State.Running=false;}};
+  const io={machine:()=>r.machineUuid,inspect:(id,budget)=>delayed(states.get(id),budget),unpause:async(id,budget)=>{await delayed({status:'unpaused'},budget);unpaused.push(id);states.get(id).State.Paused=false;},stop:async(id,budget)=>{assert.notEqual(states.get(id).State.Paused,true);await delayed({status:'stopped'},budget);stopped.push(id);states.get(id).State.Running=false;states.get(id).State.Pid=0;}};
   assert.equal(await stopOwned(c,r,new Budget(5000),io),'OK');assert.equal(stopped.length,4);assert.deepEqual(unpaused,[r.containers[0].id]);assert.ok([...states.values()].every(i=>!i.State.Running));
 });
 test('actual delayed Docker child cannot outlive its inherited operation budget', {timeout:3000}, async()=>{
