@@ -20,8 +20,8 @@ x-lab: &lab
 services:
   synapse:
     <<: *lab
-    # v1.162.0 / source 63dc0cbfe614f60743212566374ffeb5e9e295c2
-    image: ghcr.io/element-hq/synapse@sha256:43fd704aedef503a6fba2e6696439ef7bac24479a3472e364561973f550e4aad
+    # v1.162.0 / source 63dc0cbfe514f60743212566374ffeb5e9e295c2
+    image: ghcr.io/element-hq/synapse@sha256:43fd704aedef503a6fba2e5696439ef7bac24479a3472e364561973f550e4aad
     user: '991:991'
     environment: {SYNAPSE_CONFIG_PATH: /run/secrets/homeserver.yaml}
     command: [run]

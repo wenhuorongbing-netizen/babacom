@@ -14,7 +14,7 @@ const ROOT='/opt/babacom-matrix-rtc-e6', PROJECT='babacom-matrix-rtc-e6';
 const SERVICES=['synapse','livekit','auth','caddy'];
 const SOURCE_FILES=['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'];
 export const PINS=Object.freeze({
-  synapse:{image:'ghcr.io/element-hq/synapse@sha256:43fd704aedef503a6fba2e6696439ef7bac24479a3472e364561973f550e4aad',source:'63dc0cbfe614f60743212566374ffeb5e9e295c2'},
+  synapse:{image:'ghcr.io/element-hq/synapse@sha256:43fd704aedef503a6fba2e5696439ef7bac24479a3472e364561973f550e4aad',source:'63dc0cbfe514f60743212566374ffeb5e9e295c2'},
   auth:{image:'ghcr.io/element-hq/lk-jwt-service@sha256:2c985ab98de8da3b101c09fb597404dcb2723bb984b1ee20a430a8bb4f6a51a9',source:'0e176b1eca44e67b11484d0bdf56999807bf2b8e'},
   livekit:{image:'docker.io/livekit/livekit-server@sha256:f63579e294b6dbf38e0e6151a24a5b425e9293e75e6d41959f470c957248b8a7',source:'0b3fd288e3ef3263ec475ba0d78cf3ad77459981'},
   caddy:{image:'docker.io/library/caddy@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229',source:'72dd0fb067f6d7826c7f79907670ba4a713bfe37'},

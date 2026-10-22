@@ -120,6 +120,18 @@ test('public stop cannot accept an active unit or surviving worker and cleanup c
   for(const state of [{ActiveState:'active',MainPID:'0',ControlPID:'0'},{ActiveState:'inactive',MainPID:'123',ControlPID:'0'},{ActiveState:'inactive',MainPID:'0',ControlPID:'123'},{}])assert.throws(()=>proof.assertUnitStopped(state));
 });
 
+test('frozen official image and source pins remain unchanged across experiment batches',()=>{
+  const approved={
+    synapse:{image:'ghcr.io/element-hq/synapse@sha256:43fd704aedef503a6fba2e5696439ef7bac24479a3472e364561973f550e4aad',source:'63dc0cbfe514f60743212566374ffeb5e9e295c2'},
+    auth:{image:'ghcr.io/element-hq/lk-jwt-service@sha256:2c985ab98de8da3b101c09fb597404dcb2723bb984b1ee20a430a8bb4f6a51a9',source:'0e176b1eca44e67b11484d0bdf56999807bf2b8e'},
+    livekit:{image:'docker.io/livekit/livekit-server@sha256:f63579e294b6dbf38e0e6151a24a5b425e9293e75e6d41959f470c957248b8a7',source:'0b3fd288e3ef3263ec475ba0d78cf3ad77459981'},
+    caddy:{image:'docker.io/library/caddy@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229',source:'72dd0fb067f6d7826c7f79907670ba4a713bfe37'},
+  };
+  assert.deepEqual(PINS,approved);
+  const compose=fs.readFileSync(new URL('./compose.yaml',import.meta.url),'utf8');
+  for(const pin of Object.values(approved)){assert.ok(compose.includes('image: '+pin.image));assert.ok(compose.includes('/ source '+pin.source));}
+});
+
 test('pinned Linux amd64 images accept only their exact captured Docker Hub digest aliases',()=>{
   const captured={synapse:PINS.synapse.image,auth:PINS.auth.image,livekit:'livekit/livekit-server@sha256:f63579e294b6dbf38e0e6151a24a5b425e9293e75e6d41959f470c957248b8a7',caddy:'caddy@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229'};
   for(const [service,digest] of Object.entries(captured)){
