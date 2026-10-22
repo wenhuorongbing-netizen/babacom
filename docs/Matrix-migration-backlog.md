@@ -10,6 +10,23 @@ M01核对来源为24编号模块120条，加T1/T2/UI/docs清单19条，共139条
 
 ## 1. Release、Sprint与依赖
 
+<a id="next-test-build"></a>
+
+### 下一交付：Matrix 内部测试版
+
+本轮收尾沿用现有架构和Gates，只收敛执行队列，不降低原Alpha/Must或把未完成父票关闭。旧BabaCom-T1包只作原型回归，不改名冒充Matrix版本；内部测试版也不等于生产切换。
+
+| 顺序 | 复用现有票 | 可核验的出口 |
+|---|---|---|
+| 1 | [RTC R0 #124](https://github.com/wenhuorongbing-netizen/babacom/issues/124) | 标准Matrix授权/信令、日志门及退出实跑通过；沿用120秒运行/60秒清理，旧现场保留；新网络边界先签认 |
+| 2 | M04 / M05 / M29必要子集 | 固定官方客户端与服务组合、来源/许可和专属测试环境；既有安装启动证明只算其子交付，不重复造安装器 |
+| 3 | G1所需M08 / M09 / M10 / M12 / M13 / M17 / M18最小纵切片 | 两个测试账号在同一Matrix权威下登录、入社区/私房、消息同步及重启历史一致；闭麦入房、显式开麦/退出和直接API权限拒绝可验证，不回退到旧身份或签票链 |
+| 4 | M21 / M22，保留完整G1 | 真实Windows包双设备验证游戏画面、系统声音、独立麦克风/音量、无回授及停止释放；零媒体R0不替代这一步 |
+| 5 | M25 / M26 / M29及M05分发必要子集 | 一份版本固定、来源/许可可追溯的候选包；哈希、接入已有测试环境的启动步骤和限制写进现有README；干净安装/启动/退出及核心权限回归通过后才交付内部测试 |
+| 6 | M28 / M36 → M33 / M34 | 继续原真人/中德/负载及切换观察；替代覆盖、消费者断接和恢复基线成立后才逐文件退役旧栈 |
+
+只清理已确认归属、无活动消费者且可再生成的临时副本及已合并分支指针；旧安装包、测试证据、失败现场、未合并工作和其他worktree保持。未通过的步骤保留FAIL/HOLD/NOT_RUN；扩展美术和后续产品宽度不挤占这条主线。
+
 一个Matrix Migration里程碑覆盖全部迁移需求，Epic仅作领域容器。实际1–2周Sprint承诺需知道可用工时/资源，不编造速度或日期；每次最多80%容量承诺，至少20%留给审查/故障。3个工作流是初始上限，不是必须并行3份实现；共享契约/锁/部署/物理设备单writer/串行。每票按实际范围拆成小PR，不整Epic长分支。
 
 | 迭代候选 | 内容 | 出口 |
@@ -52,149 +69,44 @@ Done需要全部AC与相应层级证据、独立review、范围/契约成立；�
 
 下列依赖是排程快照；变更先更新对应Issue并同步受影响索引。U是待建立的固定版本Element fork，B是本仓库；候选目录和上级Epic不授予产品写权限。
 
-### M01 需求与存量映射
-
-[#60](https://github.com/wenhuorongbing-netizen/babacom/issues/60) · E1；类型：task；阶段：G0；依赖：#50。
-
-### M02 Matrix权威与继任契约
-
-[#61](https://github.com/wenhuorongbing-netizen/babacom/issues/61) · E1；类型：task；阶段：G0；依赖：M01。
-
-### M03 分票与精确文件边界
-
-[#62](https://github.com/wenhuorongbing-netizen/babacom/issues/62) · E1；类型：task；阶段：G0；依赖：M02-E #97；后续生产票另依赖M02最终政策。
-
-### M04 固定兼容上游基线
-
-[#63](https://github.com/wenhuorongbing-netizen/babacom/issues/63) · E2；类型：spike；阶段：G0；依赖：只读源码/许可与M01并行；运行子交付依赖M02-E/M03-E #97与已冻结下一批范围。
-
-### M05 Windows安装包真实启动
-
-[#64](https://github.com/wenhuorongbing-netizen/babacom/issues/64) · E2；类型：spike；阶段：G1；依赖：M04。
-
-### M06 BabaCom品牌与中文
-
-[#65](https://github.com/wenhuorongbing-netizen/babacom/issues/65) · E2；类型：story；阶段：G1后/R01；依赖：M05 / M22。
-
-### M07 社区入口体验差距
-
-[#66](https://github.com/wenhuorongbing-netizen/babacom/issues/66) · E2；类型：story；阶段：G2后/R01；依赖：M06 / M12 / M17。
-
-### M08 邀请制入群
-
-[#67](https://github.com/wenhuorongbing-netizen/babacom/issues/67) · E3；类型：story；阶段：G1最小/G2；依赖：M04 / M29。
-
-### M09 账号设备与密钥恢复
-
-[#68](https://github.com/wenhuorongbing-netizen/babacom/issues/68) · E3；类型：story；阶段：G1最小/G2；依赖：M08。
-
-### M10 单一权限与RTC授权
-
-[#69](https://github.com/wenhuorongbing-netizen/babacom/issues/69) · E3；类型：story；阶段：G1最小/G2；依赖：M09 / M29。
-
-### M11 密码恢复与邮件交付
-
-[#70](https://github.com/wenhuorongbing-netizen/babacom/issues/70) · E3；类型：story；阶段：R01；依赖：M09。
-
-### M12 社区与频道结构
-
-[#71](https://github.com/wenhuorongbing-netizen/babacom/issues/71) · E4；类型：story；阶段：G1最小/G2；依赖：M08 / M10。
-
-### M13 消息核心与同步
-
-[#72](https://github.com/wenhuorongbing-netizen/babacom/issues/72) · E4；类型：story；阶段：G2/R01；依赖：M12 / M09。
-
-### M14 附件与留存
-
-[#73](https://github.com/wenhuorongbing-netizen/babacom/issues/73) · E4；类型：story；阶段：R03/G3；依赖：M13 / M29。
-
-### M15 DM通知与一致状态
-
-[#74](https://github.com/wenhuorongbing-netizen/babacom/issues/74) · E4；类型：story；阶段：R03；依赖：M13 / M05。
-
-### M16 线程与中英文搜索
-
-[#75](https://github.com/wenhuorongbing-netizen/babacom/issues/75) · E4；类型：story；阶段：R04；依赖：M13 / M14。
-
-### M17 持久语音频道闭麦入房
-
-[#76](https://github.com/wenhuorongbing-netizen/babacom/issues/76) · E5；类型：story；阶段：G1最小/G2；依赖：M10 / M12 / M05。
-
-### M18 明确开麦与安全退出
-
-[#77](https://github.com/wenhuorongbing-netizen/babacom/issues/77) · E5；类型：story；阶段：G1/G2；依赖：M17。
-
-### M19 游戏设备与快捷键
-
-[#78](https://github.com/wenhuorongbing-netizen/babacom/issues/78) · E5；类型：story；阶段：R01/G4；依赖：M18 / M05。
-
-### M20 摄像头与视频布局
-
-[#79](https://github.com/wenhuorongbing-netizen/babacom/issues/79) · E5；类型：story；阶段：R03；依赖：M17 / M18。
-
-### M21 Windows系统音频关键证明
-
-[#80](https://github.com/wenhuorongbing-netizen/babacom/issues/80) · E6；类型：spike；阶段：G1；依赖：M05 / M17 / M18。
-
-### M22 观看与独立音量
-
-[#81](https://github.com/wenhuorongbing-netizen/babacom/issues/81) · E6；类型：spike；阶段：G1/R01；依赖：M21 / M18。
-
-### M23 区域与网络质量
-
-[#82](https://github.com/wenhuorongbing-netizen/babacom/issues/82) · E6；类型：story；阶段：R01/G4；依赖：M17 / M29 / M32。
-
-### M24 单共享者与质量档位
-
-[#83](https://github.com/wenhuorongbing-netizen/babacom/issues/83) · E6；类型：story；阶段：R01/G4；依赖：M21 / M22 / M10。
-
-### M25 可重现验证与覆盖迁移
-
-[#84](https://github.com/wenhuorongbing-netizen/babacom/issues/84) · E7；类型：task；阶段：全阶段；依赖：M05 / M02。
-
-### M26 信任边界与依赖约束
-
-[#85](https://github.com/wenhuorongbing-netizen/babacom/issues/85) · E7；类型：task；阶段：G2/G3；依赖：M09 / M10 / M17。
-
-### M27 断线休眠与设备稳定
-
-[#86](https://github.com/wenhuorongbing-netizen/babacom/issues/86) · E7；类型：story；阶段：G3/G4；依赖：M17 / M18 / M19 / M25。
-
-### M28 真人中德与Alpha验收
-
-[#87](https://github.com/wenhuorongbing-netizen/babacom/issues/87) · E7；类型：task；阶段：G4；依赖：M18 / M19 / M21 / M22 / M23 / M24 / M27 / M29。
-
-### M29 受控自托管环境
-
-[#88](https://github.com/wenhuorongbing-netizen/babacom/issues/88) · E8；类型：task；阶段：G1最小/G3；依赖：完整环境依赖M04 / M02最终政策；独立M29-P #98仅依赖#97与M04最小固定组合。
-
-### M30 健康告警与数据政策
-
-[#89](https://github.com/wenhuorongbing-netizen/babacom/issues/89) · E8；类型：task；阶段：G3；依赖：M29。
-
-### M31 数据迁移备份恢复与回滚
-
-[#90](https://github.com/wenhuorongbing-netizen/babacom/issues/90) · E8；类型：task；阶段：G3；依赖：M01 / M29 / M09 / M14。
-
-### M32 中德节点与成本证据
-
-[#91](https://github.com/wenhuorongbing-netizen/babacom/issues/91) · E8；类型：spike；阶段：G3/G4；依赖：M29。
-
-### M33 退役重复后端权威
-
-[#92](https://github.com/wenhuorongbing-netizen/babacom/issues/92) · E9；类型：task；阶段：G6；依赖：M10 / M17 / M25 / M31 / M36。
-
-### M34 退役旧桌面与测试负担
-
-[#93](https://github.com/wenhuorongbing-netizen/babacom/issues/93) · E9；类型：task；阶段：G6；依赖：M33 / M07 / M25 / M27。
-
-### M35 上游升级与补丁预算
-
-[#94](https://github.com/wenhuorongbing-netizen/babacom/issues/94) · E9；类型：task；阶段：G3；依赖：M07 / M26 / M27。
-
-### M36 正式切换与两周观察
-
-[#95](https://github.com/wenhuorongbing-netizen/babacom/issues/95) · E9；类型：task；阶段：G5；依赖：M28 / M30 / M31 / M35。
+| 编号 / 工作 | Issue | Epic | 类型 | 阶段 | 前置 |
+|---|---|---|---|---|---|
+| M01 需求与存量映射 | [#60](https://github.com/wenhuorongbing-netizen/babacom/issues/60) | E1 | task | G0 | #50 |
+| M02 Matrix权威与继任契约 | [#61](https://github.com/wenhuorongbing-netizen/babacom/issues/61) | E1 | task | G0 | M01 |
+| M03 分票与精确文件边界 | [#62](https://github.com/wenhuorongbing-netizen/babacom/issues/62) | E1 | task | G0 | M02-E #97；后续生产票另依赖M02最终政策 |
+| M04 固定兼容上游基线 | [#63](https://github.com/wenhuorongbing-netizen/babacom/issues/63) | E2 | spike | G0 | 只读源码/许可与M01并行；运行子交付依赖M02-E/M03-E #97与已冻结下一批范围 |
+| M05 Windows安装包真实启动 | [#64](https://github.com/wenhuorongbing-netizen/babacom/issues/64) | E2 | spike | G1 | M04 |
+| M06 BabaCom品牌与中文 | [#65](https://github.com/wenhuorongbing-netizen/babacom/issues/65) | E2 | story | G1后/R01 | M05 / M22 |
+| M07 社区入口体验差距 | [#66](https://github.com/wenhuorongbing-netizen/babacom/issues/66) | E2 | story | G2后/R01 | M06 / M12 / M17 |
+| M08 邀请制入群 | [#67](https://github.com/wenhuorongbing-netizen/babacom/issues/67) | E3 | story | G1最小/G2 | M04 / M29 |
+| M09 账号设备与密钥恢复 | [#68](https://github.com/wenhuorongbing-netizen/babacom/issues/68) | E3 | story | G1最小/G2 | M08 |
+| M10 单一权限与RTC授权 | [#69](https://github.com/wenhuorongbing-netizen/babacom/issues/69) | E3 | story | G1最小/G2 | M09 / M29 |
+| M11 密码恢复与邮件交付 | [#70](https://github.com/wenhuorongbing-netizen/babacom/issues/70) | E3 | story | R01 | M09 |
+| M12 社区与频道结构 | [#71](https://github.com/wenhuorongbing-netizen/babacom/issues/71) | E4 | story | G1最小/G2 | M08 / M10 |
+| M13 消息核心与同步 | [#72](https://github.com/wenhuorongbing-netizen/babacom/issues/72) | E4 | story | G2/R01 | M12 / M09 |
+| M14 附件与留存 | [#73](https://github.com/wenhuorongbing-netizen/babacom/issues/73) | E4 | story | R03/G3 | M13 / M29 |
+| M15 DM通知与一致状态 | [#74](https://github.com/wenhuorongbing-netizen/babacom/issues/74) | E4 | story | R03 | M13 / M05 |
+| M16 线程与中英文搜索 | [#75](https://github.com/wenhuorongbing-netizen/babacom/issues/75) | E4 | story | R04 | M13 / M14 |
+| M17 持久语音频道闭麦入房 | [#76](https://github.com/wenhuorongbing-netizen/babacom/issues/76) | E5 | story | G1最小/G2 | M10 / M12 / M05 |
+| M18 明确开麦与安全退出 | [#77](https://github.com/wenhuorongbing-netizen/babacom/issues/77) | E5 | story | G1/G2 | M17 |
+| M19 游戏设备与快捷键 | [#78](https://github.com/wenhuorongbing-netizen/babacom/issues/78) | E5 | story | R01/G4 | M18 / M05 |
+| M20 摄像头与视频布局 | [#79](https://github.com/wenhuorongbing-netizen/babacom/issues/79) | E5 | story | R03 | M17 / M18 |
+| M21 Windows系统音频关键证明 | [#80](https://github.com/wenhuorongbing-netizen/babacom/issues/80) | E6 | spike | G1 | M05 / M17 / M18 |
+| M22 观看与独立音量 | [#81](https://github.com/wenhuorongbing-netizen/babacom/issues/81) | E6 | spike | G1/R01 | M21 / M18 |
+| M23 区域与网络质量 | [#82](https://github.com/wenhuorongbing-netizen/babacom/issues/82) | E6 | story | R01/G4 | M17 / M29 / M32 |
+| M24 单共享者与质量档位 | [#83](https://github.com/wenhuorongbing-netizen/babacom/issues/83) | E6 | story | R01/G4 | M21 / M22 / M10 |
+| M25 可重现验证与覆盖迁移 | [#84](https://github.com/wenhuorongbing-netizen/babacom/issues/84) | E7 | task | 全阶段 | M05 / M02 |
+| M26 信任边界与依赖约束 | [#85](https://github.com/wenhuorongbing-netizen/babacom/issues/85) | E7 | task | G2/G3 | M09 / M10 / M17 |
+| M27 断线休眠与设备稳定 | [#86](https://github.com/wenhuorongbing-netizen/babacom/issues/86) | E7 | story | G3/G4 | M17 / M18 / M19 / M25 |
+| M28 真人中德与Alpha验收 | [#87](https://github.com/wenhuorongbing-netizen/babacom/issues/87) | E7 | task | G4 | M18 / M19 / M21 / M22 / M23 / M24 / M27 / M29 |
+| M29 受控自托管环境 | [#88](https://github.com/wenhuorongbing-netizen/babacom/issues/88) | E8 | task | G1最小/G3 | 完整环境依赖M04 / M02最终政策；独立M29-P #98仅依赖#97与M04最小固定组合 |
+| M30 健康告警与数据政策 | [#89](https://github.com/wenhuorongbing-netizen/babacom/issues/89) | E8 | task | G3 | M29 |
+| M31 数据迁移备份恢复与回滚 | [#90](https://github.com/wenhuorongbing-netizen/babacom/issues/90) | E8 | task | G3 | M01 / M29 / M09 / M14 |
+| M32 中德节点与成本证据 | [#91](https://github.com/wenhuorongbing-netizen/babacom/issues/91) | E8 | spike | G3/G4 | M29 |
+| M33 退役重复后端权威 | [#92](https://github.com/wenhuorongbing-netizen/babacom/issues/92) | E9 | task | G6 | M10 / M17 / M25 / M31 / M36 |
+| M34 退役旧桌面与测试负担 | [#93](https://github.com/wenhuorongbing-netizen/babacom/issues/93) | E9 | task | G6 | M33 / M07 / M25 / M27 |
+| M35 上游升级与补丁预算 | [#94](https://github.com/wenhuorongbing-netizen/babacom/issues/94) | E9 | task | G3 | M07 / M26 / M27 |
+| M36 正式切换与两周观察 | [#95](https://github.com/wenhuorongbing-netizen/babacom/issues/95) | E9 | task | G5 | M28 / M30 / M31 / M35 |
 
 ## 5. 旧Issue/PR/dirty处置
 

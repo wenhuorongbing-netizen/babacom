@@ -26,6 +26,9 @@ Signed [T1](docs/T1-spec.md), [T2](docs/T2-spec.md) and [automation](docs/testin
 contracts still govern active old paths. Candidate Element/Synapse compatibility, game audio,
 E2EE recovery and production cutover require their own evidence and approvals.
 
+The next delivery is a Matrix internal test build. Follow the [existing execution queue](docs/Matrix-migration-backlog.md#next-test-build) for its prerequisites and acceptance evidence.
+The existing BabaCom-T1 package is the legacy prototype, not a Matrix build. No Matrix test release has been published.
+
 ## Local prototype checks
 
 Use Node >=22.12.0 and Python >=3.12,<3.14. From the repository root:
