@@ -52,25 +52,32 @@ export function validateContract(c,action){
   validateSharedRuntime(c,[c.auxiliary.cgroup]);
   return c;
 }
-const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','baseline_actual','baseline_limit','readiness','cleanup_admission','cleanup_worker','cleanup_unit','cleanup_receipt','cleanup_sample','cleanup_inspect','cleanup_unpause','cleanup_stop','cleanup_stopped','cleanup_result','cleanup_baseline','cleanup_budget','cleanup_monitor','cleanup_sockets','cleanup_attaches','cleanup_scan','command','scan','openid_ttl','jwt_remaining','shared_cpu_milli','shared_memory_bytes','log_connection','log_success','log_tls','log_handshake','log_timeout']);
+const LOG_CHANNELS=['stdout','stderr','retained','syslog'],LOG_METRICS=['chars','bytes','chunks'];
+const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','baseline_actual','baseline_limit','readiness','cleanup_admission','cleanup_worker','cleanup_unit','cleanup_receipt','cleanup_sample','cleanup_inspect','cleanup_unpause','cleanup_stop','cleanup_stopped','cleanup_result','cleanup_baseline','cleanup_budget','cleanup_monitor','cleanup_sockets','cleanup_attaches','cleanup_scan','command','scan','openid_ttl','jwt_remaining','shared_cpu_milli','shared_memory_bytes','log_connection','log_success','log_tls','log_handshake','log_timeout',...LOG_CHANNELS.flatMap(channel=>LOG_METRICS.map(metric=>'log_overflow_'+channel+'_'+metric))]);
 const BASELINE_ERRORS=new Set(['BASELINE_MEMORY','BASELINE_LOAD','BASELINE_DISK','BASELINE_NATIVE_ACTIVE','BASELINE_NATIVE_SUBSTATE','BASELINE_NATIVE_PID','BASELINE_NATIVE_INVOCATION','BASELINE_IMAGE','BASELINE_STATE','BASELINE_MOUNTS','BASELINE_COUNTER','BASELINE_CGROUP']);
 const ERRORS=new Set(['OK','M_FORBIDDEN','M_UNAUTHORIZED','M_UNKNOWN_TOKEN','FAIL','HOLD','UNKNOWN','DEADLINE','CONTRACT','BUSY','OLD_CPU','OLD_MEMORY','SHARED_CPU','SHARED_MEMORY','BASELINE','RESOURCES','ATTACH','LEAK','CONFIG','DNS','READINESS','SOURCE','NODE','TLS','NETWORK','CONNECTION','COMMAND','STATE','OWNERSHIP','SHIM','ADMIN','AUX_CGROUP','BODY','BODY_LIMIT','CANCELLED','DENIAL','HOST','HTTP','IDENTITY','IMAGE','INCAPABLE','JOIN','JWT','LOG_ADMISSION','LOG_DRIVER','LOG_FILE','LOGOUT','MEMBERSHIP','MOUNTS','OPENID','OUTPUT_LIMIT','PERMISSIONS','PERSISTENCE','PLATFORM','PORT','SFU','SFU_URL','SIGNAL','START','SWAP','TEMPLATE','TRACKS','TTL','WRONG_SUBJECT',...BASELINE_ERRORS]);
 function knownFailure(error){let known;for(let depth=0;depth<8&&error instanceof Error;depth++,error=error.cause)if(error.message!=='OK'&&ERRORS.has(error.message))known=error;return known;}
 function requireBaseline(ok,reason,{index=1,actual,limit,code='BASELINE'}={}){if(!ok)throw new Error(code,{cause:Object.assign(new Error(reason),{index,actual,limit})});}
 function normalizedLog(text){return text.replace(/%([a-f\d]{2})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))).replace(/\\u([a-f\d]{4})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))).replace(/\\([\\/"bfnrt])/g,(_,value)=>({b:'\b',f:'\f',n:'\n',r:'\r',t:'\t'}[value]??value));}
 export class SafeEvents {
-  constructor(write){this.write=write;this.bytes=0;this.chunks=0;this.markers=new Set();this.tails=new Map();this.retained=new Map();this.observed=0;this.leak=false;this.unknownDiscarded=false;}
+  constructor(write){this.write=write;this.bytes=0;this.chunks=0;this.markers=new Set();this.tails=new Map();this.streamCounts=new Map();this.retained=new Map();this.observed=0;this.leak=false;this.unknownDiscarded=false;}
   watch(marker){requireFact(typeof marker==='string'&&marker.length>0&&marker.length<=8192&&this.markers.size<512,'HOLD');if(this.markers.has(marker))return;requireFact(!this.unknownDiscarded,'HOLD');this.markers.add(marker);for(const [key,text] of this.tails)if(text.includes(marker)||normalizedLog(text).includes(marker)){this.observed++;if(key!=='auth:stderr')this.leak=true;}}
   get bufferedBytes(){return [...this.tails.values()].reduce((sum,value)=>sum+Buffer.byteLength(value),0);}
   consume(service,chunk,stream='stderr',source){
     requireFact(source===undefined||service==='verifier'&&stream==='retained'&&this.retained.has(source),'HOLD');
-    this.bytes+=chunk.length;this.chunks++;const name=SERVICES.includes(service)?service:'verifier',channel=['stdout','stderr','retained','syslog'].includes(stream)?stream:'retained',key=name+':'+channel+(source===undefined?'':':'+source);
-    const text=(this.tails.get(key)??'')+chunk.toString('utf8');
+    this.bytes+=chunk.length;this.chunks++;const name=SERVICES.includes(service)?service:'verifier',channel=LOG_CHANNELS.includes(stream)?stream:'retained',key=name+':'+channel+(source===undefined?'':':'+source);
+    const decoded=chunk.toString('utf8'),text=(this.tails.get(key)??'')+decoded;
+    const counts=this.streamCounts.get(key)??{chars:0,bytes:0,chunks:0,overflow:false};
+    counts.chars+=decoded.length;counts.bytes+=chunk.length;counts.chunks++;this.streamCounts.set(key,counts);
     const normalized=normalizedLog(text);
     for(const marker of this.markers)if(text.includes(marker)||normalized.includes(marker)){this.observed++;if(name!=='auth'||channel!=='stderr')this.leak=true;}
     // Twenty live channels plus at most 128 retained sources; each holds an escaped 8 KiB marker.
     // A future issued token cannot be cleared against unknown bytes already dropped.
-    if(text.length>49168&&(name!=='auth'||channel!=='stderr'))this.unknownDiscarded=true;
+    if(text.length>49168&&(name!=='auth'||channel!=='stderr')){
+      this.unknownDiscarded=true;
+      // First-discard totals only; chars uses the tail's UTF-16 units. Never emit paths or raw output.
+      if(!counts.overflow){counts.overflow=true;for(const metric of LOG_METRICS)this.event(name,'log_overflow_'+channel+'_'+metric,0,'HOLD',counts[metric]);}
+    }
     this.tails.set(key,text.slice(-49168));
   }
   check(){requireFact(!this.leak,'LEAK');}
@@ -486,7 +493,7 @@ export class Runtime {
       catch(error){
         const status=Number.isInteger(error.status)&&error.status>=100&&error.status<600?error.status:0,key=(knownFailure(error)?.message??'UNKNOWN')+':'+status;
         if(key!==last){this.events.event('verifier','readiness',status,error,attempts);last=key;}
-        await new Promise(resolve=>setTimeout(resolve,budget.remaining(100)));
+        await new Promise(resolve=>setTimeout(resolve,budget.remaining(1000)));
       }
     }
   }
