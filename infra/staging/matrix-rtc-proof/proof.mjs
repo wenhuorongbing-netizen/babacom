@@ -205,9 +205,17 @@ function frozenMetadata(row){
   const item=fs.lstatSync(row.path);requireFact(!item.isSymbolicLink()&&item.uid===row.uid&&item.gid===row.gid&&(item.mode&0o777)===row.mode,'PERMISSIONS');
   if(row.kind==='core-directory'||row.kind==='directory')requireFact(item.isDirectory(),'PERMISSIONS');else if(row.kind==='socket')requireFact(item.isSocket(),'PERMISSIONS');else requireFact(item.isFile()||item.isBlockDevice(),'PERMISSIONS');
 }
+export function assertNodeBinary(file,expected,io=fs){
+  const hash=crypto.createHash('sha256'),buffer=Buffer.alloc(65536),fd=io.openSync(file,'r');
+  try{
+    let count;
+    while((count=io.readSync(fd,buffer,0,buffer.length,null))>0)hash.update(buffer.subarray(0,count));
+    requireFact(hash.digest('hex')===expected,'NODE');
+  }finally{io.closeSync(fd);}
+}
 function runtimeBoundaries(c){
   requireFact(process.version==='v24.13.0'&&!process.env.NODE_OPTIONS&&!process.env.NODE_TLS_REJECT_UNAUTHORIZED&&!process.env.NODE_EXTRA_CA_CERTS,'NODE');
-  requireFact(crypto.createHash('sha256').update(fs.readFileSync(process.execPath)).digest('hex')===c.nodeSha256,'NODE');
+  assertNodeBinary(process.execPath,c.nodeSha256);
   requireFact(fs.readFileSync('/proc/sys/kernel/core_pattern','utf8').trim()===c.persistence.corePattern,'PERSISTENCE');
   for(const row of [...c.persistence.locations,...c.logging.bypasses])frozenMetadata(row);
   const swaps=fs.readFileSync('/proc/swaps','utf8').trim().split('\n').slice(1).map(x=>x.trim().split(/\s+/)[0]);

@@ -760,6 +760,56 @@ test('watcher shutdown consumption is not reset before receipt-owned cleanup mut
   const result=await stopOwned(c,r,budget,{machine:()=>r.machineUuid,inspect:async id=>{now+=59950;return inspected(c,r.containers.find(row=>row.id===id));},stop:async()=>{mutations++;}});assert.equal(result,'DEADLINE');assert.equal(mutations,0);assert.equal(budget.end,60000);
 });
 
+test('node binary pin hashes every byte with bounded read buffers',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'rtc-node-pin-')),file=path.join(root,'binary');
+  try{
+    // SHA-256's million-a test vector spans full chunks and a partial final chunk.
+    fs.writeFileSync(file,'a'.repeat(1000000));
+    const io={...fs,readFileSync:()=>{throw Error('UNBOUNDED_READ');},readSync:(fd,buffer,offset,length,position)=>{
+      assert.ok(buffer.byteLength<=65536);assert.ok(length<=65536);
+      return fs.readSync(fd,buffer,offset,length,position);
+    }};
+    proof.assertNodeBinary(file,'cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0',io);
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('node binary pin accepts known digests and short reads without retaining unread buffer bytes',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'rtc-node-pin-')),file=path.join(root,'binary');
+  try{
+    for(const [contents,digest] of [
+      ['', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'],
+      ['abc','ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'],
+      ['a'.repeat(1000000),'cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0'],
+    ]){
+      fs.writeFileSync(file,contents);let opened;
+      const io={...fs,openSync:(...args)=>(opened=fs.openSync(...args)),readSync:(fd,buffer,offset,length,position)=>fs.readSync(fd,buffer,offset,Math.min(length,997),position)};
+      proof.assertNodeBinary(file,digest,io);
+      assert.throws(()=>fs.fstatSync(opened),{code:'EBADF'});
+    }
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('node binary pin rejects changed or unreadable files and closes opened descriptors',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'rtc-node-pin-')),file=path.join(root,'binary');
+  const digest='cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0';
+  try{
+    for(const fault of ['changed-tail','truncated','read-error']){
+      fs.writeFileSync(file,'a'.repeat(1000000));
+      if(fault==='changed-tail'){
+        const fd=fs.openSync(file,'r+');try{fs.writeSync(fd,Buffer.from('b'),0,1,999999);}finally{fs.closeSync(fd);}
+      }else if(fault==='truncated')fs.truncateSync(file,999999);
+      let opened,reads=0;
+      const io={...fs,openSync:(...args)=>(opened=fs.openSync(...args)),readSync:(...args)=>{
+        if(fault==='read-error'&&++reads===2)throw Object.assign(new Error('unreadable fixture'),{code:'EIO'});
+        return fs.readSync(...args);
+      }};
+      assert.throws(()=>proof.assertNodeBinary(file,digest,io),fault==='read-error'?{code:'EIO'}:/^Error: NODE$/);
+      assert.throws(()=>fs.fstatSync(opened),{code:'EBADF'});
+    }
+    assert.throws(()=>proof.assertNodeBinary(path.join(root,'absent'),digest),{code:'ENOENT'});
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
 test('new synthetic persistence and logging exceptions require frozen paths, permissions, accessors and every fault boundary',()=>{
   assert.doesNotThrow(()=>validateContract(contract()));
   for(const key of ['persistence','logging','nodeSha256']){const c=contract();delete c[key];assert.throws(()=>validateContract(c));}
