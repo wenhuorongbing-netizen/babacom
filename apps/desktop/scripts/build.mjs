@@ -117,15 +117,17 @@ export async function packageWindows() {
 }
 
 async function main() {
-  await generateContracts();
   if (process.argv.includes('--typecheck')) {
+    await generateContracts();
     await execute('typescript/bin/tsc', ['-p', join(desktop, 'tsconfig.json')]);
   } else if (process.argv.includes('--lint')) {
+    await generateContracts();
     await execute('eslint/bin/eslint.js', ['--config', join(desktop, 'eslint.config.mjs'),
       'apps/desktop/src', 'apps/desktop/scripts', 'apps/desktop/vite.config.ts',
       'apps/desktop/playwright.config.ts', 'packages/ui/src', 'tests/shell', 'tests/voice', 'tests/audio']);
   } else {
     if (process.argv.includes('--test-packaged')) {
+      await generateContracts();
       await buildMediaPeer();
       await execute('@playwright/test/cli.js', ['test', '--config', join(desktop, 'playwright.config.ts'), '--project', 'packaged']);
       return;
