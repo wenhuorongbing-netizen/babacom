@@ -26,7 +26,7 @@ if(process.argv[2]==='--fixture'){
   else if(mode==='signal-hang'){await proof.signal(process.argv[4],'incapable-fixture',{allowWsFixture:true,identity:'@rtc-a:fixture:device',room:'fixture-room',timeout:50}).catch(()=>{});}
   else if(mode==='public-error')process.exitCode=await proof.publicCommand('stop',async()=>{throw new Error(process.argv[4]);});
   else if(mode==='readiness'){
-    const url=new URL(process.argv[4]),budget=new Budget(2000),runtime=new proof.Runtime({domain:url.hostname,port:Number(url.port)},budget);
+    const url=new URL(process.argv[4]),budget=new Budget(5000),runtime=new proof.Runtime({domain:url.hostname,port:Number(url.port)},budget);
     runtime.events=new SafeEvents(row=>process.stdout.write(JSON.stringify(row)+'\n'));
     try{await runtime.waitReady(budget);}catch(error){runtime.recordFailure(error);process.exitCode=1;}
   }
@@ -592,16 +592,40 @@ test('runtime failure evidence preserves fixed admission and protocol failures',
   runtime.recordFailure(new Error('PERMISSIONS incapable-secret'));
   assert.equal(rows.at(-1).errcode,'UNKNOWN');assert.equal(JSON.stringify(rows).includes('incapable-secret'),false);
 });
-test('startup readiness retains changing request failures and HTTP status before eventual success',async()=>{
-  const rows=[],budget=new Budget(2000),deadline=budget.end,runtime=new proof.Runtime(contract(),budget);runtime.events=new SafeEvents(row=>rows.push(row));
+test('startup readiness retains changing request failures and HTTP status before eventual success',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});let now=0;
+  const rows=[],budget=new Budget(120000,()=>now),deadline=budget.end,runtime=new proof.Runtime(contract(),budget);runtime.events=new SafeEvents(row=>rows.push(row));
   const failures=[new Error('CONNECTION'),new Error('TLS'),Object.assign(new Error('HTTP',{cause:new Error('incapable-secret')}),{status:503}),Object.assign(new Error('HTTP'),{status:503})];let attempts=0;
   runtime.api=async(route,options,current)=>{assert.equal(route,'/_matrix/client/versions');assert.deepEqual(options,{});assert.equal(current,budget);const error=failures[attempts++];if(error)throw error;return {};};
-  assert.equal(typeof runtime.waitReady,'function');await runtime.waitReady(budget);
+  const pending=runtime.waitReady(budget);await new Promise(resolve=>setImmediate(resolve));
+  for(let index=0;index<4;index++){now+=1000;t.mock.timers.tick(1000);await new Promise(resolve=>setImmediate(resolve));}await pending;
   assert.deepEqual(rows,[{service:'verifier',event:'readiness',status:0,errcode:'CONNECTION',count:1},
     {service:'verifier',event:'readiness',status:0,errcode:'TLS',count:2},
     {service:'verifier',event:'readiness',status:503,errcode:'HTTP',count:3},
     {service:'verifier',event:'readiness',status:200,errcode:'OK',count:5}]);
   assert.equal(budget.end,deadline);assert.equal(JSON.stringify(rows).includes('incapable-secret'),false);
+});
+test('cold startup probes wait a full second between failures while ready services return immediately',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});let now=0;
+  const rows=[],budget=new Budget(120000,()=>now),runtime=new proof.Runtime(contract(),budget),attempts=[];
+  runtime.events=new SafeEvents(row=>rows.push(row));
+  runtime.api=async()=>{attempts.push(now);if(attempts.length<3)throw Object.assign(new Error('HTTP'),{status:502});};
+  const pending=runtime.waitReady(budget);await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(attempts,[0]);
+  for(const [elapsed,want] of [[999,[0]],[1,[0,1000]],[999,[0,1000]],[1,[0,1000,2000]]]){
+    now+=elapsed;t.mock.timers.tick(elapsed);await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(attempts,want);
+  }
+  await pending;assert.equal(budget.end,120000);
+  assert.deepEqual(rows.map(({event,status,count})=>({event,status,count})),[{event:'readiness',status:502,count:1},{event:'readiness',status:200,count:3}]);
+  attempts.length=0;runtime.api=async()=>{attempts.push(now);};await runtime.waitReady(budget);assert.deepEqual(attempts,[2000]);
+});
+test('startup polling uses the last partial second without probing at or extending the run deadline',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});let now=0;
+  const budget=new Budget(120000,()=>now),runtime=new proof.Runtime(contract(),budget),attempts=[];runtime.events=new SafeEvents(()=>{});
+  now=118500;runtime.api=async()=>{attempts.push(now);throw new Error('CONNECTION');};
+  const rejected=assert.rejects(runtime.waitReady(budget),/^Error: DEADLINE$/);await new Promise(resolve=>setImmediate(resolve));
+  now+=1000;t.mock.timers.tick(1000);await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(attempts,[118500,119500]);
+  now+=500;t.mock.timers.tick(500);await rejected;assert.deepEqual(attempts,[118500,119500]);assert.equal(budget.end,120000);
 });
 test('readiness TLS evidence survives a subsequent baseline abort without extending the deadline',async()=>{
   const c=contract(),rows=[],budget=new Budget(1000),deadline=budget.end,runtime=new proof.Runtime(c,budget);runtime.events=new SafeEvents(row=>rows.push(row));let broken=false;
@@ -938,6 +962,45 @@ test('discarded unknown output cannot falsely pass a newly issued secret while a
   }
   const allowed=new SafeEvents(()=>{});allowed.consume('auth',Buffer.from(marker+padding),'stderr');assert.doesNotThrow(()=>allowed.watch(marker));
   const known=new SafeEvents(()=>{});known.watch(marker);known.consume('caddy',Buffer.from(padding),'stderr');assert.doesNotThrow(()=>known.watch(marker));
+});
+test('first log overflow records its service, channel and cumulative character, byte and chunk counts once',()=>{
+  const rows=[],events=new SafeEvents(row=>rows.push(row));
+  events.consume('caddy',Buffer.from('x'.repeat(49168)),'stderr');assert.deepEqual(rows,[]);
+  events.consume('synapse',Buffer.from('unrelated'),'stdout');events.consume('caddy',Buffer.from('\u00e9'),'stderr');
+  assert.deepEqual(rows,[
+    {service:'caddy',event:'log_overflow_stderr_chars',status:0,errcode:'HOLD',count:49169},
+    {service:'caddy',event:'log_overflow_stderr_bytes',status:0,errcode:'HOLD',count:49170},
+    {service:'caddy',event:'log_overflow_stderr_chunks',status:0,errcode:'HOLD',count:2}
+  ]);
+  for(let index=0;index<20;index++)events.consume('caddy',Buffer.from('more'),'stderr');assert.equal(rows.length,3);
+  events.consume('synapse',Buffer.alloc(50000,120),'stdout');
+  assert.deepEqual(rows.slice(3),[
+    {service:'synapse',event:'log_overflow_stdout_chars',status:0,errcode:'HOLD',count:50009},
+    {service:'synapse',event:'log_overflow_stdout_bytes',status:0,errcode:'HOLD',count:50009},
+    {service:'synapse',event:'log_overflow_stdout_chunks',status:0,errcode:'HOLD',count:2}
+  ]);
+  assert.throws(()=>events.watch('incapable/new-secret'),/^Error: HOLD$/);
+});
+test('overflow evidence excludes raw logs, markers and retained paths without relaxing leak or auth RAM rules',()=>{
+  const rows=[],events=new SafeEvents(row=>rows.push(row)),marker='incapable/private-marker',source='/restricted/private-source',budget=new Budget(1000);
+  events.consume('auth',Buffer.alloc(100000,120),'stderr');assert.deepEqual(rows,[]);assert.doesNotThrow(()=>events.watch(marker));
+  events.consume('auth',Buffer.from(marker+'x'.repeat(50000)),'stdout');assert.throws(()=>events.check(),/^Error: LEAK$/);
+  events.inspectRetained(source,Buffer.alloc(50000,120),budget);events.inspectRetained(source,Buffer.alloc(50000,120),budget);
+  events.consume('verifier',Buffer.alloc(50000,120),'syslog');
+  assert.deepEqual(rows.map(({service,event,count})=>({service,event,count})),[
+    {service:'auth',event:'log_overflow_stdout_chars',count:50024},
+    {service:'auth',event:'log_overflow_stdout_bytes',count:50024},
+    {service:'auth',event:'log_overflow_stdout_chunks',count:1},
+    {service:'verifier',event:'log_overflow_retained_chars',count:50000},
+    {service:'verifier',event:'log_overflow_retained_bytes',count:50000},
+    {service:'verifier',event:'log_overflow_retained_chunks',count:1},
+    {service:'verifier',event:'log_overflow_syslog_chars',count:50000},
+    {service:'verifier',event:'log_overflow_syslog_bytes',count:50000},
+    {service:'verifier',event:'log_overflow_syslog_chunks',count:1}
+  ]);
+  const output=JSON.stringify(rows);assert.equal(output.includes(marker),false);assert.equal(output.includes(source),false);assert.equal(output.includes('xxxxx'),false);
+  for(const row of rows)assert.deepEqual(Object.keys(row),['service','event','status','errcode','count']);
+  assert.throws(()=>events.watch('incapable/next-secret'),/^Error: HOLD$/);
 });
 test('ownership excludes another run, image, host and project', () => {
   const c=contract(); const i={ Id:'e'.repeat(64), Config:{ Image:PINS.auth.image, Labels:{ 'com.docker.compose.project':c.project, 'rtc.run':c.runId, 'rtc.host':c.host, 'com.docker.compose.service':'auth' } } };
