@@ -126,7 +126,7 @@ Owner: 8.1
 | D17 | Digo 资料整合与多人工作入口 | **DECIDED 文档整合；运行/组织/许可独立** | Jack 授权本轮；A 串行集成；独立 Reviewer | #102 精确 24 路径；原提交保全、05 唯一指南、逐票 AC 归 GitHub；不变更权限/契约/产品 |
 | D16-E | 原版 Matrix 隔离实验执行 | **DECIDED 签认；PR99 审查合并后生效** | Jack 授权；A 实施；独立 Reviewer | 更新 D16/下文历史待签认状态；#98 四文件、本机回环、合成数据；运行结果待实测 |
 | D16-G1 | Windows 产物与隔离安装启动 | **PR107/108 已合并，#105/#106 已关闭；#109 安装启动精确范围待签认** | Jack 最终签认；A 协调；子代理研究/独立审查 | 只读核验已通过；下一批仅新 Sandbox 离线 install/start/Quit；运行 NOT_RUN，G1 仍未通过 |
-| D16-RTC | 标准 Matrix RTC 最小链路 | **e4 FAIL/BASELINE；PR137归因修复已合并；Jack已签认一次全新e5，审查/可信合并及实际准入后执行** | Jack最终裁定；A协调；独立Reviewer | [现有模块](../.agents/modules/matrix-rtc-proof.md#新批次隔离2026-10-20候选)；#124保持OPEN；保留e1–e4，完整R0与退出验收未通过 |
+| D16-RTC | 标准 Matrix RTC 最小链路 | **e5 CONNECTION/DEADLINE；public stop UNKNOWN，四容器已停止；e6入口/停止修订候选待签认** | Jack最终裁定；A协调；独立Reviewer | [现有模块](../.agents/modules/matrix-rtc-proof.md#新批次隔离2026-10-20候选)；#124保持OPEN；保留e1–e5，完整R0与退出验收未通过 |
 
 **本 fork 发布阶段校准：DECIDED（2026-10-04，用户授权修正并合并基线 PR）。**
 沿用 [01-scope-v2.md](01-scope-v2.md) 的既有 R04 范围：完整每频道权限、
