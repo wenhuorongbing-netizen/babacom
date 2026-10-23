@@ -24,6 +24,7 @@ export function AdmissionPage({ children, onPreparedChange }: { children?: React
   const [now, setNow] = useState(Date.now());
   const inFlight = useRef(false);
   const operation = useRef(0);
+  const expired = state.status === 'ready' && Date.now() >= Date.parse(state.summary.expiresAt);
 
   useEffect(() => { onPreparedChange?.(state.status === 'ready'); }, [state, onPreparedChange]);
 
@@ -34,13 +35,16 @@ export function AdmissionPage({ children, onPreparedChange }: { children?: React
 
   useEffect(() => {
     if (state.status !== 'ready') return;
-    const timer = setTimeout(() => {
+    const expire = () => {
       operation.current++;
       void window.admission.cancel();
       setState({ status: 'failure', code: 'EXPIRED' });
-    }, Math.max(0, Date.parse(state.summary.expiresAt) - Date.now()));
+    };
+    // Recheck UTC expiry on the existing heartbeat without extending the original timer after a clock rollback.
+    if (expired) { expire(); return; }
+    const timer = setTimeout(expire, Math.max(0, Date.parse(state.summary.expiresAt) - Date.now()));
     return () => clearTimeout(timer);
-  }, [state]);
+  }, [state, expired]);
 
   async function prepare(event: React.FormEvent) {
     event.preventDefault();

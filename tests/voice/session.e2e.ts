@@ -1707,6 +1707,29 @@ async function prepare(running: Awaited<ReturnType<typeof launch>>, name = '测�
   await expect(running.page.getByRole('status')).toContainText('准备完成');
 }
 
+test('prepared admission expires after a wall clock correction without waiting for its relative timer', async () => {
+  const service = await startTestService();
+  try {
+    const running = await launch(service.configuration);
+    try {
+      await prepare(running);
+      await running.page.clock.setSystemTime(Date.now() + 121_000);
+      await expect(running.page.getByRole('status')).toContainText('准备凭据已过期，请重新准备。');
+      await expect(running.page.locator('dl')).toHaveCount(0);
+      await expect(running.page.getByRole('button', { name: '加入语音房间', exact: true })).toBeDisabled();
+      await expect(running.page.getByRole('button', { name: '重新准备', exact: true })).toBeEnabled();
+      expect(service.responses()).toEqual([200]);
+      await running.page.clock.setSystemTime(Date.now());
+      await running.page.getByLabel('展示昵称').fill('时钟恢复后的玩家');
+      await running.page.getByRole('button', { name: '重新准备', exact: true }).click();
+      await expect(running.page.getByRole('status')).toContainText('准备完成');
+      await expect(running.page.getByText('时钟恢复后的玩家', { exact: true })).toBeVisible();
+      await expect.poll(service.responses).toEqual([200, 200]);
+      expect(running.browserCredentialLeak()).toBe(false);
+    } finally { await running.close(); }
+  } finally { await service.close(); }
+});
+
 test('isolated media context connects without granting UI native SFU authentication', async () => {
   const service = await startMediaService();
   try {
