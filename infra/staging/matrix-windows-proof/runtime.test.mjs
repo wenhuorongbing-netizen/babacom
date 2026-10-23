@@ -461,7 +461,16 @@ event('harness-returned');process.stdout.write(JSON.stringify(result)+'\\n');
 }
 
 test('guest JSON publication exposes no final pathname while bytes are still being written', { timeout: 10000 }, async t => {
+  const started = performance.now();
+  let phase = 'fixture', stdoutBytes = 0, stderrBytes = 0;
+  const diagnose = (event, details = {}) => {
+    phase = event;
+    t.diagnostic(`[JSON-PUBLISH] ${JSON.stringify({ event, elapsedMs: Math.round(performance.now() - started), stdoutBytes, stderrBytes, ...details })}`);
+  };
+  t.after(() => diagnose('test-finished', { lastPhase: phase }));
+  diagnose('fixture-request');
   const directory = await tinyFixture(t);
+  diagnose('fixture-ready');
   const source = await readFile(fileURLToPath(new URL('./guest.ps1', import.meta.url)), 'utf8');
   const start = source.indexOf('function Write-JsonNew(');
   const end = source.indexOf('\nfunction Check-Time', start);
@@ -469,34 +478,51 @@ test('guest JSON publication exposes no final pathname while bytes are still bei
   assert.ok(writer.includes('$file.Write($bytes, 0, $bytes.Length)'));
   writer = writer.replace('$file.Write($bytes, 0, $bytes.Length)', `$half=[int]($bytes.Length/2); $file.Write($bytes,0,$half); Write-Output '{"status":"WRITING"}'; [void][Console]::ReadLine(); $file.Write($bytes,$half,$bytes.Length-$half)`);
   const code = `$ErrorActionPreference='Stop'; ${writer}\nWrite-JsonNew 'proof.json' @{message='complete';runId='${ID}'}`;
+  diagnose('writer-spawn-request');
   const child = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', code], { cwd: directory, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  child.once('spawn', () => diagnose('writer-spawn', { pid: child.pid }));
   let text = '', stderr = '';
-  child.stderr.on('data', bytes => { stderr += bytes; });
+  child.stderr.on('data', bytes => { stderrBytes += bytes.length; stderr += bytes; });
   const ready = new Promise((resolve, reject) => {
-    child.stdout.on('data', bytes => { text += bytes; if (text.includes('WRITING')) resolve(); });
-    child.once('error', reject);
+    let observedWriting = false;
+    child.stdout.on('data', bytes => {
+      stdoutBytes += bytes.length;
+      text += bytes;
+      if (text.includes('WRITING')) {
+        if (!observedWriting) { observedWriting = true; diagnose('writer-WRITING'); }
+        resolve();
+      }
+    });
+    child.once('error', error => { diagnose('writer-error', { code: error.code ?? null }); reject(error); });
     child.once('exit', exitCode => { if (!text.includes('WRITING')) reject(new Error(`PowerShell writer exit ${exitCode}: ${stderr}`)); });
   });
-  const ended = new Promise(resolve => child.once('exit', code => resolve(code)));
+  const ended = new Promise(resolve => child.once('exit', (code, signal) => { diagnose('writer-exit', { code, signal }); resolve(code); }));
   t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill(); await ended; });
   await ready;
+  diagnose('final-path-check');
   let premature;
   try { await readFile(path.join(directory, 'proof.json')); premature = true; }
   catch (error) { premature = error.code !== 'ENOENT'; }
+  diagnose('final-path-checked', { premature });
+  diagnose('continue-request');
   child.stdin.write('continue\n');
+  diagnose('continue-written');
   assert.equal(await ended, 0, stderr);
   assert.equal(premature, false);
   assert.deepEqual(JSON.parse(await readFile(path.join(directory, 'proof.json'), 'utf8')), { message: 'complete', runId: ID });
   const originalWriter = source.slice(start, end).replaceAll('C:\\G1Output', directory.replace(/'/g, "''"));
+  diagnose('duplicate-spawn-request');
   const duplicate = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
     `$ErrorActionPreference='Stop'; ${originalWriter}\nWrite-JsonNew 'proof.json' @{message='replacement'}`], { cwd: directory, windowsHide: true, stdio: 'ignore' });
-  const duplicateEnded = new Promise(resolve => duplicate.once('exit', resolve));
+  duplicate.once('spawn', () => diagnose('duplicate-spawn', { pid: duplicate.pid }));
+  const duplicateEnded = new Promise(resolve => duplicate.once('exit', (code, signal) => { diagnose('duplicate-exit', { code, signal }); resolve(code); }));
   t.after(async () => { if (duplicate.exitCode === null && duplicate.signalCode === null) duplicate.kill(); await duplicateEnded; });
   assert.equal(await duplicateEnded, 1);
   assert.deepEqual(JSON.parse(await readFile(path.join(directory, 'proof.json'), 'utf8')), { message: 'complete', runId: ID });
   const retained = (await readdir(directory)).filter(name => name.startsWith('staging-') && name.endsWith('.json'));
   assert.equal(retained.length, 1);
   assert.deepEqual(JSON.parse(await readFile(path.join(directory, retained[0]), 'utf8')), { message: 'replacement' });
+  diagnose('assertions-complete');
 });
 
 test('guest ownership works without CIM and still checks the native path and creation time', { timeout: 30000 }, async t => {
