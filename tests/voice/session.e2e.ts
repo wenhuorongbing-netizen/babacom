@@ -149,7 +149,8 @@ test('A1 startup direct development entry reports ' + outcome, async () => {
   };
   await desktopRunner.ensureWindowsProcessOwner();
   const entry = join(desktop, 'scripts/dev.mjs');
-  const worker = spawn(process.execPath, [entry, '--local-test'], { stdio: 'pipe', windowsHide: true });
+  // Transient native UIA probes require the web accessibility tree before they attach.
+  const worker = spawn(process.execPath, [entry, '--local-test', '--force-renderer-accessibility'], { stdio: 'pipe', windowsHide: true });
   let spawnFailed = false;
   worker.once('error', () => { spawnFailed = true; });
   worker.stdout.resume();
