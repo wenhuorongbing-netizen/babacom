@@ -829,6 +829,7 @@ async function main() {
     stage = 'DRIVER';
     const electron = createRequire(import.meta.url)('electron');
     const child = spawn(electron, [join(desktop, 'dist/main/main.cjs'), '--babacom-startup-pipe=' + startup.path,
+      ...(process.argv.includes('--force-renderer-accessibility') ? ['--force-renderer-accessibility'] : []),
       ...(mediaStartup ? ['--babacom-media-pipe=' + mediaStartup.path] : [])], {
       env: { ...process.env, BABACOM_RENDERER_URL: renderer.url },
       stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true,
