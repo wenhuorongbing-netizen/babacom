@@ -1,15 +1,8 @@
-# `.agents/` — 共享 harness
+# `.agents/` — 范围守卫
 
-**这个目录必须提交。** 它决定 PR 的产出结果，换个人跑会得到不同结果的东西都属于这里。
-详见 [`../docs/06-agent-harness.md`](../docs/06-agent-harness.md)。
-
-```
-.agents/
-├─ README.md            本文件
-├─ scope_guard.mjs       边界检查器，CI 和本地自查都用它
-├─ scope_guard.test.mjs  检查器的 CLI 回归测试，使用真实 Git 文件列表
-└─ modules/             24 个编号模块 + t1/t2/discord-ui/docs；待签认 matrix-proof 单列
-```
+[模块清单](modules/)维护 Allowed Files、Validation 和完成条件；按 Issue 的 Module 与具体签认选择，不在本页复制模块数量或状态。
+[scope_guard.mjs](scope_guard.mjs)检查文件范围，[scope_guard.test.mjs](scope_guard.test.mjs)覆盖 CLI 与真实 Git 文件列表。
+共享配置的版本控制理由见 [06](../docs/06-agent-harness.md)，产出规则见 [AGENTS](../AGENTS.md)，日常协作见 [05](../docs/05-collaboration.md)。
 
 ## 模块清单格式
 
@@ -26,15 +19,14 @@ apps/api/app/voice/**
 
 ## 本地自查
 
-提 PR 前跑一次，省得被 CI 打回：
+使用 Issue 指定的模块 id；以下以 `3.1` 为例：
 
 ```bash
 git diff --name-only --no-renames -z origin/main...HEAD | node .agents/scope_guard.mjs 3.1
 ```
 
-`-z` 输出未经转义、以 NUL 分隔的路径，检查器逐个解析，保留中文和路径中的空白。
-`--no-renames` 将改名显示为旧路径删除和新路径新增，两端都检查边界。
-手工逐行输入普通路径或使用 `--files` 仍受支持；Git 文件列表必须使用 `-z`。
+Git 文件列表必须使用 `-z`，保留中文、空白与 NUL 路径边界；`--no-renames`使改名前后两端都接受检查。
+手工逐行输入普通路径或使用 `--files` 仍受支持。
 
 修改检查器后运行回归测试（CI 也会运行）：
 
@@ -42,12 +34,8 @@ git diff --name-only --no-renames -z origin/main...HEAD | node .agents/scope_gua
 node --test .agents/scope_guard.test.mjs
 ```
 
-## 改动边界清单的规则
+## 使用边界
 
-**模块自己不能扩自己的边界。** 需要扩时：单独开一个 PR 只改清单文件，
-`Module: docs`，@ Tech Lead。混在功能 PR 里一起改会被打回。
-
-## 模块与发布阶段的对应
-
-见 [`../docs/01-scope-v2.md`](../docs/01-scope-v2.md) 末尾的表。
-**不要因为一个模块「还没人做」就去做它** —— 开工顺序由发布阶段决定，不由空闲决定。
+扩模块范围按 [docs 模块](modules/docs.md)独立提交文档 PR，不能在功能 PR 内自行放宽。
+本地检查与 CI 的可信基线规则见 [AGENTS](../AGENTS.md)；实际检查项以[工作流](../.github/workflows/)为准，范围通过不代表产品、设备或跨境验收通过。
+模块与发布阶段见[范围](../docs/01-scope-v2.md)；模块清单存在不代表已实现或已获准开工。

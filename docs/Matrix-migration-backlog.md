@@ -4,7 +4,7 @@
 
 2026-10-13已逐条核对：原36票的182条候选AC均在对应Issue，无丢失后移除这里的副本；旧全文保留在[959ad74](https://github.com/wenhuorongbing-netizen/babacom/blob/959ad74d8fdbaf7cb29fc6ec2dbf0b5f04932aaa/docs/Matrix-migration-backlog.md)。36父票仍DRAFT；文档合并不批准实验运行或生产。签认和PO审查记录只维护[04](04-open-decisions.md#d16-matrix迁移2026-10-13)。
 
-上述为带日期的父票盘点，不替代后续独立子交付的状态；当前检查点及工程改进顺序见 [04](04-open-decisions.md#matrix-quality-review-2026-10-15)，不自动改变父票AC、依赖或Ready状态。
+上述为带日期的父票盘点；[2026-10-15 工程复审](04-open-decisions.md#matrix-quality-review-2026-10-15)保留为历史记录。当前交付顺序见[内部测试版队列](#next-test-build)，逐票状态仍以 GitHub Issue 为准，不自动改变父票 AC、依赖或 Ready 状态。
 
 M01核对来源为24编号模块120条，加T1/T2/UI/docs清单19条，共139条未勾项，含流程模板；它们不是139个独立产品功能。Scope正文Must仍逐项核对，映射最终挂继任Issue，#60汇总例外，不再新建巨型流程副本。
 
