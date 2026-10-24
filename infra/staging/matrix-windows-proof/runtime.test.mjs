@@ -476,13 +476,40 @@ test('guest JSON publication exposes no final pathname while bytes are still bei
   const end = source.indexOf('\nfunction Check-Time', start);
   let writer = source.slice(start, end).replaceAll('C:\\G1Output', directory.replace(/'/g, "''"));
   assert.ok(writer.includes('$file.Write($bytes, 0, $bytes.Length)'));
-  writer = writer.replace('$file.Write($bytes, 0, $bytes.Length)', `$half=[int]($bytes.Length/2); $file.Write($bytes,0,$half); Write-Output '{"status":"WRITING"}'; [void][Console]::ReadLine(); $file.Write($bytes,$half,$bytes.Length-$half)`);
-  const code = `$ErrorActionPreference='Stop'; ${writer}\nWrite-JsonNew 'proof.json' @{message='complete';runId='${ID}'}`;
+  // Child ticks locate execution delays; source/receipt UTC timestamps expose delayed observation.
+  // Use stderr without JSON serialization so probes do not warm ConvertTo-Json or change the stdout barrier.
+  const powershellPhase = event => `[Console]::Error.WriteLine('JSON-PUBLISH-PS|${event}|' + [Diagnostics.Stopwatch]::GetTimestamp() + '|' + [Diagnostics.Stopwatch]::Frequency + '|' + [DateTime]::UtcNow.Ticks)`;
+  writer = writer
+    .replace('  $bytes =', `  ${powershellPhase('function-enter')}\n  $bytes =`)
+    .replace('  $final =', `  ${powershellPhase('json-ready')}\n  $final =`)
+    .replace('  $file =', `  ${powershellPhase('file-open-request')}\n  $file =`)
+    .replace('  try {', `  ${powershellPhase('file-opened')}\n  try {`)
+    .replace('$file.Write($bytes, 0, $bytes.Length)', `$half=[int]($bytes.Length/2); ${powershellPhase('half-write-request')}; $file.Write($bytes,0,$half); ${powershellPhase('half-written')}; Write-Output '{"status":"WRITING"}'; ${powershellPhase('barrier-output-returned')}; [void][Console]::ReadLine(); $file.Write($bytes,$half,$bytes.Length-$half)`);
+  const code = `$ErrorActionPreference='Stop'; ${powershellPhase('script-entry')}; ${writer}\n${powershellPhase('function-defined')}; Write-JsonNew 'proof.json' @{message='complete';runId='${ID}'}`;
   diagnose('writer-spawn-request');
   const child = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', code], { cwd: directory, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   child.once('spawn', () => diagnose('writer-spawn', { pid: child.pid }));
-  let text = '', stderr = '';
-  child.stderr.on('data', bytes => { stderrBytes += bytes.length; stderr += bytes; });
+  let text = '', stderr = '', phaseLines = '', firstSourceTicks;
+  child.stderr.on('data', bytes => {
+    const receivedUtcMs = Date.now();
+    stderrBytes += bytes.length;
+    stderr += bytes;
+    phaseLines += bytes;
+    let newline;
+    while ((newline = phaseLines.indexOf('\n')) !== -1) {
+      const line = phaseLines.slice(0, newline);
+      phaseLines = phaseLines.slice(newline + 1);
+      const marker = /^JSON-PUBLISH-PS\|([a-z-]+)\|(\d+)\|(\d+)\|(\d+)\r?$/.exec(line);
+      if (!marker) continue;
+      const sourceTicks = BigInt(marker[2]), frequency = BigInt(marker[3]);
+      firstSourceTicks ??= sourceTicks;
+      const sourceUtcMs = Number(BigInt(marker[4]) / 10000n - 62135596800000n);
+      diagnose(`powershell-${marker[1]}`, {
+        sourceElapsedMs: Number((sourceTicks - firstSourceTicks) * 1000n) / Number(frequency),
+        sourceUtcMs, receivedUtcMs, observationLagMs: receivedUtcMs - sourceUtcMs
+      });
+    }
+  });
   const ready = new Promise((resolve, reject) => {
     let observedWriting = false;
     child.stdout.on('data', bytes => {
