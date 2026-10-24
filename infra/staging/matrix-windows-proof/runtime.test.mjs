@@ -480,22 +480,25 @@ test('guest JSON publication exposes no final pathname while bytes are still bei
   // Keep diagnostic serialization off the cold call; compare one warm call only after the original bytes exist.
   const powershellPhase = (event, lookupDepth = false) => `[Console]::Error.WriteLine('JSON-PUBLISH-PS|${event}|' + [Diagnostics.Stopwatch]::GetTimestamp() + '|' + [Diagnostics.Stopwatch]::Frequency + '|' + [DateTime]::UtcNow.Ticks${lookupDepth ? " + '|' + $global:jsonPublishLookupDepth" : ''})`;
   const powershellSnapshot = event => `$jsonPublishUtility=0; $jsonPublishSerializer=0; foreach($assembly in [AppDomain]::CurrentDomain.GetAssemblies()) { if($assembly.GetName().Name -eq 'Microsoft.PowerShell.Commands.Utility') { $jsonPublishUtility=1 }; if($assembly.GetName().Name -eq 'System.Web.Extensions') { $jsonPublishSerializer=1 } }; $jsonPublishProcess.Refresh(); [Console]::Error.WriteLine('JSON-PUBLISH-META|${event}|' + $jsonPublishProcess.StartTime.ToUniversalTime().Ticks + '|' + $jsonPublishProcess.TotalProcessorTime.Ticks + '|' + $jsonPublishUtility + '|' + $jsonPublishSerializer)`;
+  const powershellAssembly = `$jsonPublishAssemblyLoaded=[System.AssemblyLoadEventHandler]{ param($sender,$loaded); $name=$loaded.LoadedAssembly.GetName().Name; if($name -in @('Microsoft.PowerShell.Commands.Utility','System.Web.Extensions','System.Web','System.Configuration')) { [Console]::Error.WriteLine('JSON-PUBLISH-ASSEMBLY|' + $name + '|' + [Diagnostics.Stopwatch]::GetTimestamp() + '|' + [Diagnostics.Stopwatch]::Frequency + '|' + [DateTime]::UtcNow.Ticks) } }; [AppDomain]::CurrentDomain.add_AssemblyLoad($jsonPublishAssemblyLoaded)`;
   // Module autoload can recurse into lookup; preserve nesting without replacing the returned command.
   const powershellLookup = `$global:jsonPublishLookupDepth=0; $ExecutionContext.InvokeCommand.PreCommandLookupAction={ param($sender,$lookup); if($lookup.CommandName -eq 'ConvertTo-Json') { $global:jsonPublishLookupDepth++; ${powershellPhase('command-lookup-request', true)} } }; $ExecutionContext.InvokeCommand.PostCommandLookupAction={ param($sender,$lookup); if($lookup.CommandName -eq 'ConvertTo-Json') { ${powershellPhase('command-lookup-returned', true)}; if($global:jsonPublishLookupDepth -eq 1) { ${powershellSnapshot('command-lookup-after')} }; $global:jsonPublishLookupDepth-- } }`;
   writer = writer
     .replace('  $bytes =', `  ${powershellPhase('function-enter')}\n  $bytes =`)
-    .replace('($value | ConvertTo-Json -Depth 8 -Compress)', `$(${powershellSnapshot('json-before')}; ${powershellPhase('json-convert-request')}; $value | ConvertTo-Json -Depth 8 -Compress; ${powershellPhase('json-convert-returned')}; ${powershellSnapshot('json-after')}; ${powershellPhase('encoding-request')})`)
+    .replace('($value | ConvertTo-Json -Depth 8 -Compress)', `$(${powershellSnapshot('json-before')}; ${powershellAssembly}; ${powershellPhase('json-convert-request')}; try { $value | ConvertTo-Json -Depth 8 -Compress } finally { [AppDomain]::CurrentDomain.remove_AssemblyLoad($jsonPublishAssemblyLoaded) }; ${powershellPhase('json-convert-returned')}; ${powershellSnapshot('json-after')}; ${powershellPhase('encoding-request')})`)
     .replace('  $final =', `  ${powershellPhase('json-ready')}\n  ${powershellPhase('warm-json-request')}; $null=$value | ConvertTo-Json -Depth 8 -Compress; ${powershellPhase('warm-json-returned')}\n  $final =`)
     .replace('  $file =', `  ${powershellPhase('file-open-request')}\n  $file =`)
     .replace('  try {', `  ${powershellPhase('file-opened')}\n  try {`)
     .replace('$file.Write($bytes, 0, $bytes.Length)', `$half=[int]($bytes.Length/2); ${powershellPhase('half-write-request')}; $file.Write($bytes,0,$half); ${powershellPhase('half-written')}; Write-Output '{"status":"WRITING"}'; ${powershellPhase('barrier-output-returned')}; [void][Console]::ReadLine(); $file.Write($bytes,$half,$bytes.Length-$half)`);
   const code = `$ErrorActionPreference='Stop'; ${powershellPhase('script-entry')}; $jsonPublishProcess=[Diagnostics.Process]::GetCurrentProcess(); ${powershellSnapshot('script-process')}; ${powershellLookup}; ${writer}\n${powershellPhase('function-defined')}; Write-JsonNew 'proof.json' @{message='complete';runId='${ID}'}`;
+  // A small bootstrap separates native startup from parsing and first invocation of the same body.
+  const bootstrap = `$ErrorActionPreference='Stop'; ${powershellPhase('bootstrap-entry')}; ${powershellPhase('script-parse-request')}; $jsonPublishScript=[scriptblock]::Create('${code.replaceAll("'", "''")}'); ${powershellPhase('script-parsed')}; ${powershellPhase('script-invoke-request')}; & $jsonPublishScript`;
   diagnose('writer-spawn-request');
-  const child = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', code], { cwd: directory, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', bootstrap], { cwd: directory, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   child.once('spawn', () => diagnose('writer-spawn', { pid: child.pid }));
   let text = '', stderr = '';
   const observePowershell = (process, prefix = 'powershell') => {
-    let phaseLines = '', firstSourceTicks, firstSourceUtcMs;
+    let phaseLines = '', firstSourceTicks, firstSourceUtcMs, scriptSourceUtcMs;
     process.stderr.on('data', bytes => {
       const receivedUtcMs = Date.now();
       stderrBytes += bytes.length;
@@ -509,19 +512,23 @@ test('guest JSON publication exposes no final pathname while bytes are still bei
         if (snapshot) {
           const processStartUtcMs = Number(BigInt(snapshot[2]) / 10000n - 62135596800000n);
           diagnose(`${prefix}-${snapshot[1]}`, {
-            processStartUtcMs, startupToScriptMs: firstSourceUtcMs - processStartUtcMs,
+            processStartUtcMs, startupToScriptMs: scriptSourceUtcMs - processStartUtcMs,
+            startupToFirstMarkerMs: firstSourceUtcMs - processStartUtcMs,
             processCpuMs: Number(BigInt(snapshot[3])) / 10000,
             utilityAssemblyLoaded: snapshot[4] === '1', serializerAssemblyLoaded: snapshot[5] === '1'
           });
           continue;
         }
-        const marker = /^JSON-PUBLISH-PS\|([a-z-]+)\|(\d+)\|(\d+)\|(\d+)(?:\|(\d+))?\r?$/.exec(line);
+        const assembly = /^JSON-PUBLISH-ASSEMBLY\|(Microsoft\.PowerShell\.Commands\.Utility|System\.Web\.Extensions|System\.Web|System\.Configuration)\|(\d+)\|(\d+)\|(\d+)\r?$/.exec(line);
+        const marker = assembly ?? /^JSON-PUBLISH-PS\|([a-z-]+)\|(\d+)\|(\d+)\|(\d+)(?:\|(\d+))?\r?$/.exec(line);
         if (!marker) continue;
         const sourceTicks = BigInt(marker[2]), frequency = BigInt(marker[3]);
         firstSourceTicks ??= sourceTicks;
         const sourceUtcMs = Number(BigInt(marker[4]) / 10000n - 62135596800000n);
         firstSourceUtcMs ??= sourceUtcMs;
-        diagnose(`${prefix}-${marker[1]}`, {
+        if (!assembly && marker[1] === 'script-entry') scriptSourceUtcMs = sourceUtcMs;
+        diagnose(`${prefix}-${assembly ? 'assembly-loaded' : marker[1]}`, {
+          assembly: assembly ? assembly[1] : undefined,
           sourceElapsedMs: Number((sourceTicks - firstSourceTicks) * 1000n) / Number(frequency),
           sourceUtcMs, receivedUtcMs, observationLagMs: receivedUtcMs - sourceUtcMs,
           lookupDepth: marker[5] === undefined ? undefined : Number(marker[5])
