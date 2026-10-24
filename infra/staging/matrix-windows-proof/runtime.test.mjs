@@ -477,15 +477,17 @@ test('guest JSON publication exposes no final pathname while bytes are still bei
   let writer = source.slice(start, end).replaceAll('C:\\G1Output', directory.replace(/'/g, "''"));
   assert.ok(writer.includes('$file.Write($bytes, 0, $bytes.Length)'));
   // Child ticks locate execution delays; source/receipt UTC timestamps expose delayed observation.
-  // Use stderr without JSON serialization so probes do not warm ConvertTo-Json or change the stdout barrier.
+  // Keep diagnostic serialization off the cold call; compare one warm call only after the original bytes exist.
   const powershellPhase = event => `[Console]::Error.WriteLine('JSON-PUBLISH-PS|${event}|' + [Diagnostics.Stopwatch]::GetTimestamp() + '|' + [Diagnostics.Stopwatch]::Frequency + '|' + [DateTime]::UtcNow.Ticks)`;
+  const powershellSnapshot = event => `$jsonPublishUtility=0; foreach($assembly in [AppDomain]::CurrentDomain.GetAssemblies()) { if($assembly.GetName().Name -eq 'Microsoft.PowerShell.Commands.Utility') { $jsonPublishUtility=1 } }; $jsonPublishProcess.Refresh(); [Console]::Error.WriteLine('JSON-PUBLISH-META|${event}|' + $jsonPublishProcess.StartTime.ToUniversalTime().Ticks + '|' + $jsonPublishProcess.TotalProcessorTime.Ticks + '|' + $jsonPublishUtility)`;
   writer = writer
     .replace('  $bytes =', `  ${powershellPhase('function-enter')}\n  $bytes =`)
-    .replace('  $final =', `  ${powershellPhase('json-ready')}\n  $final =`)
+    .replace('($value | ConvertTo-Json -Depth 8 -Compress)', `$(${powershellSnapshot('json-before')}; ${powershellPhase('json-convert-request')}; $value | ConvertTo-Json -Depth 8 -Compress; ${powershellPhase('json-convert-returned')}; ${powershellSnapshot('json-after')}; ${powershellPhase('encoding-request')})`)
+    .replace('  $final =', `  ${powershellPhase('json-ready')}\n  ${powershellPhase('warm-json-request')}; $null=$value | ConvertTo-Json -Depth 8 -Compress; ${powershellPhase('warm-json-returned')}\n  $final =`)
     .replace('  $file =', `  ${powershellPhase('file-open-request')}\n  $file =`)
     .replace('  try {', `  ${powershellPhase('file-opened')}\n  try {`)
     .replace('$file.Write($bytes, 0, $bytes.Length)', `$half=[int]($bytes.Length/2); ${powershellPhase('half-write-request')}; $file.Write($bytes,0,$half); ${powershellPhase('half-written')}; Write-Output '{"status":"WRITING"}'; ${powershellPhase('barrier-output-returned')}; [void][Console]::ReadLine(); $file.Write($bytes,$half,$bytes.Length-$half)`);
-  const code = `$ErrorActionPreference='Stop'; ${powershellPhase('script-entry')}; ${writer}\n${powershellPhase('function-defined')}; Write-JsonNew 'proof.json' @{message='complete';runId='${ID}'}`;
+  const code = `$ErrorActionPreference='Stop'; ${powershellPhase('script-entry')}; $jsonPublishProcess=[Diagnostics.Process]::GetCurrentProcess(); ${powershellSnapshot('script-process')}; ${writer}\n${powershellPhase('function-defined')}; Write-JsonNew 'proof.json' @{message='complete';runId='${ID}'}`;
   diagnose('writer-spawn-request');
   const child = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', code], { cwd: directory, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   child.once('spawn', () => diagnose('writer-spawn', { pid: child.pid }));
@@ -499,6 +501,15 @@ test('guest JSON publication exposes no final pathname while bytes are still bei
     while ((newline = phaseLines.indexOf('\n')) !== -1) {
       const line = phaseLines.slice(0, newline);
       phaseLines = phaseLines.slice(newline + 1);
+      const snapshot = /^JSON-PUBLISH-META\|([a-z-]+)\|(\d+)\|(\d+)\|([01])\r?$/.exec(line);
+      if (snapshot) {
+        diagnose(`powershell-${snapshot[1]}`, {
+          processStartUtcMs: Number(BigInt(snapshot[2]) / 10000n - 62135596800000n),
+          processCpuMs: Number(BigInt(snapshot[3])) / 10000,
+          utilityAssemblyLoaded: snapshot[4] === '1'
+        });
+        continue;
+      }
       const marker = /^JSON-PUBLISH-PS\|([a-z-]+)\|(\d+)\|(\d+)\|(\d+)\r?$/.exec(line);
       if (!marker) continue;
       const sourceTicks = BigInt(marker[2]), frequency = BigInt(marker[3]);
