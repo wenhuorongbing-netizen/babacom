@@ -478,8 +478,10 @@ test('guest JSON publication exposes no final pathname while bytes are still bei
   assert.ok(writer.includes('$file.Write($bytes, 0, $bytes.Length)'));
   // Child ticks locate execution delays; source/receipt UTC timestamps expose delayed observation.
   // Keep diagnostic serialization off the cold call; compare one warm call only after the original bytes exist.
-  const powershellPhase = event => `[Console]::Error.WriteLine('JSON-PUBLISH-PS|${event}|' + [Diagnostics.Stopwatch]::GetTimestamp() + '|' + [Diagnostics.Stopwatch]::Frequency + '|' + [DateTime]::UtcNow.Ticks)`;
-  const powershellSnapshot = event => `$jsonPublishUtility=0; foreach($assembly in [AppDomain]::CurrentDomain.GetAssemblies()) { if($assembly.GetName().Name -eq 'Microsoft.PowerShell.Commands.Utility') { $jsonPublishUtility=1 } }; $jsonPublishProcess.Refresh(); [Console]::Error.WriteLine('JSON-PUBLISH-META|${event}|' + $jsonPublishProcess.StartTime.ToUniversalTime().Ticks + '|' + $jsonPublishProcess.TotalProcessorTime.Ticks + '|' + $jsonPublishUtility)`;
+  const powershellPhase = (event, lookupDepth = false) => `[Console]::Error.WriteLine('JSON-PUBLISH-PS|${event}|' + [Diagnostics.Stopwatch]::GetTimestamp() + '|' + [Diagnostics.Stopwatch]::Frequency + '|' + [DateTime]::UtcNow.Ticks${lookupDepth ? " + '|' + $global:jsonPublishLookupDepth" : ''})`;
+  const powershellSnapshot = event => `$jsonPublishUtility=0; $jsonPublishSerializer=0; foreach($assembly in [AppDomain]::CurrentDomain.GetAssemblies()) { if($assembly.GetName().Name -eq 'Microsoft.PowerShell.Commands.Utility') { $jsonPublishUtility=1 }; if($assembly.GetName().Name -eq 'System.Web.Extensions') { $jsonPublishSerializer=1 } }; $jsonPublishProcess.Refresh(); [Console]::Error.WriteLine('JSON-PUBLISH-META|${event}|' + $jsonPublishProcess.StartTime.ToUniversalTime().Ticks + '|' + $jsonPublishProcess.TotalProcessorTime.Ticks + '|' + $jsonPublishUtility + '|' + $jsonPublishSerializer)`;
+  // Module autoload can recurse into lookup; preserve nesting without replacing the returned command.
+  const powershellLookup = `$global:jsonPublishLookupDepth=0; $ExecutionContext.InvokeCommand.PreCommandLookupAction={ param($sender,$lookup); if($lookup.CommandName -eq 'ConvertTo-Json') { $global:jsonPublishLookupDepth++; ${powershellPhase('command-lookup-request', true)} } }; $ExecutionContext.InvokeCommand.PostCommandLookupAction={ param($sender,$lookup); if($lookup.CommandName -eq 'ConvertTo-Json') { ${powershellPhase('command-lookup-returned', true)}; if($global:jsonPublishLookupDepth -eq 1) { ${powershellSnapshot('command-lookup-after')} }; $global:jsonPublishLookupDepth-- } }`;
   writer = writer
     .replace('  $bytes =', `  ${powershellPhase('function-enter')}\n  $bytes =`)
     .replace('($value | ConvertTo-Json -Depth 8 -Compress)', `$(${powershellSnapshot('json-before')}; ${powershellPhase('json-convert-request')}; $value | ConvertTo-Json -Depth 8 -Compress; ${powershellPhase('json-convert-returned')}; ${powershellSnapshot('json-after')}; ${powershellPhase('encoding-request')})`)
@@ -487,40 +489,47 @@ test('guest JSON publication exposes no final pathname while bytes are still bei
     .replace('  $file =', `  ${powershellPhase('file-open-request')}\n  $file =`)
     .replace('  try {', `  ${powershellPhase('file-opened')}\n  try {`)
     .replace('$file.Write($bytes, 0, $bytes.Length)', `$half=[int]($bytes.Length/2); ${powershellPhase('half-write-request')}; $file.Write($bytes,0,$half); ${powershellPhase('half-written')}; Write-Output '{"status":"WRITING"}'; ${powershellPhase('barrier-output-returned')}; [void][Console]::ReadLine(); $file.Write($bytes,$half,$bytes.Length-$half)`);
-  const code = `$ErrorActionPreference='Stop'; ${powershellPhase('script-entry')}; $jsonPublishProcess=[Diagnostics.Process]::GetCurrentProcess(); ${powershellSnapshot('script-process')}; ${writer}\n${powershellPhase('function-defined')}; Write-JsonNew 'proof.json' @{message='complete';runId='${ID}'}`;
+  const code = `$ErrorActionPreference='Stop'; ${powershellPhase('script-entry')}; $jsonPublishProcess=[Diagnostics.Process]::GetCurrentProcess(); ${powershellSnapshot('script-process')}; ${powershellLookup}; ${writer}\n${powershellPhase('function-defined')}; Write-JsonNew 'proof.json' @{message='complete';runId='${ID}'}`;
   diagnose('writer-spawn-request');
   const child = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', code], { cwd: directory, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   child.once('spawn', () => diagnose('writer-spawn', { pid: child.pid }));
-  let text = '', stderr = '', phaseLines = '', firstSourceTicks;
-  child.stderr.on('data', bytes => {
-    const receivedUtcMs = Date.now();
-    stderrBytes += bytes.length;
-    stderr += bytes;
-    phaseLines += bytes;
-    let newline;
-    while ((newline = phaseLines.indexOf('\n')) !== -1) {
-      const line = phaseLines.slice(0, newline);
-      phaseLines = phaseLines.slice(newline + 1);
-      const snapshot = /^JSON-PUBLISH-META\|([a-z-]+)\|(\d+)\|(\d+)\|([01])\r?$/.exec(line);
-      if (snapshot) {
-        diagnose(`powershell-${snapshot[1]}`, {
-          processStartUtcMs: Number(BigInt(snapshot[2]) / 10000n - 62135596800000n),
-          processCpuMs: Number(BigInt(snapshot[3])) / 10000,
-          utilityAssemblyLoaded: snapshot[4] === '1'
+  let text = '', stderr = '';
+  const observePowershell = (process, prefix = 'powershell') => {
+    let phaseLines = '', firstSourceTicks, firstSourceUtcMs;
+    process.stderr.on('data', bytes => {
+      const receivedUtcMs = Date.now();
+      stderrBytes += bytes.length;
+      if (process === child) stderr += bytes;
+      phaseLines += bytes;
+      let newline;
+      while ((newline = phaseLines.indexOf('\n')) !== -1) {
+        const line = phaseLines.slice(0, newline);
+        phaseLines = phaseLines.slice(newline + 1);
+        const snapshot = /^JSON-PUBLISH-META\|([a-z-]+)\|(\d+)\|(\d+)\|([01])\|([01])\r?$/.exec(line);
+        if (snapshot) {
+          const processStartUtcMs = Number(BigInt(snapshot[2]) / 10000n - 62135596800000n);
+          diagnose(`${prefix}-${snapshot[1]}`, {
+            processStartUtcMs, startupToScriptMs: firstSourceUtcMs - processStartUtcMs,
+            processCpuMs: Number(BigInt(snapshot[3])) / 10000,
+            utilityAssemblyLoaded: snapshot[4] === '1', serializerAssemblyLoaded: snapshot[5] === '1'
+          });
+          continue;
+        }
+        const marker = /^JSON-PUBLISH-PS\|([a-z-]+)\|(\d+)\|(\d+)\|(\d+)(?:\|(\d+))?\r?$/.exec(line);
+        if (!marker) continue;
+        const sourceTicks = BigInt(marker[2]), frequency = BigInt(marker[3]);
+        firstSourceTicks ??= sourceTicks;
+        const sourceUtcMs = Number(BigInt(marker[4]) / 10000n - 62135596800000n);
+        firstSourceUtcMs ??= sourceUtcMs;
+        diagnose(`${prefix}-${marker[1]}`, {
+          sourceElapsedMs: Number((sourceTicks - firstSourceTicks) * 1000n) / Number(frequency),
+          sourceUtcMs, receivedUtcMs, observationLagMs: receivedUtcMs - sourceUtcMs,
+          lookupDepth: marker[5] === undefined ? undefined : Number(marker[5])
         });
-        continue;
       }
-      const marker = /^JSON-PUBLISH-PS\|([a-z-]+)\|(\d+)\|(\d+)\|(\d+)\r?$/.exec(line);
-      if (!marker) continue;
-      const sourceTicks = BigInt(marker[2]), frequency = BigInt(marker[3]);
-      firstSourceTicks ??= sourceTicks;
-      const sourceUtcMs = Number(BigInt(marker[4]) / 10000n - 62135596800000n);
-      diagnose(`powershell-${marker[1]}`, {
-        sourceElapsedMs: Number((sourceTicks - firstSourceTicks) * 1000n) / Number(frequency),
-        sourceUtcMs, receivedUtcMs, observationLagMs: receivedUtcMs - sourceUtcMs
-      });
-    }
-  });
+    });
+  };
+  observePowershell(child);
   const ready = new Promise((resolve, reject) => {
     let observedWriting = false;
     child.stdout.on('data', bytes => {
@@ -551,7 +560,8 @@ test('guest JSON publication exposes no final pathname while bytes are still bei
   const originalWriter = source.slice(start, end).replaceAll('C:\\G1Output', directory.replace(/'/g, "''"));
   diagnose('duplicate-spawn-request');
   const duplicate = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-    `$ErrorActionPreference='Stop'; ${originalWriter}\nWrite-JsonNew 'proof.json' @{message='replacement'}`], { cwd: directory, windowsHide: true, stdio: 'ignore' });
+    `$ErrorActionPreference='Stop'; ${powershellPhase('script-entry')}; $jsonPublishProcess=[Diagnostics.Process]::GetCurrentProcess(); ${powershellSnapshot('script-process')}; ${originalWriter}\nWrite-JsonNew 'proof.json' @{message='replacement'}`], { cwd: directory, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+  observePowershell(duplicate, 'duplicate-powershell');
   duplicate.once('spawn', () => diagnose('duplicate-spawn', { pid: duplicate.pid }));
   const duplicateEnded = new Promise(resolve => duplicate.once('exit', (code, signal) => { diagnose('duplicate-exit', { code, signal }); resolve(code); }));
   t.after(async () => { if (duplicate.exitCode === null && duplicate.signalCode === null) duplicate.kill(); await duplicateEnded; });
