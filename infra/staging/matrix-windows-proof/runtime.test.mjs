@@ -484,7 +484,7 @@ test('guest JSON publication exposes no final pathname while bytes are still bei
     .replace('  $final =', `  ${powershellPhase('json-ready')}\n  $final =`)
     .replace('  $file =', `  ${powershellPhase('file-open-request')}\n  $file =`)
     .replace('  try {', `  ${powershellPhase('file-opened')}\n  try {`)
-    .replace('$file.Write($bytes, 0, $bytes.Length)', `$half=[int]($bytes.Length/2); ${powershellPhase('half-write-request')}; $file.Write($bytes,0,$half); ${powershellPhase('half-written')}; Write-Output '{"status":"WRITING"}'; [void][Console]::ReadLine(); $file.Write($bytes,$half,$bytes.Length-$half)`);
+    .replace('$file.Write($bytes, 0, $bytes.Length)', `$half=[int]($bytes.Length/2); ${powershellPhase('half-write-request')}; $file.Write($bytes,0,$half); ${powershellPhase('half-written')}; Write-Output '{"status":"WRITING"}'; ${powershellPhase('barrier-output-returned')}; [void][Console]::ReadLine(); $file.Write($bytes,$half,$bytes.Length-$half)`);
   const code = `$ErrorActionPreference='Stop'; ${powershellPhase('script-entry')}; ${writer}\n${powershellPhase('function-defined')}; Write-JsonNew 'proof.json' @{message='complete';runId='${ID}'}`;
   diagnose('writer-spawn-request');
   const child = spawn(runtime.FIXED.powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', code], { cwd: directory, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
