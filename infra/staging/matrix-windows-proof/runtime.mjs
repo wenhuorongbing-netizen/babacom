@@ -602,13 +602,14 @@ export async function runHarness(mode, injected = {}) {
       try { await Promise.all(prepared.sealed.map(async item => closeOwned(() => item.handle.close()))); }
       catch (error) { result.inputCleanup = { status: 'FAIL', ...errorRecord(error) }; result.status = 'FAIL'; }
     }
-    // Cleanup subprocesses/file closures also must settle before admission can be released.
-    if (!drainFailed && pending.size) {
+    const drainCleanupOperations = async () => {
       for (const controller of pending.values()) controller?.abort();
       const draining = Promise.allSettled([...pending.keys()]);
       try { await bounded(() => draining, Math.min(15000, Math.max(1, (deadline - deps.now()) / 2)), true); }
       catch (error) { drainFailed = true; result.status = 'FAIL'; result.operationCleanup = { status: 'FAIL', ...errorRecord(error) }; }
-    }
+    };
+    // Cleanup subprocesses/file closures also must settle before admission can be released.
+    if (!drainFailed && pending.size) await drainCleanupOperations();
     if (admission) {
       if (drainFailed) result.admissionCleanup = { status: 'FAIL', category: 'HELD_UNTIL_PROCESS_EXIT' };
       else {
@@ -618,12 +619,7 @@ export async function runHarness(mode, injected = {}) {
     }
     // The admission close itself is tracked: a timed-out release must not leave an
     // unobserved live pipe (or a late release continuation) after normal harness return.
-    if (!drainFailed && pending.size) {
-      for (const controller of pending.values()) controller?.abort();
-      const draining = Promise.allSettled([...pending.keys()]);
-      try { await bounded(() => draining, Math.min(15000, Math.max(1, (deadline - deps.now()) / 2)), true); }
-      catch (error) { drainFailed = true; result.status = 'FAIL'; result.operationCleanup = { status: 'FAIL', ...errorRecord(error) }; }
-    }
+    if (!drainFailed && pending.size) await drainCleanupOperations();
     if (prepared && prepared.outputExists !== false) {
       // This immutable receipt is serialized before publication can be acknowledged.
       // Only the runner's terminal verdict can confirm successful publication in time.
@@ -632,12 +628,7 @@ export async function runHarness(mode, injected = {}) {
       try { await bounded(options => deps.writeFinal(prepared, receipt, options), 15000, true); }
       catch (error) { result.status = 'FAIL'; result.evidence = { status: 'FAIL', ...errorRecord(error) }; }
     }
-    if (!drainFailed && pending.size) {
-      for (const controller of pending.values()) controller?.abort();
-      const draining = Promise.allSettled([...pending.keys()]);
-      try { await bounded(() => draining, Math.min(15000, Math.max(1, (deadline - deps.now()) / 2)), true); }
-      catch (error) { drainFailed = true; result.status = 'FAIL'; result.operationCleanup = { status: 'FAIL', ...errorRecord(error) }; }
-    }
+    if (!drainFailed && pending.size) await drainCleanupOperations();
     if (drainFailed) {
       deps.terminate(result);
       throw failure('TERMINATION_REQUIRED', 'Terminal hook returned with pending work; admission remains held');
