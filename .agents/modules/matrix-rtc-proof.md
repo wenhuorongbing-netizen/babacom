@@ -1,6 +1,6 @@
 # matrix-rtc-proof — 同机零媒体 R0 候选
 
-状态：**2026-10-24只读复核：e7已启动并停止，verify请求不存在，完整R0未通过；e1–e7原位保留。main已合并Node二进制分块校验。下述e8是待Jack签认及可信合并的候选，不授权重启e7或直接启动e8。当前磁盘、录制服务内存增长与两项原生服务身份不符，未恢复准入仍HOLD。** 实施票 #124；关联 M04 #63、M10 #69、M29 #88。
+状态：**2026-10-25 e9边界候选：准备基线为main `d6fdcdf`（PR168），含Node分块校验、JWT精确默认grant兼容及固定阶段错误码；#124已重新打开，完整R0仍未通过。e1–e8原位保留。e9尚待Jack签认、可信合并、三文件批次切换及具体运行合同核定；本轮未创建或运行e9，云端目录、TLS、旧服务和资源状态未复核，准入仍HOLD。** 实施票 #124；关联 M04 #63、M10 #69、M29 #88。
 
 ## 目标与范围
 
@@ -25,10 +25,10 @@ infra/staging/matrix-rtc-proof/proof.test.mjs
 | 边界 | 约定与必须检查的事实 |
 |---|---|
 | 主机例外 | 仅 `lhins-af0ntal8` 的临时R0；授权与资源快照见[04](../../docs/04-open-decisions.md#matrix-rtc-e1-same-host-2026-10-16)，默认规则见[infra/AGENTS](../../infra/AGENTS.md)。不据此签收生产或媒体共置。 |
-| 归属 | 本次新批次仅 `/opt/babacom-matrix-rtc-e8`，Compose项目 `babacom-matrix-rtc-e8`；创建前核对目录不存在，创建后绑定主机/项目/镜像/全新run ID。全新合成DB、卷、应用秘密；独立Docker网络，无旧业务挂载、host网络或privileged。旧e1–e7现场按下文只读保留；e8被占用即BUSY，不接管或复用。 |
+| 归属 | 本次新批次仅 `/opt/babacom-matrix-rtc-e9`，Compose项目 `babacom-matrix-rtc-e9`；创建前核对目录不存在，创建后绑定主机/项目/镜像/全新run ID。全新合成DB、卷、应用秘密；独立Docker网络，无旧业务挂载、host网络或privileged。旧e1–e8现场按下文只读保留；e9被占用即BUSY，不接管或复用。 |
 | 容量 | 四个实验容器与Node/CLI及其验证辅助进程合计CPU quota/period≤1，memory限制总和≤1610612736字节；实查实际cgroups，不以Compose文本代替。共享Docker/containerd及shim开销按下文资源核算修订单独测量和止损，不计作已受实验硬限额封顶。启动前复核空间/内存/负载及旧服务基线；测量范围和止损阈值须随运行细节冻结，缺项即HOLD。 |
 | 故障/退出 | 超限、实验OOM或旧服务基线异常即停止本次自有实验；未知归属为UNKNOWN。只停确认归属的资源，保留合成DB/卷/秘密及追加证据；不停止旧服务、不全局down或删除卷。 |
-| TLS/入口 | 所有发布入口仅loopback，实际域名、精确端口、可信证书/取得方式、TLS代理平台摘要及访问方均待核定；缺项拒绝运行。严格验证证书链和主机名，另实测auth的OpenID入口；无跳过校验或安装自签CA，不改旧DNS/代理/防火墙，不新增公网端口。 |
+| TLS/入口 | 候选固定 `rtc-r0.beidi.games:18443`，所有发布入口仅loopback；实际可信证书/取得方式、TLS代理平台摘要及operator-loopback访问方须按原合同本轮复核，缺项拒绝运行。严格验证证书链和主机名，另实测auth的OpenID入口；无跳过校验或安装自签CA，不改旧DNS/代理/防火墙，不新增公网端口。 |
 | 身份/秘密 | 仅新合成账号rtc-a/rtc-b/rtc-outsider和新私房，Matrix成员为唯一权威。秘密运行前随机生成并核对精确目录/文件最小权限；不覆盖旧秘密。验证器取得的token只在内存，不额外落盘；固定Synapse必要认证状态仅保存在本实验自有、受保护的DB及其事务文件。凭据不进Git、命令行、导航URL、日志、截图或证据。协议必需的传输例外及日志准入见下文，未核定即HOLD。 |
 | 媒体 | LiveKit仅供API和信令；TURN关闭，不协商音视频轨道，不采集设备；任何媒体轨道使R0失败。R1–R3另定范围，强制relay/真人/中德不由R0代替。 |
 | 期限 | 单次验证总预算120秒、单HTTP≤10秒，清理≤60秒；保留T1/T2及安装/退出期限。冲突即FAIL/BUSY，不杀占用者、不自动换端口、不重置预算。 |
@@ -53,28 +53,28 @@ infra/staging/matrix-rtc-proof/proof.test.mjs
 | 期限 | 验证客户端单 HTTP 仍≤10秒；不再承诺 stock auth 内部 socket≤10秒。仅已核定的 OpenID/客户端发现请求为30秒，Twirp总期限未证实；整个启动/验证任务由标准 systemd/Compose 在120秒外界期限内终止，清理≤60秒。进程死亡、卡住及退出负例未实证即HOLD，不把 `WebSocket.close()` 当作 socket 已销毁。 |
 | 合成凭据持久化例外 | 仅本实验合成凭据可受操作系统常规内存管理影响，可能进入受保护的 swap/core；stock auth 原始 stderr 可暂存于受信运行时管道内存。这是对旧 memory-only/原始输出禁令的新例外，不追认旧验收。必须先冻结实际路径、权限和可访问主体；未知即HOLD，不修改宿主或旧业务监控。验证器不额外落盘；凭据仍不得进入持久日志、Git、命令行、导航URL、终端或证据。 |
 | 日志与留证 | 容器使用 `logging: none`、关闭access log；逐项核验Docker与旁路不持久化原始输出。保留脱敏状态、errcode、计数、资源及退出事件；哨兵先验证输出/持久化边界，再发送有效令牌，不把丢弃原始日志当完整验收。发现非获准持久化或外传立即FAIL，只停自有实验并保留受限证据。 |
-| TLS候选 | `rtc-r0.beidi.games:18443`，仅loopback；新独立密钥与公信证书，DNS-01仅新增本次 `_acme-challenge.rtc-r0` TXT，不改旧A记录、代理、防火墙或公网端口。域名使用/证书取得及具体运行细节仍待签认，未核定不运行。 |
+| TLS候选 | `rtc-r0.beidi.games:18443`，仅loopback；e9只读复用已核定的同一实验公信证书与独立密钥，受保护复制及本轮复核见下文。不重新签发证书或改DNS、代理、防火墙及公网端口；链、域名、有效期、摘要、权限或具体运行细节未核定不运行。 |
 
 Matrix登录token注销必须独立验证；注销/停服不等于已签发OpenID或LiveKit JWT立即失效。记录固定栈的实际TTL，停止后不重启复用该实验状态。上述例外不覆盖真实账号、产品、R1–R3或其他主机；保留原分支、数据库、秘密及全部历史证据。
 
-本次能力修复先独立合并现有模块与 `docs/04-open-decisions.md`，再只改 `compose.yaml`、`proof.mjs`、`proof.test.mjs`；独立审查和托管检查通过后合并。随后最多两个全新固定官方 Caddy 诊断容器：先 validate，成功且独立超时清理实证有效后才以另一个容器 run≤5秒。仅只读现有实验 TLS、network=none、无发布端口、原始输出仅受限 RAM；诊断容器、Node/CLI与辅助进程合计仍硬限≤0.2 CPU/268435456字节，总期限≤120秒、清理≤60秒；只向既有 `/opt/babacom-matrix-rtc-e1/events/caddy-startup-diagnostic-20261019.jsonl` 追加脱敏归属与结果。失败即停，保留旧 FAIL 实验及业务；诊断通过不能代替完整 R0、可信 TLS 链路或媒体验收。
+历史Caddy诊断授权（不随e9延续）：本次能力修复先独立合并现有模块与 `docs/04-open-decisions.md`，再只改 `compose.yaml`、`proof.mjs`、`proof.test.mjs`；独立审查和托管检查通过后合并。随后最多两个全新固定官方 Caddy 诊断容器：先 validate，成功且独立超时清理实证有效后才以另一个容器 run≤5秒。仅只读现有实验 TLS、network=none、无发布端口、原始输出仅受限 RAM；诊断容器、Node/CLI与辅助进程合计仍硬限≤0.2 CPU/268435456字节，总期限≤120秒、清理≤60秒；只向既有 `/opt/babacom-matrix-rtc-e1/events/caddy-startup-diagnostic-20261019.jsonl` 追加脱敏归属与结果。失败即停，保留旧 FAIL 实验及业务；诊断通过不能代替完整 R0、可信 TLS 链路或媒体验收。
 
 <a id="新批次隔离2026-10-20候选"></a>
 
-### 新批次隔离（2026-10-24 e8 边界候选，待签认及可信合并）
+### 新批次隔离（2026-10-25 e9 边界候选，待签认及可信合并）
 
-旧e1–e7的目录、容器、DB、应用秘密、运行合同与历史证据原位保留，不重启、覆盖、重命名或删除。新e8固定使用 `/opt/babacom-matrix-rtc-e8`、Compose项目 `babacom-matrix-rtc-e8`、全新run ID、DB和应用秘密；e8目录或归属冲突即BUSY，不自动换名或重试。只读复用e1已核定摘要的官方Node，并以独占创建方式复制同一实验TLS到e8受保护目录；先核对链、域名、有效期、摘要和权限，不复用旧账号、令牌或应用秘密。
+旧e1–e8的目录、容器、DB、应用秘密、运行合同与历史证据原位保留，不重启、覆盖、重命名或删除。新e9固定使用 `/opt/babacom-matrix-rtc-e9`、Compose项目 `babacom-matrix-rtc-e9`、全新run ID、DB和应用秘密；e9目录或归属冲突即BUSY，不自动换名或重试。只读复用e1已核定摘要的官方Node 24.13.0，并以独占创建方式复制同一实验TLS到e9受保护目录；先核对链、域名、有效期、摘要和权限，不复用旧账号、令牌或应用秘密。
 
-本次另请求一项明确的旧服务身份例外：仅将 `maowo-cp-staging-relay.service`（当前PID4083779，2026-10-23 18:16:34 CST启动）和 `maowo-cp-staging.service`（当前PID4080321，2026-10-23 18:11:43 CST启动）的PID/InvocationID更新为本轮只读核定并在运行合同中冻结的身份。这两次启动晚于e7结束；维护发起者尚未归因，不据此追认e7基线保持。Jack未签认该例外不得更新；上述身份再次变化即HOLD，不自动接纳。
+五项nativeBaseline原样继承e8已签认且摘要匹配的冻结runtime，包括其中 `maowo-cp-staging-relay.service`（PID4083779）及 `maowo-cp-staging.service`（PID4080321）的已核定PID/InvocationID。e9不新增服务身份例外，不以本轮当前读数更新身份，也不追认e7基线保持；任一身份变化或无法核对旧冻结合同即HOLD。
 
-其余三项原生服务、八个旧业务容器和共享Docker/containerd身份、原memoryUsageBytes、挂载及全部数值门槛从e7冻结合同原样继承，不重置或放宽。磁盘空闲仍须≥5368709120字节、每个旧容器内存增长仍≤33554432字节；当前不足不能改记为基线。录像和日志不属于可删除候选；任何宿主资源处理另按精确清单裁定，未获准或未恢复即HOLD，不创建或启动实验。
+八个旧业务容器和共享Docker/containerd身份、原memoryUsageBytes、挂载及全部数值门槛从e8冻结合同原样继承，不重置或放宽；运行合同不取测试fixture的示例门槛。磁盘空闲仍须≥5368709120字节、每个旧容器内存增长仍≤33554432字节；当前不足不能改记为基线。录像和日志不属于可删除候选；e9不授权再次调节rust-srec的memory.high或重复缓存回收，现有水位与录像连续性仅只读核对。任何新宿主资源处理另按精确清单裁定，未获准或未恢复即HOLD，不创建或启动实验。
 
-先独立审查、签认并可信合并本模块与既有04的最小修订，再只改既有compose.yaml、proof.mjs、proof.test.mjs的固定批次身份和隔离回归；拒绝旧e1–e7、混合归属及旧挂载。以独立审查、回归和可信检查通过的产品提交冻结七文件摘要，再独立复核具体运行合同及准入。e1–e7只读快照前后核对；只执行一次完整零媒体R0及退出验收，失败停止并保留，不自动重跑或创建e9。
+先独立审查、Jack签认并可信合并本模块与既有04的最小修订，再只改既有compose.yaml、proof.mjs、proof.test.mjs的固定批次身份和隔离回归；保留全部既有负例，另加入拒绝旧e8的契约、混合归属、挂载及清理断言。原e8冻结runtime的摘要须先只读核对；e9仅更换root/project、全新run ID、对应辅助slice/cgroup及经独立审查、回归和可信检查通过的七文件sourceHashes，DB和应用秘密全新，其余字段保持。具体运行合同须再次独立复核及Jack签认，准入通过才执行；本候选尚未生成或签认运行合同。e1–e8只读快照前后核对；只允许获准的一次完整零媒体R0及退出验收，失败停止并保留，不自动重跑或创建e10。
 
-e8继承PR143/144的日志增量扫描、溢出服务/通道和chars/bytes/chunks计数、一秒失败就绪轮询，并包含main已合并的Node二进制分块校验。仍仅lhins-af0ntal8、可信TLS、loopback:18443、四个固定官方服务、≤1CPU/1610612736字节、120秒运行/共享60秒清理；保留日志准入、零媒体、权限及退出正反例，不新增工具或文档文件，不以本地检查代替真实R0。
+e9继承PR143/144的日志增量扫描、溢出服务/通道和chars/bytes/chunks计数、一秒失败就绪轮询、Node二进制分块校验及PR168的JWT精确默认grant兼容和固定阶段错误码。仍仅lhins-af0ntal8、可信TLS、loopback:18443、四个固定官方服务、≤1CPU/1610612736字节、120秒运行/共享60秒清理；保留日志准入、零媒体、权限及退出正反例，不新增工具或文档文件，不以本地检查代替真实R0。
 四个新容器仅增加标准OCI注解 `org.systemd.property.MemorySwapMax: "uint64 0"`，使其自有systemd scope明确保持禁用swap；不接受其他注解或较宽值。创建后核对Docker实际注解，运行时从已确认归属的容器PID/cgroup核定对应scope，读取systemd的MemorySwapMax及内核memory.swap.max均为0；缺项、不符或归属不明即拒绝并清理自有实验，不重置预算。故障仅按固定服务/错误码留证，不输出原始路径/消息。禁止修改共享Docker/containerd、全局scope规则或旧服务，也不主动触发daemon-reload验证；不以Compose解析通过或上游缺陷记录替代真实R0及重载耐久性实测。执行前须重新核对旧服务基线，运行中及退出时发现异常仍FAIL，不把同期旧服务重启追认为基线匹配。
 
-e8入口沿用已签认的标准双bridge：四服务仍只在本批次`isolated`内网互通；仅Caddy另接本批次非internal的`ingress`，以其为默认网关，发布项仍只能`127.0.0.1:18443`。该Caddy由此具备标准bridge出站能力，不能声称四服务均无外网；其他三服务禁止接ingress或发布端口。不接旧网络、不改宿主防火墙/daemon/DNS、不用host网络或自建代理。启动前核对两个网络的项目/批次标签、内部属性和精确成员，启动后核对Docker实际端口映射及严格TLS请求，配置意图不算端口生效证据。
+e9入口沿用已签认的标准双bridge：四服务仍只在本批次`isolated`内网互通；仅Caddy另接本批次非internal的`ingress`，以其为默认网关，发布项仍只能`127.0.0.1:18443`。该Caddy由此具备标准bridge出站能力，不能声称四服务均无外网；其他三服务禁止接ingress或发布端口。不接旧网络、不改宿主防火墙/daemon/DNS、不用host网络或自建代理。启动前核对两个网络的项目/批次标签、内部属性和精确成员，启动后核对Docker实际端口映射及严格TLS请求，配置意图不算端口生效证据。
 
 停止判定仅对本run的归属回执生效：unit仍存在时检查Description/Slice/Transient后才停止；unit被systemd回收时，只接受not-found、inactive、PID/ControlPID为0且无Job，并核对自有worker cgroup不存在或populated=0。随后仍须核验回执内四容器的不可变身份、Stopped/PID0/未暂停、原基线及socket退出，任一步不明即UNKNOWN，不能仅凭“unit不存在”判成功。全部阶段继承同一持久化60秒清理期限，不重置；已超时仍DEADLINE。覆盖已回收成功停止、伪造/活动unit、残留PID/Job/cgroup、容器未退出及旧现场拒绝回归。
 
@@ -87,13 +87,13 @@ node --test infra/staging/matrix-rtc-proof/proof.test.mjs
 git diff --check
 ```
 
-范围生效、精确运行细节签认后，Linux宿主按序执行未来接口：
+文档及三文件产品切换均可信合并、e9精确运行合同签认且准入通过后，Linux宿主才按序执行未来接口；本轮仍仅准备，不执行：
 ```bash
-node /opt/babacom-matrix-rtc-e8/proof.mjs preflight
-node /opt/babacom-matrix-rtc-e8/proof.mjs config
-node /opt/babacom-matrix-rtc-e8/proof.mjs up
-node /opt/babacom-matrix-rtc-e8/proof.mjs verify
-node /opt/babacom-matrix-rtc-e8/proof.mjs stop
+node /opt/babacom-matrix-rtc-e9/proof.mjs preflight
+node /opt/babacom-matrix-rtc-e9/proof.mjs config
+node /opt/babacom-matrix-rtc-e9/proof.mjs up
+node /opt/babacom-matrix-rtc-e9/proof.mjs verify
+node /opt/babacom-matrix-rtc-e9/proof.mjs stop
 ```
 
 `preflight/config`必须证明归属、秘密权限、固定摘要/平台、TLS/精确loopback入口与拟定资源限制；`up`≤120秒，创建容器后、就绪验收和验证请求前实查实际cgroups，不符即停自有实验。`verify`执行上述预算，任何失败非零退出；`stop`≤60秒且保留数据。当前缺失的域名/端口/证书/代理摘要/止损阈值须作为拒绝用例，不以默认值运行。
