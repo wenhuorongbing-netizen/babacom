@@ -1137,6 +1137,61 @@ test('stricter hostname probe cannot reuse a preceding positive HTTPS keepalive 
     assert.equal(code,0);assert.equal(stderr,'');assert.deepEqual(JSON.parse(output),[{status:200},{errcode:'TLS'}]);assert.equal(requests,1);
   }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));fs.unlinkSync(file);fs.rmdirSync(directory);}
 });
+// Synthetic shape from auth 0e176b1eca44e67b11484d0bdf56999807bf2b8e/src/handler.rs
+// and livekit-token 0.1.1 at rust-sdks 2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/livekit-token/src/access_token.rs.
+// Derived from Serialize/Default source, not captured from a token or an upstream execution.
+function upstreamJoinClaims(expected){
+  const now=Math.floor(Date.now()/1000);
+  return {exp:now+3600,iss:expected.key,nbf:now,sub:expected.subject,name:'',video:{
+    roomCreate:false,roomList:false,roomRecord:false,roomAdmin:false,roomJoin:true,room:expected.room,destinationRoom:'',
+    canPublish:true,canSubscribe:true,canPublishData:true,canPublishSources:[],canUpdateOwnMetadata:true,
+    ingressAdmin:false,hidden:false,recorder:false,
+  },sip:{admin:false,call:false},sha256:'',metadata:'',attributes:{},roomConfig:null};
+}
+
+function signedTicketFixture(claims,secret,header={alg:'HS256',typ:'JWT'}){
+  const encode=value=>Buffer.from(typeof value==='string'?value:JSON.stringify(value)).toString('base64url');
+  const input=encode(header)+'.'+encode(claims);
+  return input+'.'+crypto.createHmac('sha256',secret).update(input).digest('base64url');
+}
+
+test('fixed auth join token accepts the complete livekit-token 0.1.1 default grants',()=>{
+  const expected={subject:'@rtc-a:fixture.invalid:DEVICE',room:'fixture-room',key:'incapable-fixture-key'},secret='incapable-fixture-secret';
+  const claims=proof.decodeTicket(signedTicketFixture(upstreamJoinClaims(expected),secret),secret);
+  assert.doesNotThrow(()=>assertTicket(claims,expected));
+});
+
+test('upstream default grants cannot authorize destinations, sources, ingress or recording',()=>{
+  const expected={subject:'@rtc-a:fixture.invalid:DEVICE',room:'fixture-room',key:'incapable-fixture-key'},claims=upstreamJoinClaims(expected),secret='incapable-fixture-secret';
+  const check=changed=>assertTicket(proof.decodeTicket(signedTicketFixture(changed,secret),secret),expected);
+  for(const [field,values] of Object.entries({destinationRoom:['other-room',null,[],false,0],canPublishSources:[['microphone'],{},'',false,null,0],ingressAdmin:[true,'false',0,null,[]],recorder:[true,'false',0,null,[]]})){
+    for(const value of values)assert.throws(()=>check({...claims,video:{...claims.video,[field]:value}}),{message:'JWT_GRANTS'});
+  }
+  assert.throws(()=>check({...claims,video:{...claims.video,unknownGrant:false}}),{message:'JWT_GRANTS'});
+});
+
+test('JWT stage failures retain fixed codes through runtime evidence without token or parse details',()=>{
+  const expected={subject:'@rtc-a:fixture.invalid:DEVICE',room:'fixture-room',key:'incapable-fixture-key'},claims=upstreamJoinClaims(expected),secret='incapable-fixture-secret';
+  const sign=(value=claims,header)=>signedTicketFixture(value,secret,header);
+  const rows=[],runtime=new proof.Runtime(contract(),new Budget(1000));runtime.events=new SafeEvents(row=>rows.push(row));
+  const cases=[
+    [null,'JWT_FORMAT'],['one.two','JWT_FORMAT'],['*.payload.signature','JWT_FORMAT'],
+    [signedTicketFixture(claims,'different-incapable-secret'),'JWT_SIGNATURE'],
+    [sign(claims,{alg:'none'}),'JWT_HEADER'],[sign(claims,{alg:'HS512'}),'JWT_HEADER'],[sign(claims,'{incapable-header'),'JWT_HEADER'],
+    [sign('{incapable-payload'),'JWT_FORMAT'],[sign(null),'JWT_FORMAT'],[sign([claims]),'JWT_FORMAT'],
+    [sign({...claims,iss:'wrong-key'}),'JWT_ISSUER'],[sign({...claims,sub:'@outsider:fixture.invalid:DEVICE'}),'JWT_SUBJECT'],
+    [sign({...claims,video:{...claims.video,room:'other-room'}}),'JWT_ROOM'],
+    [sign({...claims,exp:Math.floor(Date.now()/1000)-1}),'JWT_TIME'],[sign({...claims,exp:Math.floor(Date.now()/1000)+7200}),'JWT_TIME'],
+    [sign({...claims,video:{...claims.video,roomAdmin:true}}),'JWT_GRANTS'],[sign({...claims,video:{...claims.video,canPublish:false}}),'JWT_GRANTS'],
+  ];
+  for(const [token,code] of cases){
+    let failure;try{assertTicket(proof.decodeTicket(token,secret),expected);}catch(error){failure=error;}
+    assert.ok(failure instanceof Error);assert.equal(failure.message,code);assert.equal(failure.cause,undefined);
+    runtime.recordFailure(failure);assert.deepEqual(rows.at(-1),{service:'verifier',event:'fault',status:0,errcode:code,count:1});
+  }
+  assert.equal(/incapable|payload|header|stack|cause/.test(JSON.stringify(rows)),false);
+});
+
 test('JWT and administrative observation must agree; any track is failure', () => {
   const expected={subject:'@rtc-a:rtc.example.org:DEVICE',room:'!private:rtc.example.org',key:'key'};
   const claims={sub:expected.subject,iss:'key',exp:Math.floor(Date.now()/1000)+3600,video:{room:expected.room,roomJoin:true,canPublish:true,canSubscribe:true,canPublishData:true}};

@@ -55,7 +55,8 @@ export function validateContract(c,action){
 const LOG_CHANNELS=['stdout','stderr','retained','syslog'],LOG_METRICS=['chars','bytes','chunks'];
 const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','baseline_actual','baseline_limit','readiness','cleanup_admission','cleanup_worker','cleanup_unit','cleanup_receipt','cleanup_sample','cleanup_inspect','cleanup_unpause','cleanup_stop','cleanup_stopped','cleanup_result','cleanup_baseline','cleanup_budget','cleanup_monitor','cleanup_sockets','cleanup_attaches','cleanup_scan','command','scan','openid_ttl','jwt_remaining','shared_cpu_milli','shared_memory_bytes','log_connection','log_success','log_tls','log_handshake','log_timeout',...LOG_CHANNELS.flatMap(channel=>LOG_METRICS.map(metric=>'log_overflow_'+channel+'_'+metric))]);
 const BASELINE_ERRORS=new Set(['BASELINE_MEMORY','BASELINE_LOAD','BASELINE_DISK','BASELINE_NATIVE_ACTIVE','BASELINE_NATIVE_SUBSTATE','BASELINE_NATIVE_PID','BASELINE_NATIVE_INVOCATION','BASELINE_IMAGE','BASELINE_STATE','BASELINE_MOUNTS','BASELINE_COUNTER','BASELINE_CGROUP']);
-const ERRORS=new Set(['OK','M_FORBIDDEN','M_UNAUTHORIZED','M_UNKNOWN_TOKEN','FAIL','HOLD','UNKNOWN','DEADLINE','CONTRACT','BUSY','OLD_CPU','OLD_MEMORY','SHARED_CPU','SHARED_MEMORY','BASELINE','RESOURCES','ATTACH','LEAK','CONFIG','DNS','READINESS','SOURCE','NODE','TLS','NETWORK','CONNECTION','COMMAND','STATE','OWNERSHIP','SHIM','ADMIN','AUX_CGROUP','BODY','BODY_LIMIT','CANCELLED','DENIAL','HOST','HTTP','IDENTITY','IMAGE','INCAPABLE','JOIN','JWT','LOG_ADMISSION','LOG_DRIVER','LOG_FILE','LOGOUT','MEMBERSHIP','MOUNTS','OPENID','OUTPUT_LIMIT','PERMISSIONS','PERSISTENCE','PLATFORM','PORT','SFU','SFU_URL','SIGNAL','START','SWAP','TEMPLATE','TRACKS','TTL','WRONG_SUBJECT',...BASELINE_ERRORS]);
+const JWT_ERRORS=['JWT_FORMAT','JWT_HEADER','JWT_SIGNATURE','JWT_ISSUER','JWT_SUBJECT','JWT_ROOM','JWT_TIME','JWT_GRANTS'];
+const ERRORS=new Set(['OK','M_FORBIDDEN','M_UNAUTHORIZED','M_UNKNOWN_TOKEN','FAIL','HOLD','UNKNOWN','DEADLINE','CONTRACT','BUSY','OLD_CPU','OLD_MEMORY','SHARED_CPU','SHARED_MEMORY','BASELINE','RESOURCES','ATTACH','LEAK','CONFIG','DNS','READINESS','SOURCE','NODE','TLS','NETWORK','CONNECTION','COMMAND','STATE','OWNERSHIP','SHIM','ADMIN','AUX_CGROUP','BODY','BODY_LIMIT','CANCELLED','DENIAL','HOST','HTTP','IDENTITY','IMAGE','INCAPABLE','JOIN','JWT','LOG_ADMISSION','LOG_DRIVER','LOG_FILE','LOGOUT','MEMBERSHIP','MOUNTS','OPENID','OUTPUT_LIMIT','PERMISSIONS','PERSISTENCE','PLATFORM','PORT','SFU','SFU_URL','SIGNAL','START','SWAP','TEMPLATE','TRACKS','TTL','WRONG_SUBJECT',...BASELINE_ERRORS,...JWT_ERRORS]);
 function knownFailure(error){let known;for(let depth=0;depth<8&&error instanceof Error;depth++,error=error.cause)if(error.message!=='OK'&&ERRORS.has(error.message))known=error;return known;}
 function requireBaseline(ok,reason,{index=1,actual,limit,code='BASELINE'}={}){if(!ok)throw new Error(code,{cause:Object.assign(new Error(reason),{index,actual,limit})});}
 function normalizedLog(text){return text.replace(/%([a-f\d]{2})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))).replace(/\\u([a-f\d]{4})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))).replace(/\\([\\/"bfnrt])/g,(_,value)=>({b:'\b',f:'\f',n:'\n',r:'\r',t:'\t'}[value]??value));}
@@ -170,11 +171,16 @@ export function httpRequest(url,{method='GET',body,token,timeout=8000,allowHttpF
   });
 }
 export function assertTicket(claims,e){
-  requireFact(claims?.sub===e.subject&&claims.iss===e.key&&claims.exp>Date.now()/1000&&claims.exp<=Date.now()/1000+3610,'JWT');
-  const v=claims.video;requireFact(v?.room===e.room&&v.roomJoin===true&&v.canPublish===true&&v.canSubscribe===true,'JWT');
-  requireFact(Object.keys(v).every(k=>['room','roomJoin','canPublish','canSubscribe','canPublishData','canUpdateOwnMetadata','roomCreate','hidden','roomAdmin','roomList','roomRecord'].includes(k)),'JWT');
-  requireFact(['roomAdmin','roomCreate','roomList','roomRecord','hidden'].every(k=>v[k]!==true),'JWT');
-  requireFact(['canPublishData','canUpdateOwnMetadata'].every(k=>v[k]===undefined||v[k]===true),'JWT');
+  requireFact(claims&&typeof claims==='object'&&!Array.isArray(claims),'JWT_FORMAT');
+  requireFact(claims.iss===e.key,'JWT_ISSUER');requireFact(claims.sub===e.subject,'JWT_SUBJECT');
+  const now=Date.now()/1000;requireFact(Number.isFinite(claims.exp)&&claims.exp>now&&claims.exp<=now+3610,'JWT_TIME');
+  const v=claims.video;requireFact(v&&typeof v==='object'&&!Array.isArray(v),'JWT_GRANTS');requireFact(v.room===e.room,'JWT_ROOM');
+  requireFact(v.roomJoin===true&&v.canPublish===true&&v.canSubscribe===true,'JWT_GRANTS');
+  requireFact(Object.keys(v).every(k=>['room','roomJoin','canPublish','canSubscribe','canPublishData','canUpdateOwnMetadata','roomCreate','hidden','roomAdmin','roomList','roomRecord','destinationRoom','canPublishSources','ingressAdmin','recorder'].includes(k)),'JWT_GRANTS');
+  // The pinned Rust serializer emits these defaults even though they add no authority.
+  requireFact((v.destinationRoom===undefined||v.destinationRoom==='')&&(v.canPublishSources===undefined||Array.isArray(v.canPublishSources)&&v.canPublishSources.length===0)&&['ingressAdmin','recorder'].every(k=>v[k]===undefined||v[k]===false),'JWT_GRANTS');
+  requireFact(['roomAdmin','roomCreate','roomList','roomRecord','hidden'].every(k=>v[k]!==true),'JWT_GRANTS');
+  requireFact(['canPublishData','canUpdateOwnMetadata'].every(k=>v[k]===undefined||v[k]===true),'JWT_GRANTS');
 }
 export function assertParticipants(actual,expected){
   requireFact(Array.isArray(actual)&&actual.length===expected.length&&actual.every(x=>expected.includes(x.identity)&&(x.tracks===undefined||(Array.isArray(x.tracks)&&x.tracks.length===0))),'TRACKS');
@@ -423,7 +429,17 @@ export function assertMembershipDenial(response){
 
 export function roomAlias(room){return crypto.createHash('sha256').update(JSON.stringify([room,'m.call#ROOM'])).digest('base64').replace(/=+$/,'');}
 function jwt(claims,secret){const h=Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url');const p=Buffer.from(JSON.stringify(claims)).toString('base64url');return `${h}.${p}.${crypto.createHmac('sha256',secret).update(`${h}.${p}`).digest('base64url')}`;}
-function decodeTicket(token,secret){const parts=token.split('.');requireFact(parts.length===3,'JWT');const signature=crypto.createHmac('sha256',secret).update(parts.slice(0,2).join('.')).digest();const received=Buffer.from(parts[2],'base64url');requireFact(received.length===signature.length&&crypto.timingSafeEqual(signature,received)&&JSON.parse(Buffer.from(parts[0],'base64url')).alg==='HS256','JWT');return JSON.parse(Buffer.from(parts[1],'base64url'));}
+function ticketJson(part,code){
+  let value;try{value=JSON.parse(Buffer.from(part,'base64url').toString('utf8'));}catch{throw new Error(code);}
+  requireFact(value&&typeof value==='object'&&!Array.isArray(value),code);return value;
+}
+export function decodeTicket(token,secret){
+  requireFact(typeof token==='string','JWT_FORMAT');const parts=token.split('.');
+  requireFact(parts.length===3&&parts.every(part=>/^[A-Za-z0-9_-]+$/.test(part)),'JWT_FORMAT');
+  const signature=crypto.createHmac('sha256',secret).update(parts.slice(0,2).join('.')).digest(),received=Buffer.from(parts[2],'base64url');
+  requireFact(received.length===signature.length&&crypto.timingSafeEqual(signature,received),'JWT_SIGNATURE');
+  requireFact(ticketJson(parts[0],'JWT_HEADER').alg==='HS256','JWT_HEADER');return ticketJson(parts[1],'JWT_FORMAT');
+}
 
 function lookupLoopback(host,options,callback){callback(null,options.all?[{address:'127.0.0.1',family:4}]:'127.0.0.1',4);}
 function statePath(c){return ROOT+'/state-'+c.runId+'.json';}
