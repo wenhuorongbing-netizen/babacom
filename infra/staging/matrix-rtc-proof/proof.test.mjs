@@ -383,23 +383,70 @@ test('observed TTL events contain positive returned OpenID seconds and JWT remai
 });
 
 function contract() {
-  return { host: 'lhins-af0ntal8', root: '/opt/babacom-matrix-rtc-e9', project: 'babacom-matrix-rtc-e9',
+  return { host: 'BabaCom-Matrix-Proof', root: '/opt/babacom-matrix-rtc-wsl1', project: 'babacom-matrix-rtc-wsl1',
     runId: 'a'.repeat(32), domain: 'rtc.example.org', port: 18443, certificateSource: 'operator-provisioned-public-chain',
-    approved: true, logAdmission: true, machineUuid:'machine', fullAccessHomeservers: ['rtc.example.org:18443'], asHomeserver: 'rtc.example.org:18443',
+    approved: true, logAdmission: true, machineUuid:'1234567890abcdef1234567890abcdef', fullAccessHomeservers: ['rtc.example.org:18443'], asHomeserver: 'rtc.example.org:18443',
     platform: 'linux/amd64', source: PINS, sourceHashes: Object.fromEntries(['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'].map(name=>[name,'f'.repeat(64)])), auxiliary: { unit: 'babacomrtc'+ 'a'.repeat(32)+'.slice', cgroup: '/sys/fs/cgroup/babacomrtc'+ 'a'.repeat(32)+'.slice', cpu: .1, memory: 134217728 },
     thresholds: { minFreeMemory: 2000000000, minFreeDisk: 3000000000, maxLoad: 2, maxOldCpuPercent: 80, maxOldMemoryGrowth: 100000000 },
     sharedRuntime:{sampleIntervalMs:250,maxCpuPercent:100,maxMemoryGrowth:100000000,services:['docker','containerd'].map((name,index)=>({unit:name+'.service',invocationId:String(index+1).repeat(32),pid:100+index,startTime:'1000',cgroup:'/sys/fs/cgroup/system.slice/'+name+'.service',inode:100+index,cpuUsageUsec:1000,memoryUsageBytes:1000000}))},
-    baseline: [{ id: 'b'.repeat(64), image: 'sha256:' + 'c'.repeat(64), status: 'running', mounts: [] }],
-    nativeBaseline:['control','gateway','relay','staging','staging-relay'].map((name,index)=>({unit:'maowo-'+name+'.service',pid:200+index,invocationId:String(index+3).repeat(32)})),
+    baseline: [{ id: 'b'.repeat(64), image: 'sha256:' + 'c'.repeat(64), status: 'exited', memoryUsageBytes:0, mounts: [] }],
+    nativeBaseline:['docker','containerd'].map((name,index)=>({unit:name+'.service',pid:100+index,invocationId:String(index+1).repeat(32)})),
     accessors: ['operator-loopback'], certificateSha256: 'd'.repeat(64), nodeSha256:'e'.repeat(64),
     persistence:{corePattern:'core',locations:[{path:'/var/crash',kind:'core-directory',uid:0,gid:0,mode:448,accessors:['root']}]},
     logging:{coverage:['success','timeout','tls','connection','handshake','redirect'],bypasses:[{path:'/var/run/docker.sock',uid:0,gid:0,mode:384,kind:'socket',writesRaw:false,accessors:['root']}]}
   };
 }
 
-test('fresh e9 contract cannot reuse e1, e2, e3, e4, e5, e6, e7, e8 or a mixed deployment identity',()=>{
+test('local WSL contract cannot reuse e1 through e9 or a mixed deployment identity',()=>{
   const c=contract();assert.equal(validateContract(c),c);
-  for(const [root,project] of [...['e1','e2','e3','e4','e5','e6','e7','e8'].flatMap(batch=>[['/opt/babacom-matrix-rtc-'+batch,'babacom-matrix-rtc-'+batch],[c.root,'babacom-matrix-rtc-'+batch],['/opt/babacom-matrix-rtc-'+batch,c.project]]),[c.root+'/other',c.project],[c.root,c.project+'-other']])assert.throws(()=>validateContract({...c,root,project}),/^Error: CONTRACT$/);
+  for(const [root,project] of [...['e1','e2','e3','e4','e5','e6','e7','e8','e9'].flatMap(batch=>[['/opt/babacom-matrix-rtc-'+batch,'babacom-matrix-rtc-'+batch],[c.root,'babacom-matrix-rtc-'+batch],['/opt/babacom-matrix-rtc-'+batch,c.project]]),[c.root+'/other',c.project],[c.root,c.project+'-other']])assert.throws(()=>validateContract({...c,root,project}),/^Error: CONTRACT$/);
+});
+
+test('local WSL admission rejects a cloud host, malformed Linux identity and active legacy containers',()=>{
+  const c=contract();assert.equal(validateContract(c),c);
+  for(const host of ['lhins-af0ntal8','Ubuntu','BabaCom-Matrix-Proof-other'])assert.throws(()=>validateContract({...c,host}),/^Error: CONTRACT$/);
+  for(const machineUuid of ['', 'cloud-uuid', 'g'.repeat(32)])assert.throws(()=>validateContract({...c,machineUuid}),/^Error: CONTRACT$/);
+  for(const status of ['running','paused','created','dead'])assert.throws(()=>validateContract({...c,baseline:[{...c.baseline[0],status}]}),/^Error: CONTRACT$/);
+});
+
+test('local WSL identity checks the kernel and exact Linux machine-id without leaking raw read failures',()=>{
+  assert.equal(typeof proof.assertWslHost,'function');const c=contract(),read=file=>{assert.equal(file,'/etc/machine-id');return c.machineUuid+'\n';};
+  assert.equal(proof.assertWslHost(c,{read,release:()=> '6.6.87.2-microsoft-standard-WSL2'}),c.machineUuid);
+  for(const io of [{read,release:()=> '6.8.0-generic'},{read:()=> 'f'.repeat(32),release:()=> '6.6.87.2-microsoft-standard-WSL2'},{read:()=>{throw Error('incapable-secret');},release:()=> '6.6.87.2-microsoft-standard-WSL2'}])assert.throws(()=>proof.assertWslHost(c,io),/^Error: HOST$/);
+});
+
+test('stopped control-plane baseline requires the same image, mounts, zero PID and no pause',()=>{
+  const frozen=contract().baseline[0],current={Image:frozen.image,Mounts:[],State:{Status:'exited',Running:false,Pid:0,Paused:false}};
+  assert.doesNotThrow(()=>proof.assertContainerBaseline(frozen,current,1));
+  for(const changed of [{Running:true},{Pid:123},{Paused:true},{Status:'running'},{Pid:undefined}])assert.throws(()=>proof.assertContainerBaseline(frozen,{...current,State:{...current.State,...changed}},1),/^Error: BASELINE$/);
+});
+
+test('local WSL inventory refuses an unlisted container before any workload mutation',async()=>{
+  assert.equal(typeof proof.assertLocalInventory,'function');const c=contract(),budget=new Budget(1000),owned=configuredContainer(c,'synapse'),ownId='d'.repeat(64),unknown='e'.repeat(64);owned.Id=ownId;
+  let reads=0;const lookup=async id=>{reads++;assert.equal(id,ownId);return owned;};
+  await proof.assertLocalInventory(c,[c.baseline[0].id,ownId],budget,lookup);assert.equal(reads,1);
+  await assert.rejects(proof.assertLocalInventory(c,[ownId],budget,lookup));
+  await assert.rejects(proof.assertLocalInventory(c,[c.baseline[0].id,c.baseline[0].id],budget,lookup));
+  await assert.rejects(proof.assertLocalInventory(c,[c.baseline[0].id,unknown],budget,async()=>({...owned,Id:unknown,Config:{...owned.Config,Labels:{...owned.Config.Labels,'rtc.host':'lhins-af0ntal8'}}})),/^Error: UNKNOWN$/);
+});
+
+test('dedicated Docker commands use the local Unix socket and an actual bounded child',async()=>{
+  let observed;const launch=(executable,args,options)=>{observed={executable,args,env:options.env};return spawn(process.execPath,[fileURLToPath(import.meta.url),'--fixture','json','{}'],options);};
+  assert.equal(await command('docker',['version'],{launch,timeout:1000}),'{}');
+  assert.equal(observed.executable,'docker');assert.deepEqual(observed.args,['--host=unix:///var/run/docker.sock','version']);
+  for(const name of ['DOCKER_CONTEXT','DOCKER_HOST','DOCKER_TLS_VERIFY','DOCKER_CERT_PATH'])assert.equal(Object.hasOwn(observed.env,name),false);
+});
+
+test('local WSL attached start uses the same local socket and rejects foreign or expired starts before launch',async()=>{
+  assert.equal(typeof proof.Runtime.prototype.attach,'function');const c=contract(),i=configuredContainer(c,'synapse'),chunks=[];i.Id='d'.repeat(64);
+  const runtime={c,attaches:new Map(),events:{consume:(...args)=>chunks.push(args)}};let observed,launches=0;
+  const launch=(executable,args,options)=>{launches++;observed={executable,args,env:options.env};return spawn(process.execPath,[fileURLToPath(import.meta.url),'--fixture','json','{}'],options);};
+  const attached=proof.Runtime.prototype.attach.call(runtime,i,'synapse',new Budget(1000),{launch});await once(attached.child,'close');
+  assert.equal(observed.executable,'docker');assert.deepEqual(observed.args,['--host=unix:///var/run/docker.sock','start','--attach',i.Id]);
+  for(const name of ['DOCKER_CONTEXT','DOCKER_HOST','DOCKER_TLS_VERIFY','DOCKER_CERT_PATH'])assert.equal(Object.hasOwn(observed.env,name),false);
+  assert.equal(attached.ended,true);assert.equal(runtime.attaches.get('synapse'),attached);assert.equal(Buffer.concat(chunks.map(row=>row[1])).toString(),'{}');assert.ok(chunks.every(row=>row[0]==='synapse'&&row[2]==='stdout'));
+  const foreign=structuredClone(i);foreign.Config.Labels['rtc.host']='lhins-af0ntal8';assert.throws(()=>proof.Runtime.prototype.attach.call(runtime,foreign,'synapse',new Budget(1000),{launch}),/^Error: UNKNOWN$/);
+  let now=0;const expired=new Budget(1,()=>now);now=2;assert.throws(()=>proof.Runtime.prototype.attach.call(runtime,i,'synapse',expired,{launch}),/^Error: DEADLINE$/);assert.equal(launches,1);
 });
 
 test('contract image pins accept unchanged values after JSON property reordering',()=>{
@@ -421,9 +468,9 @@ test('contract image pins still reject changed, missing and extra values',()=>{
   assert.throws(()=>validateContract({...c,source:{...c.source,extra:{...c.source.caddy}}}),/^Error: CONTRACT$/);
 });
 
-test('all e9 bind sources, templates and cleanup hooks stay outside retained e1/e2/e3/e4/e5/e6/e7/e8',()=>{
+test('all local WSL bind sources, templates and cleanup hooks stay outside retained e1 through e9',()=>{
   const c=contract(),compose=fs.readFileSync(new URL('./compose.yaml',import.meta.url),'utf8');
-  assert.match(compose,/^name: babacom-matrix-rtc-e9$/m);
+  assert.match(compose,/^name: babacom-matrix-rtc-wsl1$/m);
   assert.match(compose,/^  annotations: \{org\.systemd\.property\.MemorySwapMax: "uint64 0"\}$/m);
   const sources=[...compose.matchAll(/\/opt\/[^:\s,\]]+(?=:\/)/g)].map(match=>match[0]);
   const names=['data','secrets/homeserver.yaml','secrets/appservice.yaml','secrets/log.config','secrets/livekit.yaml','secrets/appservice.yaml','secrets/livekit.key','secrets/livekit.secret','secrets/Caddyfile','secrets/tls.crt','secrets/tls.key'];
@@ -432,12 +479,12 @@ test('all e9 bind sources, templates and cleanup hooks stay outside retained e1/
   const args=proof.systemdArguments(c);
   assert.ok(args.includes('--property=BindReadOnlyPaths='+c.root+'/hosts:/etc/hosts'));
   assert.ok(args.includes('--property=ExecStopPost='+process.execPath+' '+c.root+'/proof.mjs __cleanup'));
-  for(const batch of ['e1','e2','e3','e4','e5','e6','e7','e8'])assert.equal(args.some(value=>value.replaceAll(process.execPath,'<node>').includes('/opt/babacom-matrix-rtc-'+batch)),false);
+  for(const batch of ['e1','e2','e3','e4','e5','e6','e7','e8','e9'])assert.equal(args.some(value=>value.replaceAll(process.execPath,'<node>').includes('/opt/babacom-matrix-rtc-'+batch)),false);
 });
 
-test('e9 cleanup refuses retained e1/e2/e3/e4/e5/e6/e7/e8 receipts and containers before mutation',async()=>{
+test('local WSL cleanup refuses retained e1 through e9 receipts and containers before mutation',async()=>{
   const c=contract();
-  for(const batch of ['e1','e2','e3','e4','e5','e6','e7','e8']){
+  for(const batch of ['e1','e2','e3','e4','e5','e6','e7','e8','e9']){
     const old={...c,root:'/opt/babacom-matrix-rtc-'+batch,project:'babacom-matrix-rtc-'+batch},r=receipt(old);let inspectedCount=0,mutations=0;
     assert.equal(await stopOwned(c,r,new Budget(1000),{machine:()=>c.machineUuid,inspect:async()=>{inspectedCount++;},stop:async()=>{mutations++;},unpause:async()=>{mutations++;}}),'UNKNOWN');
     assert.equal(inspectedCount,0);assert.equal(mutations,0);
@@ -445,17 +492,17 @@ test('e9 cleanup refuses retained e1/e2/e3/e4/e5/e6/e7/e8 receipts and container
   }
 });
 
-test('e9 actual mounts cannot refer to retained e1/e2/e3/e4/e5/e6/e7/e8 secrets or database',()=>{
+test('local WSL actual mounts cannot refer to retained e1 through e9 secrets or database',()=>{
   const c=contract();
   for(const service of ['synapse','livekit','auth','caddy']){
     const i=configuredContainer(c,service);assert.doesNotThrow(()=>proof.assertContainerConfiguration(i,c,service));
-    for(const batch of ['e1','e2','e3','e4','e5','e6','e7','e8'])for(let index=0;index<i.Mounts.length;index++){const copy=structuredClone(i);copy.Mounts[index].Source=copy.Mounts[index].Source.replace(c.root,'/opt/babacom-matrix-rtc-'+batch);assert.throws(()=>proof.assertContainerConfiguration(copy,c,service),/^Error: MOUNTS$/);}
+    for(const batch of ['e1','e2','e3','e4','e5','e6','e7','e8','e9'])for(let index=0;index<i.Mounts.length;index++){const copy=structuredClone(i);copy.Mounts[index].Source=copy.Mounts[index].Source.replace(c.root,'/opt/babacom-matrix-rtc-'+batch);assert.throws(()=>proof.assertContainerConfiguration(copy,c,service),/^Error: MOUNTS$/);}
   }
 });
 
 test('old native services require a complete frozen identity baseline',()=>{
   const c=contract();
-  for(const change of [copy=>delete copy.nativeBaseline,copy=>copy.nativeBaseline=[],copy=>copy.nativeBaseline.pop(),copy=>copy.nativeBaseline[0].unit='docker.service',copy=>copy.nativeBaseline[1].unit=copy.nativeBaseline[0].unit,copy=>copy.nativeBaseline[0].pid=0,copy=>copy.nativeBaseline[0].invocationId='']){
+  for(const change of [copy=>delete copy.nativeBaseline,copy=>copy.nativeBaseline=[],copy=>copy.nativeBaseline.pop(),copy=>copy.nativeBaseline[0].unit='maowo-control.service',copy=>copy.nativeBaseline[1].unit=copy.nativeBaseline[0].unit,copy=>copy.nativeBaseline[0].pid=0,copy=>copy.nativeBaseline[0].invocationId='']){
     const copy=structuredClone(c);change(copy);assert.throws(()=>validateContract(copy),/^Error: BASELINE$/);
   }
 });
@@ -464,7 +511,7 @@ test('a concurrent old native restart latches failure while receipt-owned cleanu
   const c=contract(),r=receipt(c);let restart=false,reads=0;const stopped=[];
   const show=async row=>{reads++;return {ActiveState:'active',SubState:'running',MainPID:String(row.pid),InvocationID:restart?'f'.repeat(32):row.invocationId};};
   const budget=new Budget(1000),watch=new proof.ResourceWatch(current=>proof.assertNativeBaseline(c,current,show),budget,100);
-  await watch.sample();assert.equal(reads,5);restart=true;await assert.rejects(watch.sample(),/^Error: FAIL$/);assert.equal(watch.controller.signal.aborted,true);await watch.close(new Budget(1000));
+  await watch.sample();assert.equal(reads,2);restart=true;await assert.rejects(watch.sample(),/^Error: FAIL$/);assert.equal(watch.controller.signal.aborted,true);await watch.close(new Budget(1000));
   const events=[];new SafeEvents(event=>events.push(event)).event('verifier','fault',0,watch.fault);assert.equal(events[0].errcode,'BASELINE_NATIVE_INVOCATION');assert.equal(events[0].count,1);
   const result=await stopOwned(c,r,new Budget(1000),{machine:()=>c.machineUuid,inspect:async id=>({...inspected(c,r.containers.find(row=>row.id===id)),State:{Running:!stopped.includes(id),Pid:stopped.includes(id)?0:123,Paused:false}}),stop:async id=>stopped.push(id),sample:(_c,current)=>proof.assertNativeBaseline(c,current,show)});
   assert.equal(result,'FAIL');assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));assert.throws(()=>watch.check(),/^Error: FAIL$/);
@@ -497,10 +544,10 @@ test('native baseline failures identify the exact condition and frozen row witho
   ]){
     let failure;try{await proof.assertNativeBaseline(c,new Budget(1000),async row=>{
       const state={ActiveState:'active',SubState:'running',MainPID:String(row.pid),InvocationID:row.invocationId};
-      if(row===c.nativeBaseline[2])change(state);return state;
+      if(row===c.nativeBaseline[1])change(state);return state;
     });}catch(error){failure=error;}
     assert.equal(failure?.message,'FAIL');const rows=[];new SafeEvents(row=>rows.push(row)).event('verifier','fault',0,failure);
-    assert.equal(rows[0].errcode,code);assert.equal(rows[0].count,3);
+    assert.equal(rows[0].errcode,code);assert.equal(rows[0].count,2);
     assert.equal(JSON.stringify(rows).includes('incapable-secret'),false);
   }
 });
@@ -578,13 +625,51 @@ test('shared cpu.stat and memory.current samples enforce aggregate growth and re
 });
 test('resource failure evidence retains the specific stop reason across monitor normalization',async()=>{
   for(const [kind,cpu,memory,want] of [['old',200000,1001000,'OLD_CPU'],['old',2000,200000000,'OLD_MEMORY'],['shared',200000,1001000,'SHARED_CPU'],['shared',2000,200000000,'SHARED_MEMORY']]){
-    const c=contract(),rows=[{...c.sharedRuntime.services[0],kind}],events=[],budget=new Budget(1000);let now=0;
+    const c=contract(),rows=[{...c.sharedRuntime.services[0],kind,index:1}],events=[],budget=new Budget(1000);let now=0;
     const watch=new proof.ResourceWatch(()=>proof.sampleResources(c,rows,new Budget(1000,()=>now/1000),{now:()=>now,sleep:async()=>{now=100000;},read:file=>file.endsWith('/cpu.stat')?'usage_usec '+(now?cpu:1000)+'\n':String(memory),previous:new Map()}),budget,1000);
     try{
       await assert.rejects(watch.start(),/FAIL/);assert.equal(watch.controller.signal.aborted,true);assert.throws(()=>budget.remaining(),/FAIL/);
       new SafeEvents(row=>events.push(row)).event('verifier','fault',0,watch.fault);
-      assert.deepEqual(events,[{service:'verifier',event:'fault',status:0,errcode:want,count:1}]);
+      assert.deepEqual(events,[{service:'verifier',event:'fault',status:0,errcode:want,count:1},...(want==='OLD_CPU'?[
+        {service:'verifier',event:'old_cpu_percent_milli',status:0,errcode:want,count:199000},
+        {service:'verifier',event:'old_cpu_limit_percent_milli',status:0,errcode:want,count:80000}]:[])]);
     }finally{await watch.close();}
+  }
+});
+test('OLD_CPU evidence identifies the frozen container and measured percentage through the runtime monitor',async()=>{
+  const c=contract();c.thresholds.maxOldCpuPercent=25;c.baseline.push({...c.baseline[0],id:'e'.repeat(64)});
+  const rows=[{...c.sharedRuntime.services[0],kind:'shared'},
+    {cgroup:'/sys/fs/cgroup/system.slice/docker-'+c.baseline[1].id+'.scope',memoryUsageBytes:1000000,kind:'old',index:2}];
+  let now=0;const budget=new Budget(120000,()=>now/1000),deadline=budget.end,events=[];
+  const watch=new proof.ResourceWatch(current=>proof.sampleResources(c,rows,current,{now:()=>now,sleep:async ms=>{assert.equal(ms,100);now=100000;},read:file=>{
+    const row=rows.find(row=>file.startsWith(row.cgroup+'/'));
+    return file.endsWith('/cpu.stat')?'usage_usec '+(1000+(now?(row.kind==='old'?33125:1000):0))+'\n':String(row.memoryUsageBytes);
+  },previous:new Map()}),budget,1000);
+  const runtime=new proof.Runtime(c,budget);runtime.monitor=watch;runtime.events=new SafeEvents(row=>events.push(row));
+  try{
+    await assert.rejects(watch.start(),/^Error: FAIL$/);assert.equal(watch.controller.signal.aborted,true);assert.equal(budget.end,deadline);
+    runtime.recordFailure(new Error('READINESS'));
+    assert.deepEqual(events,[{service:'verifier',event:'fault',status:0,errcode:'OLD_CPU',count:2},
+      {service:'verifier',event:'old_cpu_percent_milli',status:0,errcode:'OLD_CPU',count:33125},
+      {service:'verifier',event:'old_cpu_limit_percent_milli',status:0,errcode:'OLD_CPU',count:25000}]);
+    assert.equal(JSON.stringify(events).includes(c.baseline[1].id),false);assert.equal(JSON.stringify(events).includes(rows[1].cgroup),false);
+  }finally{await watch.close();}
+});
+test('OLD_CPU diagnostics do not round the gate or change its 100 ms sample and original deadline',async()=>{
+  const c=contract();c.thresholds.maxOldCpuPercent=25;
+  for(const [used,elapsed,want] of [[25000,100000,null],[25001,100000,25001],[25000,99999.9996,25001]]){
+    let now=0;const budget=new Budget(120000,()=>now/1000),deadline=budget.end,events=[];
+    const row={kind:'old',index:1,cgroup:'/sys/fs/cgroup/system.slice/old.scope',memoryUsageBytes:1000000};
+    const sampled=proof.sampleResources(c,[row],budget,{now:()=>now,sleep:async ms=>{assert.equal(ms,100);now=elapsed;},read:file=>file.endsWith('/cpu.stat')?'usage_usec '+(now?1000+used:1000)+'\n':'1000000',previous:new Map()});
+    if(want===null)await assert.doesNotReject(sampled);
+    else{
+      let failure;await assert.rejects(sampled,error=>{failure=error;return error.message==='FAIL';});
+      new SafeEvents(row=>events.push(row)).event('verifier','fault',0,failure);
+      assert.deepEqual(events,[{service:'verifier',event:'fault',status:0,errcode:'OLD_CPU',count:1},
+        {service:'verifier',event:'old_cpu_percent_milli',status:0,errcode:'OLD_CPU',count:want},
+        {service:'verifier',event:'old_cpu_limit_percent_milli',status:0,errcode:'OLD_CPU',count:25000}]);
+    }
+    assert.equal(budget.end,deadline);
   }
 });
 test('failure events retain fixed enums without exposing arbitrary error messages or stacks',()=>{
@@ -673,6 +758,27 @@ test('resource failure during cleanup cannot stop old containers or prevent rece
   const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),stopped=[];let samples=0;
   const result=await stopOwned(c,r,new Budget(1000),{machine:()=>r.machineUuid,sample:async()=>{samples++;throw Error('FAIL');},inspect:async id=>structuredClone(states.get(id)),stop:async id=>{stopped.push(id);states.get(id).State.Running=false;states.get(id).State.Pid=0;}});
   assert.equal(result,'FAIL');assert.equal(samples>0,true);assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));assert.equal(stopped.includes(c.baseline[0].id),false);
+});
+test('cleanup retains OLD_CPU container and percentages without blocking owned stops or resetting the shared deadline',async()=>{
+  const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),stopped=[],events=[];
+  c.thresholds.maxOldCpuPercent=25;c.baseline.push({...c.baseline[0],id:'e'.repeat(64)});
+  let now=0;const budget=new Budget(60000,()=>now),deadline=budget.end;
+  const sample={kind:'old',index:2,cgroup:'/sys/fs/cgroup/system.slice/old.scope',memoryUsageBytes:1000000};
+  const recovery={machine:()=>c.machineUuid,inspect:async id=>structuredClone(states.get(id)),
+    stop:async id=>{stopped.push(id);states.get(id).State.Running=false;states.get(id).State.Pid=0;},
+    sample:async(_c,current)=>{
+      let after=false;await proof.sampleResources(c,[sample],current,{now:()=>now*1000,sleep:async ms=>{assert.equal(ms,100);now+=ms;after=true;},
+        read:file=>file.endsWith('/cpu.stat')?'usage_usec '+(after?34125:1000)+'\n':'1000000',previous:new Map()});
+    }};
+  await assert.rejects(proof.cleanupHook(c,new SafeEvents(row=>events.push(row)),{admit:()=>{},acquireBudget:()=>budget,readReceipt:()=>r,recovery}),/^Error: FAIL$/);
+  assert.deepEqual(new Set(stopped),new Set(r.containers.map(row=>row.id)));assert.equal(stopped.includes(c.baseline[1].id),false);
+  assert.ok([...states.values()].every(row=>!row.State.Running&&row.State.Pid===0));
+  assert.deepEqual(events.slice(0,3),[{service:'verifier',event:'cleanup_sample',status:0,errcode:'OLD_CPU',count:2},
+    {service:'verifier',event:'old_cpu_percent_milli',status:0,errcode:'OLD_CPU',count:33125},
+    {service:'verifier',event:'old_cpu_limit_percent_milli',status:0,errcode:'OLD_CPU',count:25000}]);
+  assert.equal(events.filter(row=>row.event==='cleanup_sample').length,8);
+  assert.deepEqual(events.at(-1),{service:'verifier',event:'cleanup_result',status:0,errcode:'FAIL',count:1});
+  assert.equal(budget.end,deadline);assert.equal(now,800);
 });
 test('cleanup hook retains the baseline reason even after all four owned containers stop',async()=>{
   const c=contract(),r=receipt(c),states=new Map(r.containers.map(row=>[row.id,inspected(c,row)])),stopped=[],rows=[],events=new SafeEvents(row=>rows.push(row)),budget=new Budget(60000),deadline=budget.end;let postCheck=false;
@@ -841,7 +947,7 @@ test('BUSY before a new unit launches never stops an existing experiment',async(
   let stopped=false;await assert.rejects(startExperiment(contract(),new Budget(1000),{preflight:async()=>{throw Error('BUSY');},launch:async()=>{throw Error('must not launch');},recover:async()=>{stopped=true;}}),/BUSY/);assert.equal(stopped,false);
 });
 
-function receipt(c){return {version:1,host:c.host,machineUuid:'machine',project:c.project,runId:c.runId,containers:['synapse','livekit','auth','caddy'].map((service,n)=>({service,id:String(n+1).repeat(64),image:PINS[service].image,imageId:'sha256:'+String(n+5).repeat(64),created:'2026-10-16T00:00:00Z'}))};}
+function receipt(c){return {version:1,host:c.host,machineUuid:c.machineUuid,project:c.project,runId:c.runId,containers:['synapse','livekit','auth','caddy'].map((service,n)=>({service,id:String(n+1).repeat(64),image:PINS[service].image,imageId:'sha256:'+String(n+5).repeat(64),created:'2026-10-16T00:00:00Z'}))};}
 function inspected(c,row){return {Id:row.id,Image:row.imageId,Created:row.created,State:{Running:true,Pid:123,Paused:false},Config:{Image:row.image,Labels:{'com.docker.compose.project':c.project,'com.docker.compose.service':row.service,'rtc.run':c.runId,'rtc.host':c.host}}};}
 test('cleanup uses receipt ownership and fresh checks without depending on a controller PID', async () => {
   const c=contract(),r=receipt(c);let now=0;const stopped=[];const states=new Map(r.containers.map(x=>[x.id,inspected(c,x)]));states.get(r.containers[1].id).Config.Labels['rtc.run']='another-run';
