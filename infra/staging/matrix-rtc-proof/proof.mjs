@@ -10,7 +10,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
-const ROOT='/opt/babacom-matrix-rtc-e9', PROJECT='babacom-matrix-rtc-e9';
+const ROOT='/opt/babacom-matrix-rtc-wsl1', PROJECT='babacom-matrix-rtc-wsl1';
+const DOCKER_SOCKET='--host=unix:///var/run/docker.sock';
 const SERVICES=['synapse','livekit','auth','caddy'];
 const SOURCE_FILES=['compose.yaml','homeserver.yaml.example','appservice-registration.yaml.example','livekit.yaml.example','Caddyfile','proof.mjs','proof.test.mjs'];
 export const PINS=Object.freeze({
@@ -29,22 +30,25 @@ export class Budget {
 }
 export function serverName(c){return `${c.domain}:${c.port}`;}
 export function validateContract(c,action){
-  requireFact(c&&c.host==='lhins-af0ntal8'&&c.root===ROOT&&c.project===PROJECT);
+  requireFact(c&&c.host==='BabaCom-Matrix-Proof'&&c.root===ROOT&&c.project===PROJECT);
   // This Boolean describes the operator's plan, never an observed runtime gate.
   requireFact(c.approved===true&&typeof c.logAdmission==='boolean'&&/^[a-f0-9]{32}$/.test(c.runId));
   requireFact(typeof c.domain==='string'&&/^(?=.{4,253}$)[a-z0-9]+(?:[-.][a-z0-9]+)*\.[a-z]{2,}$/.test(c.domain));
   requireFact(Number.isInteger(c.port)&&c.port>1024&&c.port<65536);
   requireFact(c.certificateSource==='operator-provisioned-public-chain'&&/^[a-f0-9]{64}$/.test(c.certificateSha256));
   requireFact(c.asHomeserver===serverName(c)&&JSON.stringify(c.fullAccessHomeservers)===JSON.stringify([serverName(c)]));
-  requireFact(typeof c.machineUuid==='string'&&c.machineUuid.length>0&&c.machineUuid.length<=128);
+  requireFact(typeof c.machineUuid==='string'&&/^[a-f0-9]{32}$/.test(c.machineUuid));
   requireFact(c.platform==='linux/amd64'&&isDeepStrictEqual(c.source,PINS));
   requireFact(c.sourceHashes&&Object.keys(c.sourceHashes).length===7&&SOURCE_FILES.every(name=>/^[a-f0-9]{64}$/.test(c.sourceHashes[name])));
   requireFact(Array.isArray(c.accessors)&&c.accessors.length>0&&c.accessors.every(x=>x==='operator-loopback'));
   requireFact(c.auxiliary&&c.auxiliary.unit==='babacomrtc'+c.runId+'.slice'&&c.auxiliary.cgroup==='/sys/fs/cgroup/'+c.auxiliary.unit);
   requireFact(c.auxiliary.cpu>0&&c.auxiliary.cpu<=.2&&c.auxiliary.memory>0&&c.auxiliary.memory<=268435456);
   requireFact(c.thresholds&&['minFreeMemory','minFreeDisk','maxLoad','maxOldCpuPercent','maxOldMemoryGrowth'].every(k=>Number.isFinite(c.thresholds[k])&&c.thresholds[k]>0));
-  requireFact(Array.isArray(c.baseline)&&c.baseline.length>0&&c.baseline.every(x=>/^[a-f0-9]{64}$/.test(x.id)&&typeof x.image==='string'&&x.status==='running'&&Array.isArray(x.mounts)));
-  requireFact(Array.isArray(c.nativeBaseline)&&c.nativeBaseline.length===5&&new Set(c.nativeBaseline.map(row=>row?.unit)).size===5&&c.nativeBaseline.every(row=>row&&/^maowo-[\w.@-]+\.service$/.test(row.unit)&&Number.isSafeInteger(row.pid)&&row.pid>1&&/^[a-f0-9]{32}$/.test(row.invocationId)),'BASELINE');
+  requireFact(Array.isArray(c.baseline)&&c.baseline.length>0&&new Set(c.baseline.map(x=>x?.id)).size===c.baseline.length&&c.baseline.every(x=>x&&/^[a-f0-9]{64}$/.test(x.id)&&typeof x.image==='string'&&x.status==='exited'&&Number.isSafeInteger(x.memoryUsageBytes)&&x.memoryUsageBytes>=0&&Array.isArray(x.mounts)));
+  requireFact(Array.isArray(c.nativeBaseline)&&c.nativeBaseline.length===2&&new Set(c.nativeBaseline.map(row=>row?.unit)).size===2&&Array.isArray(c.sharedRuntime?.services)&&c.nativeBaseline.every(row=>{
+    const shared=c.sharedRuntime.services.find(item=>item?.unit===row?.unit);
+    return row&&['docker.service','containerd.service'].includes(row.unit)&&Number.isSafeInteger(row.pid)&&row.pid>1&&/^[a-f0-9]{32}$/.test(row.invocationId)&&shared?.pid===row.pid&&shared.invocationId===row.invocationId;
+  }),'BASELINE');
   requireFact(/^[a-f0-9]{64}$/.test(c.nodeSha256),'NODE');
   const metadata=row=>row&&typeof row.path==='string'&&path.isAbsolute(row.path)&&!row.path.split('/').includes('..')&&Number.isInteger(row.uid)&&row.uid>=0&&Number.isInteger(row.gid)&&row.gid>=0&&Number.isInteger(row.mode)&&row.mode>=0&&row.mode<=0o777&&Array.isArray(row.accessors)&&row.accessors.length>0&&row.accessors.every(x=>typeof x==='string'&&/^[a-zA-Z0-9_-]+$/.test(x));
   requireFact(c.persistence&&typeof c.persistence.corePattern==='string'&&c.persistence.corePattern.length>0&&c.persistence.corePattern.length<4096&&Array.isArray(c.persistence.locations)&&c.persistence.locations.length>0&&c.persistence.locations.every(x=>metadata(x)&&['swap','core-directory','core-handler'].includes(x.kind)),'PERSISTENCE');
@@ -53,7 +57,7 @@ export function validateContract(c,action){
   return c;
 }
 const LOG_CHANNELS=['stdout','stderr','retained','syslog'],LOG_METRICS=['chars','bytes','chunks'];
-const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','baseline_actual','baseline_limit','readiness','cleanup_admission','cleanup_worker','cleanup_unit','cleanup_receipt','cleanup_sample','cleanup_inspect','cleanup_unpause','cleanup_stop','cleanup_stopped','cleanup_result','cleanup_baseline','cleanup_budget','cleanup_monitor','cleanup_sockets','cleanup_attaches','cleanup_scan','command','scan','openid_ttl','jwt_remaining','shared_cpu_milli','shared_memory_bytes','log_connection','log_success','log_tls','log_handshake','log_timeout',...LOG_CHANNELS.flatMap(channel=>LOG_METRICS.map(metric=>'log_overflow_'+channel+'_'+metric))]);
+const EVENTS=new Set(['started','stopped','http','chunks','unknown','fault','gate','participants','resources','baseline','baseline_actual','baseline_limit','old_cpu_percent_milli','old_cpu_limit_percent_milli','readiness','cleanup_admission','cleanup_worker','cleanup_unit','cleanup_receipt','cleanup_sample','cleanup_inspect','cleanup_unpause','cleanup_stop','cleanup_stopped','cleanup_result','cleanup_baseline','cleanup_budget','cleanup_monitor','cleanup_sockets','cleanup_attaches','cleanup_scan','command','scan','openid_ttl','jwt_remaining','shared_cpu_milli','shared_memory_bytes','log_connection','log_success','log_tls','log_handshake','log_timeout',...LOG_CHANNELS.flatMap(channel=>LOG_METRICS.map(metric=>'log_overflow_'+channel+'_'+metric))]);
 const BASELINE_ERRORS=new Set(['BASELINE_MEMORY','BASELINE_LOAD','BASELINE_DISK','BASELINE_NATIVE_ACTIVE','BASELINE_NATIVE_SUBSTATE','BASELINE_NATIVE_PID','BASELINE_NATIVE_INVOCATION','BASELINE_IMAGE','BASELINE_STATE','BASELINE_MOUNTS','BASELINE_COUNTER','BASELINE_CGROUP']);
 const JWT_ERRORS=['JWT_FORMAT','JWT_HEADER','JWT_SIGNATURE','JWT_ISSUER','JWT_SUBJECT','JWT_ROOM','JWT_TIME','JWT_GRANTS'];
 const ERRORS=new Set(['OK','M_FORBIDDEN','M_UNAUTHORIZED','M_UNKNOWN_TOKEN','FAIL','HOLD','UNKNOWN','DEADLINE','CONTRACT','BUSY','OLD_CPU','OLD_MEMORY','SHARED_CPU','SHARED_MEMORY','BASELINE','RESOURCES','ATTACH','LEAK','CONFIG','DNS','READINESS','SOURCE','NODE','TLS','NETWORK','CONNECTION','COMMAND','STATE','OWNERSHIP','SHIM','ADMIN','AUX_CGROUP','BODY','BODY_LIMIT','CANCELLED','DENIAL','HOST','HTTP','IDENTITY','IMAGE','INCAPABLE','JOIN','JWT','LOG_ADMISSION','LOG_DRIVER','LOG_FILE','LOGOUT','MEMBERSHIP','MOUNTS','OPENID','OUTPUT_LIMIT','PERMISSIONS','PERSISTENCE','PLATFORM','PORT','SFU','SFU_URL','SIGNAL','START','SWAP','TEMPLATE','TRACKS','TTL','WRONG_SUBJECT',...BASELINE_ERRORS,...JWT_ERRORS]);
@@ -105,10 +109,11 @@ export class SafeEvents {
   event(service,event,status=0,errcode='OK',count=1){
     const detail=errcode instanceof Error?knownFailure(errcode):undefined;
     if(errcode instanceof Error)errcode=detail?.message??'UNKNOWN';
-    if(BASELINE_ERRORS.has(errcode)&&Number.isSafeInteger(detail?.index)&&detail.index>0)count=detail.index;
+    if((BASELINE_ERRORS.has(errcode)||errcode==='OLD_CPU')&&Number.isSafeInteger(detail?.index)&&detail.index>0)count=detail.index;
     if(event==='chunks'&&this.chunks>1)return;
     this.write({service:SERVICES.includes(service)?service:'verifier',event:EVENTS.has(event)?event:'unknown',status:Number.isInteger(status)&&status>=0&&status<600?status:0,errcode:ERRORS.has(errcode)?errcode:'UNKNOWN',count:Number.isSafeInteger(count)&&count>=0?count:0});
     if(BASELINE_ERRORS.has(errcode))for(const key of ['actual','limit'])if(Number.isSafeInteger(detail?.[key])&&detail[key]>=0)this.event(service,'baseline_'+key,0,errcode,detail[key]);
+    if(errcode==='OLD_CPU')for(const [key,event] of [['actual','old_cpu_percent_milli'],['limit','old_cpu_limit_percent_milli']])if(Number.isSafeInteger(detail?.[key])&&detail[key]>=0)this.event(service,event,0,errcode,detail[key]);
   }
 }
 export function recordTtl(events,event,seconds){requireFact(['openid_ttl','jwt_remaining'].includes(event)&&Number.isSafeInteger(seconds)&&seconds>0,'TTL');events.event('verifier',event,200,'OK',seconds);}
@@ -187,10 +192,10 @@ export function assertParticipants(actual,expected){
 }
 
 // Runtime errors are always converted to fixed enums at the command boundary.
-export function command(executable,args,{input,timeout=10000,budget}={}){
+export function command(executable,args,{input,timeout=10000,budget,launch=spawn}={}){
   if(budget)timeout=budget.remaining(timeout);
   return new Promise((resolve,reject)=>{
-    const p=spawn(executable,args,{stdio:['pipe','pipe','pipe'],env:{PATH:process.env.PATH,HOME:process.env.HOME}});const out=[];let size=0,failed;
+    const p=launch(executable,executable==='docker'?[DOCKER_SOCKET,...args]:args,{stdio:['pipe','pipe','pipe'],env:{PATH:process.env.PATH,HOME:process.env.HOME}});const out=[];let size=0,failed;
     const kill=code=>{failed=code;if(p.exitCode===null&&p.signalCode===null&&!p.kill('SIGKILL'))reject(new Error('UNKNOWN'));};
     const timer=setTimeout(()=>kill('DEADLINE'),timeout);
     const aborted=()=>kill(budget.signal.reason==='CLEANUP'?'CANCELLED':'FAIL');budget?.signal?.addEventListener('abort',aborted,{once:true});
@@ -201,6 +206,10 @@ export function command(executable,args,{input,timeout=10000,budget}={}){
 function protectedFile(file,uid=0,mode,gid=uid){const s=fs.lstatSync(file);requireFact(s.isFile()&&!s.isSymbolicLink()&&s.uid===uid&&(mode===undefined?(s.mode&0o077)===0:(s.mode&0o777)===mode&&s.gid===gid),'PERMISSIONS');return s;}
 function privateDir(dir,uid=0){const s=fs.lstatSync(dir);requireFact(s.isDirectory()&&!s.isSymbolicLink()&&s.uid===uid&&(s.mode&0o077)===0,'PERMISSIONS');}
 function readContract(action){requireFact(process.platform==='linux'&&process.getuid()===0,'HOLD');privateDir(ROOT);protectedFile(`${ROOT}/runtime.json`);return validateContract(JSON.parse(fs.readFileSync(`${ROOT}/runtime.json`)),action);}
+function wslIdentity({read=file=>fs.readFileSync(file,'utf8'),release=()=>os.release()}={}){
+  try{requireFact(/microsoft.*WSL2/i.test(release()),'HOST');const id=read('/etc/machine-id').trim();requireFact(/^[a-f0-9]{32}$/.test(id),'HOST');return id;}catch{throw new Error('HOST');}
+}
+export function assertWslHost(c,io){const id=wslIdentity(io);requireFact(c.host==='BabaCom-Matrix-Proof'&&id===c.machineUuid,'HOST');return id;}
 function actualCgroup(dir,read=file=>fs.readFileSync(file,'utf8')){const cpu=read(`${dir}/cpu.max`).trim().split(/\s+/);const memory=Number(read(`${dir}/memory.max`).trim());requireFact(read(`${dir}/memory.swap.max`).trim()==='0','SWAP');return {cpu:Number(cpu[0])/Number(cpu[1]),memory};}
 function ownAux(c){
   const rel=fs.readFileSync('/proc/self/cgroup','utf8').trim().split('\n').find(x=>x.startsWith('0::'))?.slice(3),current=rel&&path.resolve('/sys/fs/cgroup'+rel);
@@ -279,7 +288,11 @@ export async function sampleResources(c,rows,budget,{read=sharedIO.read,now=()=>
   const before=rows.map(row=>{const start=counters(row);requireFact(start.usage>=(row.cpuUsageUsec??0)&&start.usage>=(previous.get(row.cgroup)??0),'UNKNOWN');return {row,start,at:now()};});
   await sleep(budget.remaining(100));let sharedCpu=0,sharedMemory=0;
   for(const {row,start,at} of before){budget.remaining();const end=counters(row),elapsed=now()-at;requireFact(Number.isFinite(elapsed)&&elapsed>0&&end.usage>=start.usage,'UNKNOWN');const cpu=(end.usage-start.usage)/elapsed*100,growth=Math.max(0,Math.max(start.memory,end.memory)-row.memoryUsageBytes);requireFact(Number.isFinite(cpu)&&Number.isFinite(growth),'HOLD');previous.set(row.cgroup,end.usage);
-    if(row.kind==='shared'){sharedCpu+=cpu;sharedMemory+=growth;}else{requireFact(cpu<=c.thresholds.maxOldCpuPercent,'FAIL','OLD_CPU');requireFact(growth<=c.thresholds.maxOldMemoryGrowth,'FAIL','OLD_MEMORY');}
+    if(row.kind==='shared'){sharedCpu+=cpu;sharedMemory+=growth;}else{
+      // Safe events require integer counts; the unrounded percentage still decides the gate.
+      requireBaseline(cpu<=c.thresholds.maxOldCpuPercent,'OLD_CPU',{index:row.index,actual:Math.ceil(cpu*1000),limit:Math.floor(c.thresholds.maxOldCpuPercent*1000),code:'FAIL'});
+      requireFact(growth<=c.thresholds.maxOldMemoryGrowth,'FAIL','OLD_MEMORY');
+    }
   }
   requireFact(Number.isSafeInteger(sharedMemory),'FAIL');requireFact(sharedCpu<=c.sharedRuntime.maxCpuPercent,'FAIL','SHARED_CPU');requireFact(sharedMemory<=c.sharedRuntime.maxMemoryGrowth,'FAIL','SHARED_MEMORY');return {sharedCpu,sharedMemory};
 }
@@ -298,17 +311,26 @@ export function assertContainerBaseline(frozen,current,index){
   const detail={index};
   requireBaseline(current.Image===frozen.image,'BASELINE_IMAGE',detail);
   requireBaseline(current.State.Status===frozen.status,'BASELINE_STATE',detail);
+  if(frozen.status==='exited')requireBaseline(current.State.Running===false&&current.State.Pid===0&&current.State.Paused===false,'BASELINE_STATE',detail);
   requireBaseline(sameMounts(current.Mounts,frozen.mounts),'BASELINE_MOUNTS',detail);
   requireBaseline(Number.isSafeInteger(frozen.memoryUsageBytes)&&frozen.memoryUsageBytes>=0,'BASELINE_COUNTER',detail);
+}
+export async function assertLocalInventory(c,ids,budget,lookup=inspect){
+  requireFact(Array.isArray(ids)&&new Set(ids).size===ids.length&&ids.every(id=>/^[a-f0-9]{64}$/.test(id))&&c.baseline.every(row=>ids.includes(row.id)),'BASELINE');
+  const frozen=new Set(c.baseline.map(row=>row.id));
+  for(const id of ids)if(!frozen.has(id)){budget.remaining();const row=await lookup(id,budget);assertOwned(row,c,row?.Config?.Labels?.['com.docker.compose.service']);requireFact(row.Id===id,'UNKNOWN');}
 }
 async function baseline(c,budget){
   budget.remaining();
   await assertNativeBaseline(c,budget);
   const disk=fs.statfsSync(ROOT);assertHostBaseline(c,{freeMemory:os.freemem(),load:os.loadavg()[0],freeDisk:disk.bavail*disk.bsize});
+  const ids=(await command('docker',['ps','--all','--quiet','--no-trunc'],{budget})).trim().split('\n').filter(Boolean);await assertLocalInventory(c,ids,budget);
   const samples=[];
   for(const [index,b] of c.baseline.entries()){const i=await inspect(b.id,budget);assertContainerBaseline(b,i,index+1);
+    // A retained stopped container has no live process or resource cgroup.
+    if(b.status==='exited')continue;
     const rel=fs.readFileSync(`/proc/${i.State.Pid}/cgroup`,'utf8').split('\n').find(x=>x.startsWith('0::'))?.slice(3).trim();requireBaseline(rel,'BASELINE_CGROUP',{index:index+1});
-    samples.push({cgroup:'/sys/fs/cgroup'+rel,memoryUsageBytes:b.memoryUsageBytes,kind:'old'});
+    samples.push({cgroup:'/sys/fs/cgroup'+rel,memoryUsageBytes:b.memoryUsageBytes,kind:'old',index:index+1});
   }
   samples.push(...await sharedServiceRows(c,budget));return sampleResources(c,samples,budget);
 }
@@ -328,7 +350,7 @@ async function preflight(c,budget,{port=true}={}){
   budget.remaining();
   for(const name of SOURCE_FILES){const file=`${ROOT}/${name}`;requireFact(!fs.lstatSync(file).isSymbolicLink()&&crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')===c.sourceHashes[name],'SOURCE');}
   runtimeBoundaries(c);
-  requireFact(fs.readFileSync('/sys/class/dmi/id/product_uuid','utf8').trim()===c.machineUuid&&typeof c.machineUuid==='string','HOST');
+  assertWslHost(c);
   ownAux(c);await baseline(c,budget);
   privateDir(`${ROOT}/secrets`);privateDir(`${ROOT}/data`,991);privateDir(`${ROOT}/events`);
   protectedFile(`${ROOT}/secrets/tls.key`);protectedFile(`${ROOT}/secrets/tls.crt`);
@@ -380,7 +402,7 @@ function writeOwnership(c,containers){
   const fd=fs.openSync(ownershipPath(c),'wx',0o400);try{fs.writeFileSync(fd,JSON.stringify(receipt)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
   const directory=fs.openSync(ROOT,'r');try{fs.fsyncSync(directory);}finally{fs.closeSync(directory);}return receipt;
 }
-const recoveryIO={machine:()=>fs.readFileSync('/sys/class/dmi/id/product_uuid','utf8').trim(),inspect,unpause:(id,budget)=>command('docker',['unpause',id],{budget}),stop:(id,budget)=>command('docker',['stop','--time','3',id],{budget}),sample:async(c,budget)=>{await baseline(c,budget);await cgroups(c,(await ownContainers(c,budget)).filter(row=>row.State.Running),budget);}};
+const recoveryIO={machine:()=>wslIdentity(),inspect,unpause:(id,budget)=>command('docker',['unpause',id],{budget}),stop:(id,budget)=>command('docker',['stop','--time','3',id],{budget}),sample:async(c,budget)=>{await baseline(c,budget);await cgroups(c,(await ownContainers(c,budget)).filter(row=>row.State.Running),budget);}};
 function recordCleanup(events,stage,error,service='verifier'){try{events?.event(service,stage,0,error);}catch{}}
 export async function stopOwned(c,receipt,budget,io=recoveryIO,onFailure){
   let unknown=false,resourceFault,stage='cleanup_receipt',service='verifier';
@@ -474,6 +496,13 @@ function runtimeEvents(c){return new SafeEvents(event=>{
 export class Runtime {
   constructor(c,budget){this.c=c;this.budget=budget;this.startedAt=new Date().toISOString();this.attaches=new Map();this.connections=[];this.logCases=new Set();this.loggingAdmitted=false;this.events=runtimeEvents(c);}
   recordFailure(error){this.events.event('verifier','fault',0,this.monitor?.fault??error);}
+  attach(i,service,budget,{launch=spawn}={}){
+    budget.remaining();assertOwned(i,this.c,service);
+    const child=launch('docker',[DOCKER_SOCKET,'start','--attach',i.Id],{stdio:['ignore','pipe','pipe'],env:{PATH:process.env.PATH,HOME:process.env.HOME}});
+    const state={child,ended:false,id:i.Id};this.attaches.set(service,state);
+    child.stdout.on('data',b=>this.events.consume(service,b,'stdout'));child.stderr.on('data',b=>this.events.consume(service,b,'stderr'));
+    child.on('error',()=>{state.ended=true;});child.on('close',()=>{state.ended=true;});return state;
+  }
   async start(budget){
     await preflight(this.c,budget);this.secrets=validateGenerated(this.c);for(const secret of this.secrets)this.events.watch(secret);
     requireFact(fs.readFileSync('/etc/hosts','utf8')===hostsText(this.c),'DNS');
@@ -485,11 +514,7 @@ export class Runtime {
     const containers=await ownContainers(this.c,budget);requireFact(containers.length===4,'OWNERSHIP');writeOwnership(this.c,containers);
     for(const i of containers){assertContainerConfiguration(i,this.c,i.Config.Labels['com.docker.compose.service']);requireFact(i.HostConfig.MemorySwap===i.HostConfig.Memory&&i.HostConfig.Memory>0&&i.HostConfig.NanoCpus>0,'CONFIG');}
     for(const service of SERVICES){
-      budget.remaining();const i=containers.find(x=>x.Config.Labels['com.docker.compose.service']===service);assertOwned(i,this.c,service);
-      const child=spawn('docker',['start','--attach',i.Id],{stdio:['ignore','pipe','pipe'],env:{PATH:process.env.PATH,HOME:process.env.HOME}});
-      const state={child,ended:false,id:i.Id};this.attaches.set(service,state);
-      child.stdout.on('data',b=>this.events.consume(service,b,'stdout'));child.stderr.on('data',b=>this.events.consume(service,b,'stderr'));
-      child.on('error',()=>{state.ended=true;});child.on('close',()=>{state.ended=true;});
+      const i=containers.find(x=>x.Config.Labels['com.docker.compose.service']===service),state=this.attach(i,service,budget);
       while(!(await inspect(i.Id,budget)).State.Running){requireFact(!state.ended,'START');await new Promise(r=>setTimeout(r,budget.remaining(25)));}
       await this.monitor.sample();this.events.event(service,'started');
     }
