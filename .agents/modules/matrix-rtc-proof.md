@@ -1,6 +1,6 @@
-# matrix-rtc-proof — 同机零媒体 R0 候选
+# matrix-rtc-proof — 隔离零媒体 R0
 
-状态：**2026-10-25 e9边界候选：准备基线为main `d6fdcdf`（PR168），含Node分块校验、JWT精确默认grant兼容及固定阶段错误码；#124已重新打开，完整R0仍未通过。e1–e8原位保留。e9尚待Jack签认、可信合并、三文件批次切换及具体运行合同核定；本轮未创建或运行e9，云端目录、TLS、旧服务和资源状态未复核，准入仍HOLD。** 实施票 #124；关联 M04 #63、M10 #69、M29 #88。
+状态：**2026-10-28 本地WSL准备候选。e9已执行并因OLD_CPU停止，完整R0仍未通过；云端e1–e9保留。Jack已批准准备现有专用WSL `BabaCom-Matrix-Proof` 的方案、两份契约与原三文件修改及独立审查，尚未签认具体运行合同、授权发布或启动。WSL目前Stopped；本轮不启动WSL、Docker或RTC，不复制秘密。** 实施票 #124；关联 M04 #63、M10 #69、M29 #88。
 
 ## 目标与范围
 
@@ -24,8 +24,8 @@ infra/staging/matrix-rtc-proof/proof.test.mjs
 
 | 边界 | 约定与必须检查的事实 |
 |---|---|
-| 主机例外 | 仅 `lhins-af0ntal8` 的临时R0；授权与资源快照见[04](../../docs/04-open-decisions.md#matrix-rtc-e1-same-host-2026-10-16)，默认规则见[infra/AGENTS](../../infra/AGENTS.md)。不据此签收生产或媒体共置。 |
-| 归属 | 本次新批次仅 `/opt/babacom-matrix-rtc-e9`，Compose项目 `babacom-matrix-rtc-e9`；创建前核对目录不存在，创建后绑定主机/项目/镜像/全新run ID。全新合成DB、卷、应用秘密；独立Docker网络，无旧业务挂载、host网络或privileged。旧e1–e8现场按下文只读保留；e9被占用即BUSY，不接管或复用。 |
+| 主机 | 候选仅本机现有专用WSL `BabaCom-Matrix-Proof`；使用Linux文件系统、systemd及该分发自身的Docker，不接Docker Desktop或其他分发的daemon。云端旧例外见[04](../../docs/04-open-decisions.md#matrix-rtc-e1-same-host-2026-10-16)，默认规则见[infra/AGENTS](../../infra/AGENTS.md)。本候选不运行云端实验，也不授权真实媒体或生产。 |
+| 归属 | 固定新目录 `/opt/babacom-matrix-rtc-wsl1`、Compose项目 `babacom-matrix-rtc-wsl1` 和全新run ID、DB及应用秘密。绑定分发名称、Linux machine-id、镜像及七文件摘要；目录被占用即BUSY。云端e1–e9及WSL原控制面容器、卷、秘密和证据保留，不接管、重启、覆盖或删除。无旧业务挂载、host网络或privileged。 |
 | 容量 | 四个实验容器与Node/CLI及其验证辅助进程合计CPU quota/period≤1，memory限制总和≤1610612736字节；实查实际cgroups，不以Compose文本代替。共享Docker/containerd及shim开销按下文资源核算修订单独测量和止损，不计作已受实验硬限额封顶。启动前复核空间/内存/负载及旧服务基线；测量范围和止损阈值须随运行细节冻结，缺项即HOLD。 |
 | 故障/退出 | 超限、实验OOM或旧服务基线异常即停止本次自有实验；未知归属为UNKNOWN。只停确认归属的资源，保留合成DB/卷/秘密及追加证据；不停止旧服务、不全局down或删除卷。 |
 | TLS/入口 | 候选固定 `rtc-r0.beidi.games:18443`，所有发布入口仅loopback；实际可信证书/取得方式、TLS代理平台摘要及operator-loopback访问方须按原合同本轮复核，缺项拒绝运行。严格验证证书链和主机名，另实测auth的OpenID入口；无跳过校验或安装自签CA，不改旧DNS/代理/防火墙，不新增公网端口。 |
@@ -53,7 +53,7 @@ infra/staging/matrix-rtc-proof/proof.test.mjs
 | 期限 | 验证客户端单 HTTP 仍≤10秒；不再承诺 stock auth 内部 socket≤10秒。仅已核定的 OpenID/客户端发现请求为30秒，Twirp总期限未证实；整个启动/验证任务由标准 systemd/Compose 在120秒外界期限内终止，清理≤60秒。进程死亡、卡住及退出负例未实证即HOLD，不把 `WebSocket.close()` 当作 socket 已销毁。 |
 | 合成凭据持久化例外 | 仅本实验合成凭据可受操作系统常规内存管理影响，可能进入受保护的 swap/core；stock auth 原始 stderr 可暂存于受信运行时管道内存。这是对旧 memory-only/原始输出禁令的新例外，不追认旧验收。必须先冻结实际路径、权限和可访问主体；未知即HOLD，不修改宿主或旧业务监控。验证器不额外落盘；凭据仍不得进入持久日志、Git、命令行、导航URL、终端或证据。 |
 | 日志与留证 | 容器使用 `logging: none`、关闭access log；逐项核验Docker与旁路不持久化原始输出。保留脱敏状态、errcode、计数、资源及退出事件；哨兵先验证输出/持久化边界，再发送有效令牌，不把丢弃原始日志当完整验收。发现非获准持久化或外传立即FAIL，只停自有实验并保留受限证据。 |
-| TLS候选 | `rtc-r0.beidi.games:18443`，仅loopback；e9只读复用已核定的同一实验公信证书与独立密钥，受保护复制及本轮复核见下文。不重新签发证书或改DNS、代理、防火墙及公网端口；链、域名、有效期、摘要、权限或具体运行细节未核定不运行。 |
+| TLS候选 | `rtc-r0.beidi.games:18443`，仅loopback。未来具体运行合同须覆盖同一实验TLS经现有SSH传入WSL的受保护复制；仅Linux私有目录，不经Git、NTFS暂存、终端或证据输出私钥。本轮不复制。链、域名、有效期、摘要、权限未核定不运行，不重新签发或改DNS、代理、防火墙、公网端口。 |
 
 Matrix登录token注销必须独立验证；注销/停服不等于已签发OpenID或LiveKit JWT立即失效。记录固定栈的实际TTL，停止后不重启复用该实验状态。上述例外不覆盖真实账号、产品、R1–R3或其他主机；保留原分支、数据库、秘密及全部历史证据。
 
@@ -61,7 +61,9 @@ Matrix登录token注销必须独立验证；注销/停服不等于已签发OpenI
 
 <a id="新批次隔离2026-10-20候选"></a>
 
-### 新批次隔离（2026-10-25 e9 边界候选，待签认及可信合并）
+### 历史云端e9边界（已结束，只读保留）
+
+下列为云端e9冻结边界，不是本地WSL授权，也不允许重跑e9；保留原基线与门槛供历史核对。当前执行候选见下一节。
 
 旧e1–e8的目录、容器、DB、应用秘密、运行合同与历史证据原位保留，不重启、覆盖、重命名或删除。新e9固定使用 `/opt/babacom-matrix-rtc-e9`、Compose项目 `babacom-matrix-rtc-e9`、全新run ID、DB和应用秘密；e9目录或归属冲突即BUSY，不自动换名或重试。只读复用e1已核定摘要的官方Node 24.13.0，并以独占创建方式复制同一实验TLS到e9受保护目录；先核对链、域名、有效期、摘要和权限，不复用旧账号、令牌或应用秘密。
 
@@ -78,6 +80,14 @@ e9入口沿用已签认的标准双bridge：四服务仍只在本批次`isolated
 
 停止判定仅对本run的归属回执生效：unit仍存在时检查Description/Slice/Transient后才停止；unit被systemd回收时，只接受not-found、inactive、PID/ControlPID为0且无Job，并核对自有worker cgroup不存在或populated=0。随后仍须核验回执内四容器的不可变身份、Stopped/PID0/未暂停、原基线及socket退出，任一步不明即UNKNOWN，不能仅凭“unit不存在”判成功。全部阶段继承同一持久化60秒清理期限，不重置；已超时仍DEADLINE。覆盖已回收成功停止、伪造/活动unit、残留PID/Job/cgroup、容器未退出及旧现场拒绝回归。
 
+### 本地WSL候选（2026-10-28，待审查及具体运行签认）
+
+- 只允许固定分发、root和project；`machineUuid`在本地合同中绑定该分发`/etc/machine-id`的32位十六进制值，实际内核须为WSL2。Windows分发注册信息与Linux身份须在未来运行前独立核对；不继承云端DMI、PID、InvocationID、内存读数或cgroup身份，不重置云端基线。
+- 本地合同须完整冻结现有控制面容器的ID、镜像、挂载和`exited`状态；检查PID为0、未暂停，启动前后均不得变为运行。停止容器没有活动cgroup，不读取`/proc/0`或把缺失cgroup冒记为CPU/内存零。其CPU/内存采样不适用；仍对两个共享运行时及本轮四容器/Node执行原资源检查。原OLD_CPU/OLD_MEMORY采样及全部负例继续保留，任何活跃旧业务使本地候选HOLD。
+- `nativeBaseline`恰为本分发`docker.service`、`containerd.service`两项，PID/InvocationID须与`sharedRuntime.services`对应；同时冻结各自cgroup、inode、startTime及原共享资源门槛，缺项或变化即HOLD。不得移入云端五项maowo服务或给现有运行时改配置/限额。使用默认本地Docker Unix socket，禁止远端daemon覆盖。
+- 四服务固定镜像、Node24.13.0及七文件摘要、实际systemd/cgroup v2限制、秘密权限、WSL swap/core与日志旁路均待实查；未知项保持HOLD。本地磁盘仍须至少5368709120字节；每旧容器32MiB增长和25% CPU门槛不改，停止容器仅做状态/归属保持。四容器与Node/CLI仍合计≤1CPU/1610612736字节、120秒运行/共享60秒清理；保留OCI swap注解、Caddy唯一能力和双bridge、日志哨兵、全部权限及零媒体正反例。
+- 先审查现有模块与04，再准备原compose/proof/tests三文件并回归、独立审查。发布和具体运行合同另交Jack一次裁定；本轮不启动分发、服务或实验。未来准入只可使用新本地run ID/DB/秘密，失败即停保留，不自动换名或重跑；云端e1–e9及WSL原控制面数据不变。R0仅接受WSL/Linux容器侧结果，不代验Windows访问、G1、真实音频或跨境。
+
 ## Validation（本地回归与真实运行分别判断）
 
 仓库根执行范围与自测：
@@ -87,13 +97,13 @@ node --test infra/staging/matrix-rtc-proof/proof.test.mjs
 git diff --check
 ```
 
-文档及三文件产品切换均可信合并、e9精确运行合同签认且准入通过后，Linux宿主才按序执行未来接口；本轮仍仅准备，不执行：
+文档及三文件产品切换均可信合并、本地精确运行合同签认且准入通过后，固定WSL内才按序执行未来接口；本轮仍仅准备，不执行：
 ```bash
-node /opt/babacom-matrix-rtc-e9/proof.mjs preflight
-node /opt/babacom-matrix-rtc-e9/proof.mjs config
-node /opt/babacom-matrix-rtc-e9/proof.mjs up
-node /opt/babacom-matrix-rtc-e9/proof.mjs verify
-node /opt/babacom-matrix-rtc-e9/proof.mjs stop
+node /opt/babacom-matrix-rtc-wsl1/proof.mjs preflight
+node /opt/babacom-matrix-rtc-wsl1/proof.mjs config
+node /opt/babacom-matrix-rtc-wsl1/proof.mjs up
+node /opt/babacom-matrix-rtc-wsl1/proof.mjs verify
+node /opt/babacom-matrix-rtc-wsl1/proof.mjs stop
 ```
 
 `preflight/config`必须证明归属、秘密权限、固定摘要/平台、TLS/精确loopback入口与拟定资源限制；`up`≤120秒，创建容器后、就绪验收和验证请求前实查实际cgroups，不符即停自有实验。`verify`执行上述预算，任何失败非零退出；`stop`≤60秒且保留数据。当前缺失的域名/端口/证书/代理摘要/止损阈值须作为拒绝用例，不以默认值运行。
