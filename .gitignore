@@ -22,7 +22,7 @@ node_modules/
 
 # ── Agent harness —— 三层划分 ────────────────────────────────
 # 判据：这个文件如果换个人跑，会导致 PR 结果不同吗？
-#       会 → 提交。不会 → 忽略。详见 docs/06-agent-harness.md
+#       会 → 提交。不会 → 忽略。详见 CONTRIBUTING.md
 #
 # 必须提交（不在下面）：
 #   AGENTS.md · REPO_MAP.md · .agents/ · .claude/settings.json

@@ -32,7 +32,7 @@ infra/
 ### RTC-E1 同机 R0 候选例外（2026-10-16）
 
 Jack 已明确允许在腾讯云实例 `lhins-af0ntal8` 进行 RTC 实验。本候选只覆盖零媒体 R0 的临时同机运行；默认分机规则仍适用于其他主机、媒体阶段及生产。实施范围、可信 TLS 与具体运行契约须独立审查签认并通过可信范围合并后生效。
-精确资源、七文件范围和验证见 [matrix-rtc-proof](../.agents/modules/matrix-rtc-proof.md)；本次授权与实查见 [04](../docs/04-open-decisions.md#matrix-rtc-e1-same-host-2026-10-16)。本轮不运行服务，不开放 TURN 或新增公网端口，不停止既有服务。R0仅记信令结果；末尾真实两端语音验证仍待后续获准媒体阶段，不能据R0通过签收LiveKit/TURN媒体配置。
+精确资源、七文件范围和验证见 [matrix-rtc-proof](../.agents/modules/matrix-rtc-proof.md)；本次授权与实查见 [04](../docs/archive/04-open-decisions.md#matrix-rtc-e1-same-host-2026-10-16)。本轮不运行服务，不开放 TURN 或新增公网端口，不停止既有服务。R0仅记信令结果；末尾真实两端语音验证仍待后续获准媒体阶段，不能据R0通过签收LiveKit/TURN媒体配置。
 
 ## 媒体拓扑的前提事实
 
@@ -42,7 +42,7 @@ LiveKit 多区域部署可以让**不同房间**落在不同节点，但加一�
 **不会**自动把同一个房间切成「国内一半在亚洲、欧洲一半在欧洲」。
 
 跨区 SFU 级联已在 Won't 列 —— 它会把项目从「小型 Discord」升级成
-实时通信基础设施项目。D6 的三个备选见 `docs/04-open-decisions.md`。
+实时通信基础设施项目。D6 的三个备选见 `docs/archive/04-open-decisions.md`。
 
 ## Validation
 

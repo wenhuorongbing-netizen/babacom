@@ -477,7 +477,7 @@ uv run python -m pytest ../../tests/tokens ../../tests/ratelimit ../../tests/acc
 先前运行exit 1、NOT_RUN，没有实际guest结果；失败原因尚未确定。
 进程名检查和终止启动器不构成沙盒实例生命周期证明。
 本票先定位启动、用户桌面、guest脚本及结果回传的故障，并在干净Windows中保留既有EXE启动验收。
-来源与环境核实见 [调研报告](T2-03-acceptance-research.md)。
+来源与环境核实见 [调研报告](archive/T2-03-acceptance-research.md)。
 
 ### 实现边界与设计
 

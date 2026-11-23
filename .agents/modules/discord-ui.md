@@ -18,7 +18,7 @@ Gemini 3.8 Flash (High) 代理承担设计和修改。原
 Jack 已在 2026-10-12 明确回复“签认并授权上述流程”，授权建票、发布和审查合并独立
 范围文档 PR，再由单一 Gemini Builder 实施六文件并提交产品 PR；产品 PR 合并仍由 Jack 裁定。
 本范围须通过独立 `Module: docs` PR 审查、合并本清单与
-`docs/04-open-decisions.md` 的 D15。此后方可在一个明确 Issue 下实施六文件产品 PR。
+`docs/archive/04-open-decisions.md` 的 D15。此后方可在一个明确 Issue 下实施六文件产品 PR。
 草稿、PO 的设计 GO 或通过 scope_guard，均不单独构成扩权或合并授权。
 既有 6.1、6.2、T1、T2 清单不变；本清单仅对该 UI 切片生效。
 
@@ -72,7 +72,7 @@ A 负责调度、范围控制、验证和 Git 集成，不替代用户指定的 
 文档 PR：
 
 ```powershell
-node .agents/scope_guard.mjs docs --files .agents/modules/discord-ui.md docs/04-open-decisions.md
+node .agents/scope_guard.mjs docs --files .agents/modules/discord-ui.md docs/archive/04-open-decisions.md
 git diff --check
 ```
 

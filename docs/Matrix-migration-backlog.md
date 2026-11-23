@@ -1,10 +1,10 @@
-# Matrix 迁移 Sprint Backlog
+# Matrix 迁移 Issue 索引
 
-关联 [PRD](PRD-matrix-migration.md) / [规格](Matrix-migration-spec.md) / [规划根票 #50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)。本文件只维护排程、依赖摘要及映射；**逐票故事、AC、Allowed Files、Validation和实时状态以GitHub Issue为准**。
+关联 [PRD](PRD-matrix-migration.md) / [规格](Matrix-migration-spec.md) / [规划根票 #50](https://github.com/wenhuorongbing-netizen/babacom/issues/50)。本文件保留原依赖、验收出处及映射。逐票故事、AC、Allowed Files、Validation 和实时状态以 [GitHub Issues](https://github.com/wenhuorongbing-netizen/babacom/issues) 与 [里程碑](https://github.com/wenhuorongbing-netizen/babacom/milestones) 为准。
 
-2026-10-13已逐条核对：原36票的182条候选AC均在对应Issue，无丢失后移除这里的副本；旧全文保留在[959ad74](https://github.com/wenhuorongbing-netizen/babacom/blob/959ad74d8fdbaf7cb29fc6ec2dbf0b5f04932aaa/docs/Matrix-migration-backlog.md)。36父票仍DRAFT；文档合并不批准实验运行或生产。签认和PO审查记录只维护[04](04-open-decisions.md#d16-matrix迁移2026-10-13)。
+2026-10-13已逐条核对：原36票的182条候选AC均在对应Issue，无丢失后移除这里的副本；旧全文保留在[959ad74](https://github.com/wenhuorongbing-netizen/babacom/blob/959ad74d8fdbaf7cb29fc6ec2dbf0b5f04932aaa/docs/Matrix-migration-backlog.md)。历史签认和 PO 审查见 [D16](archive/04-open-decisions.md#d16-matrix迁移2026-10-13)，现行决策见 [DECISIONS.md](DECISIONS.md)。
 
-上述为带日期的父票盘点；[2026-10-15 工程复审](04-open-decisions.md#matrix-quality-review-2026-10-15)保留为历史记录。当前交付顺序见[内部测试版队列](#next-test-build)，逐票状态仍以 GitHub Issue 为准，不自动改变父票 AC、依赖或 Ready 状态。
+[2026-10-15 工程复审](archive/04-open-decisions.md#matrix-quality-review-2026-10-15)记录了当时的父票盘点与证据。
 
 M01核对来源为24编号模块120条，加T1/T2/UI/docs清单19条，共139条未勾项，含流程模板；它们不是139个独立产品功能。Scope正文Must仍逐项核对，映射最终挂继任Issue，#60汇总例外，不再新建巨型流程副本。
 
@@ -12,9 +12,9 @@ M01核对来源为24编号模块120条，加T1/T2/UI/docs清单19条，共139条
 
 <a id="next-test-build"></a>
 
-### 下一交付：Matrix 内部测试版
+### 历史内部测试版依赖
 
-本轮收尾沿用现有架构和Gates，只收敛执行队列，不降低原Alpha/Must或把未完成父票关闭。旧BabaCom-T1包只作原型回归，不改名冒充Matrix版本；内部测试版也不等于生产切换。
+下表保留原计划的前置关系和验收出口。内测分发和发布证据入口见 [发布检查表](RELEASE-CHECKLIST.md)，R0 审批链裁决见 [DECISIONS.md](DECISIONS.md)。旧 BabaCom-T1 包用于原型回归。
 
 | 顺序 | 复用现有票 | 可核验的出口 |
 |---|---|---|
@@ -43,13 +43,13 @@ M01核对来源为24编号模块120条，加T1/T2/UI/docs清单19条，共139条
 
 首Sprint只承诺“原版基线可验证”。[#97](https://github.com/wenhuorongbing-netizen/babacom/issues/97)是M02-E/M03-E独立docs范围合同，签认后才释放受限运行；[#98](https://github.com/wenhuorongbing-netizen/babacom/issues/98)是M29-P独立控制面proof，依赖#97与M04最小固定组合，不依赖M02全部生产政策。M05必要Windows包子集在运行前另拆有独立AC/依赖/精确范围的票。M01未访问到的远端资产记录UNKNOWN及影响，阻断真实导入/切换，不阻断纯合成隔离实验。#50只验收规划，不等待九Epic完成才释放盘点。
 
-历史机器环境不作为当前执行条件。最新隔离 proof 进展见 [README 当前验收边界](../README.md#current-acceptance-boundary)及 [04](04-open-decisions.md)。每张后续实施票在 Ready 前重新核实其固定版本、端口、资源归属与实际前置；RTC、可信 TLS、双真实 Windows 和采集条件仍独立验证，HTTP 本机控制面 proof 不替代 G1。
+历史隔离 proof 证据见 [档案](archive/04-open-decisions.md)。每张后续实施票在 Ready 前重新核实其固定版本、端口、资源归属与实际前置；RTC、可信 TLS、双真实 Windows 和采集条件仍独立验证，HTTP 本机控制面 proof 不替代 G1。
 
 ## 2. Ready / Done
 
-候选范围不是写权限。Ready前固定一个module/DRI/独立Reviewer、基线/版本、逐个文件、完整可执行Validation、依赖与资源/授权；扩范围先独立docs PR。当前父票默认Validation未冻结，不能全量标Ready。
+Ready 前固定一个 module、DRI 和独立 Reviewer，确认基线/版本、逐个文件、可执行检查、依赖和资源授权。范围变更按 [协作指南](../CONTRIBUTING.md) 执行。
 
-Done需要全部AC与相应层级证据、独立review、范围/契约成立；失败或NOT_RUN如实保留，不改断言/期限。合成控制面、Windows包、真人设备/跨境分别验收。退役另需G5、消费者零、恢复验证。日常流程只维护[05](05-collaboration.md)。
+Done需要全部AC与相应层级证据、独立review、范围/契约成立；失败或NOT_RUN如实保留，不改断言/期限。合成控制面、Windows包、真人设备/跨境分别验收。退役另需G5、消费者零、恢复验证。发布证据入口见 [发布检查表](RELEASE-CHECKLIST.md)。
 
 ## 3. Epics 与票目录
 
@@ -67,7 +67,7 @@ Done需要全部AC与相应层级证据、独立review、范围/契约成立；�
 
 ## 4. 36张候选票
 
-下列依赖是排程快照；变更先更新对应Issue并同步受影响索引。U是待建立的固定版本Element fork，B是本仓库；候选目录和上级Epic不授予产品写权限。
+下列依赖是原排程快照。实际依赖由对应 Issue 维护。U 指 [Element fork](https://github.com/wenhuorongbing-netizen/babacom-element-web/tree/babacom/main)，B 指本仓库。写入权限由对应 Issue 的精确范围确定。
 
 | 编号 / 工作 | Issue | Epic | 类型 | 阶段 | 前置 |
 |---|---|---|---|---|---|
@@ -108,20 +108,20 @@ Done需要全部AC与相应层级证据、独立review、范围/契约成立；�
 | M35 上游升级与补丁预算 | [#94](https://github.com/wenhuorongbing-netizen/babacom/issues/94) | E9 | task | G3 | M07 / M26 / M27 |
 | M36 正式切换与两周观察 | [#95](https://github.com/wenhuorongbing-netizen/babacom/issues/95) | E9 | task | G5 | M28 / M30 / M31 / M35 |
 
-## 5. 旧Issue/PR/dirty处置
+## 5. 旧 Issue / PR 映射
 
-| 旧项 | 映射与真实处置 |
+| 旧项 | 继任映射与处置条件 |
 |---|---|
 | [#1 T1](https://github.com/wenhuorongbing-netizen/babacom/issues/1) | M01/M02/M25/M33；保存历史交付，继任契约与替代证据成立后可superseded，不声称原全部验收补齐 |
-| [#14 T2](https://github.com/wenhuorongbing-netizen/babacom/issues/14) | M02/M17–M28；执行架构待替代，原语音/设备/跨境目标保留 |
-| [#18](https://github.com/wenhuorongbing-netizen/babacom/issues/18) | M18/M28；真人听音、物理设备释放、中德仍待做；Matrix或上游CI不替代 |
-| [#31](https://github.com/wenhuorongbing-netizen/babacom/issues/31) / [#42](https://github.com/wenhuorongbing-netizen/babacom/issues/42) | M25/M27/M34；已有合并代码与部分历史证据；旧helper活动时继续履约，退役后才superseded，不伪造最终旧包PASS |
-| [#40](https://github.com/wenhuorongbing-netizen/babacom/issues/40) | M25/M27/M34；暂停无关旧构建器投资，活动泄漏仍按原范围修复；确认退出后退役，历史临时目录不自动授权清理 |
-| [#41](https://github.com/wenhuorongbing-netizen/babacom/issues/41) | M25/M27/M34；merge-main的playback.ts与microphone.e2e.ts两文件dirty保留；delta部分通过，不等于freshness≤1000ms/挂起到期已修。退役前可恢复保存 |
-| [#48](https://github.com/wenhuorongbing-netizen/babacom/issues/48) / [PR49](https://github.com/wenhuorongbing-netizen/babacom/pull/49) | CLOSED/MERGED c9ec3cf；M06/M07继承设计目标，不重开或逐行移植旧六文件 |
+| [#14 T2](https://github.com/wenhuorongbing-netizen/babacom/issues/14) | M02/M17–M28；保留原语音/设备/跨境目标 |
+| [#18](https://github.com/wenhuorongbing-netizen/babacom/issues/18) | M18/M28；真人听音、物理设备释放与中德验收需要现场证据 |
+| [#31](https://github.com/wenhuorongbing-netizen/babacom/issues/31) / [#42](https://github.com/wenhuorongbing-netizen/babacom/issues/42) | M25/M27/M34；旧 helper 活动时继续履约，退役后才superseded，不伪造最终旧包PASS |
+| [#40](https://github.com/wenhuorongbing-netizen/babacom/issues/40) | M25/M27/M34；活动泄漏按原范围修复；确认退出后退役，历史临时目录不自动授权清理 |
+| [#41](https://github.com/wenhuorongbing-netizen/babacom/issues/41) | M25/M27/M34；退役前保全可恢复的原改动，继任验证覆盖 freshness≤1000ms 与挂起到期 |
+| [#48](https://github.com/wenhuorongbing-netizen/babacom/issues/48) / [PR49](https://github.com/wenhuorongbing-netizen/babacom/pull/49) | M06/M07 继承 `c9ec3cf` 的设计目标，采用产品 fork 的实现 |
 | [#50](https://github.com/wenhuorongbing-netizen/babacom/issues/50) | 本规划票；产品/安装/部署/删除不属于本票 |
 
-七个旧open票加迁移标签/里程碑并追加关系说明，保持打开；移除过时Ready标签不抹掉原验收。未来关闭必须记录resolved / superseded / not-planned及owner/证据，不能把“已计划迁移”写成“已修复”。
+旧票关闭时记录 resolved / superseded / not-planned、负责人和相应证据，保留原验收条件。
 
 ## 6. 原24模块完整归属
 
@@ -152,8 +152,8 @@ Done需要全部AC与相应层级证据、独立review、范围/契约成立；�
 | 8.2 韧性 | M31 | 数据/密钥/恢复 |
 | 8.3 安全政策 | M26/M30/M35 | 许可/安全/升级 |
 
-模块级覆盖24/24；**139条历史未勾AC的逐条KEEP/REWRITE/RETIRE清单尚待M01完成**，不能把本模块表当作139条已签收。原Must/Won't和R03/R04阶段见Scope v2，缺口逐项记录不静默取消。
+本表为 24 个历史模块提供继任映射。139 条历史未勾 AC 的逐条 KEEP / REWRITE / RETIRE 及证据由 M01 维护。原Must/Won't和R03/R04阶段见Scope v2，缺口逐项记录不静默取消。
 
-## 7. 本轮验证与审查边界
+## 7. 原规划验证与审查记录
 
-本轮验证仅docs scope_guard、diff whitespace、计划数量/依赖DAG/模块覆盖/链接一致性及独立Standards/Spec审查。产品、安装包、数据迁移、部署、物理设备和中德测试NOT_RUN。原战略PO对e14d7e9给FIX后，实际读取464f71a对两项依赖修正限范围复核GO；此前附着失败保留为历史。首批为M01/M04只读、#97受限实验合同及#98控制面proof；Windows包必要子集另立范围，不批量开工36父票。
+原规划 PR 验证包括 docs scope_guard、diff whitespace、计划数量/依赖DAG/模块覆盖/链接一致性及独立Standards/Spec审查。产品、安装包、数据迁移、部署、物理设备和中德测试NOT_RUN。原战略PO对e14d7e9给FIX后，实际读取464f71a对两项依赖修正限范围复核GO；此前附着失败保留为历史。原规划首批为 M01/M04 只读、#97 受限实验合同及 #98 控制面 proof。Windows 包必要子集另立范围。

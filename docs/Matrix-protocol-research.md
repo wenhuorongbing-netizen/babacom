@@ -82,7 +82,7 @@ auth的 [OpenID 验证实现](https://github.com/element-hq/lk-jwt-service/blob/
 
 ### RTC-E1 隔离实验候选与出口
 
-资源与具体运行范围见 [04 的本次 RTC-E1 记录](04-open-decisions.md#matrix-rtc-e1-2026-10-15)。当前只形成文档候选，新的 RTC 实现 Allowed Files 为 **none**；新模块清单须单独范围 PR 审查签认。不能改现有四文件 proof 的无媒体合同。
+资源与具体运行范围见 [04 的本次 RTC-E1 记录](archive/04-open-decisions.md#matrix-rtc-e1-2026-10-15)。当前只形成文档候选，新的 RTC 实现 Allowed Files 为 **none**；新模块清单须单独范围 PR 审查签认。不能改现有四文件 proof 的无媒体合同。
 
 2026-10-15腾讯云控制台与现有免密会话实查：账号仅显示一台运行中的首尔2核/4GB Ubuntu24.04主机，已有其他控制面/门户/VPN相关服务，根盘仅余743MiB。它不满足本项目媒体分机边界，不能以CPU空闲或新开容器代替专机。现有两域名可管理，但RTC专用DNS、证书和独立媒体入口尚未配置；当前网站HTTPS也不自动覆盖新增子域名。具体资源与TLS实测结果只记在04，不复制账号、客户端IP或凭据。Jack确认暂无独立主机，先完成部署和测试准备；所有RTC运行保持NOT_RUN。
 
@@ -156,7 +156,7 @@ G1 仍需两台真实 Windows：游戏画面、系统声音、独立麦克风、
 
 ### 2026-10-16 同机 R0 候选例外
 
-Jack 随后明确允许使用现有腾讯云实例做 RTC；这更新了 §4 中该实例的分机阻塞判断，不将 Docker 隔离等同于独立机器。当前只准备零媒体 R0 的同机候选：范围与资源合同见 [matrix-rtc-proof](../.agents/modules/matrix-rtc-proof.md)，新实查及授权见 [04](04-open-decisions.md#matrix-rtc-e1-same-host-2026-10-16)。此前日期的观测保留。
+Jack 随后明确允许使用现有腾讯云实例做 RTC；这更新了 §4 中该实例的分机阻塞判断，不将 Docker 隔离等同于独立机器。当前只准备零媒体 R0 的同机候选：范围与资源合同见 [matrix-rtc-proof](../.agents/modules/matrix-rtc-proof.md)，新实查及授权见 [04](archive/04-open-decisions.md#matrix-rtc-e1-same-host-2026-10-16)。此前日期的观测保留。
 七个未来运行文件仍未实施；独立范围 PR、签认与可信合并前不运行。可信 TLS、域名/loopback 精确端口、代理摘要及访问方仍须核定；不开放 TURN、新增公网端口或改旧服务。R0 必须真实验证成员授权与 LiveKit 信令且零媒体轨道；R1–R3、完整 G1/G4 和生产能力仍未验收。
 
 ### R0 凭据边界修订候选
