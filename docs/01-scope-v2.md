@@ -1,6 +1,6 @@
 # 修订后的范围与发布顺序 (Scope v2)
 
-> 在 `scope.html` 基础上，按 [`00-review-plan01.md`](00-review-plan01.md) 的裁决重新切分。
+> 在 `scope.html` 基础上，按 [`00-review-plan01.md`](archive/00-review-plan01.md) 的裁决重新切分。
 > **本文档取代 `scope.html` 底部的三段 build order。**
 
 > **2026-10-13 Matrix迁移校准：** 产品定位、Must与Won't、R02两周稳定期保持。

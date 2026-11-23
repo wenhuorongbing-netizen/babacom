@@ -1,7 +1,7 @@
 # CODEOWNERS —— 碰到这些路径自动请求对应的人 review
 #
 # TODO: @leolou0512 是当前唯一已知的 handle。
-#       Tech Lead 人选定下来之后（见 docs/04-open-decisions.md D9），
+#       Tech Lead 人选定下来之后（见 docs/archive/04-open-decisions.md D9），
 #       把下面的 @tech-lead 换成真实用户名。
 #
 # 语法：后匹配的规则覆盖先匹配的。
@@ -25,8 +25,8 @@
 
 # ── 规划文档：PO 拍板 ─────────────────────────────────────────
 /docs/                              @leolou0512
-/scope.html                         @leolou0512
-/teams.html                         @leolou0512
+/docs/archive/scope.html            @leolou0512
+/docs/archive/teams.html            @leolou0512
 
 # ── 模块目录：等 owner 指派后逐条填 ───────────────────────────
 # /apps/desktop/src/features/voice/  @voice-owner
@@ -42,7 +42,7 @@
 # 经 Jack 审查并合并。其余实施 Issue 只使用 44 个产品路径中逐个声明的子集。
 /.agents/modules/t1.md                                            @wenhuorongbing-netizen
 /.github/CODEOWNERS                                               @wenhuorongbing-netizen
-/docs/04-open-decisions.md                                        @wenhuorongbing-netizen
+/docs/archive/04-open-decisions.md                                        @wenhuorongbing-netizen
 /docs/T1-spec.md                                                  @wenhuorongbing-netizen
 /package.json                                                     @wenhuorongbing-netizen
 /package-lock.json                                                @wenhuorongbing-netizen
@@ -94,7 +94,7 @@
 # Review routing is not sign-off; global D9 and T1 rules remain separate.
 /.agents/modules/t2.md                                             @wenhuorongbing-netizen
 /.github/CODEOWNERS                                                @wenhuorongbing-netizen
-/docs/04-open-decisions.md                                         @wenhuorongbing-netizen
+/docs/archive/04-open-decisions.md                                         @wenhuorongbing-netizen
 /docs/T2-spec.md                                                   @wenhuorongbing-netizen
 /package-lock.json                                                 @wenhuorongbing-netizen
 /apps/desktop/package.json                                         @wenhuorongbing-netizen

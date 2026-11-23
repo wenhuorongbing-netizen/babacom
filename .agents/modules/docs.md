@@ -9,9 +9,9 @@
 
 ## 什么时候用 `Module: docs`
 
-- 改规划文档（`docs/`、`scope.html`、`teams.html`、`README.md`）
+- 改规划文档（`docs/`、`README.md`、`CONTRIBUTING.md`）
 - 改 harness 本身（`AGENTS.md`、`.agents/`、`.github/`）
-- **扩某个模块的 allowed-files** —— 必须是单独一个 PR，不能混进功能 PR
+- **扩某个模块的 allowed-files**：普通范围调整可随同 PR，仍由可信 base 裁决；超出可信 base 的范围先单独合入，见 [协作指南](../../CONTRIBUTING.md)
 
 ## Allowed files
 
@@ -55,7 +55,7 @@ node .agents/scope_guard.mjs docs --files <改动的文件>   # 自检
 ## 完成标准
 
 - [ ] 改动的文档之间**没有互相矛盾**（这是唯一真正重要的一条）
-- [ ] 涉及裁决的改动同步更新了 `docs/04-open-decisions.md` 的状态总表
+- [ ] 决策变化时同步更新了 `docs/DECISIONS.md`；实时状态只更新到 GitHub Issues 与里程碑
 - [ ] 改了 allowed-files 的话，已 @ Tech Lead
 
 ## 备注
